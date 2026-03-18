@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "marslang"
+version = "0.1.0"
+description = "Marslang v0.1 compiler"
+readme = "README.md"
+requires-python = ">=3.11"
+
+[project.scripts]
+compiler = "marslang.cli:main"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
