@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "marslang"
-version = "0.1.0"
-description = "Marslang v0.1 compiler"
+version = "0.2.0"
+description = "Marslang v0.2 compiler"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 
 [project.scripts]
 compiler = "marslang.cli:main"

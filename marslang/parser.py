@@ -157,7 +157,7 @@ class Parser:
             while self.match(","):
                 options.append(self.parse_type_until("," if not self.at("]") else "]"))
             self.expect("]")
-            if self.at("IDENT"):
+            if self.at("IDENT") or (self.at("KEYWORD") and tok.value == "err"):
                 return ast.TypeRef(name="union", options=options)
             return ast.TypeRef(name="union", options=options)
         base_name = self.parse_dotted_name()
@@ -312,7 +312,7 @@ class Parser:
         exprs = []
         if self.match("("):
             while not self.at(")"):
-                exprs.append(self.parse_expression())
+                exprs.append(self.parse_for_component())
                 if self.at("KEYWORD") and self.current().value == "also":
                     self.expect("KEYWORD")
                 else:
@@ -320,8 +320,16 @@ class Parser:
             self.expect(")")
             return exprs
         if not self.at(stop_at):
-            exprs.append(self.parse_expression())
+            exprs.append(self.parse_for_component())
         return exprs
+
+    def parse_for_component(self) -> ast.Node:
+        expr = self.parse_expression()
+        if isinstance(expr, (ast.Identifier, ast.Attr)) and self.at(*ASSIGN_OPS):
+            op = self.expect(*ASSIGN_OPS)
+            value = self.parse_expression()
+            return ast.Assign(target=expr, value=value, op=op.value, line=expr.line, column=expr.column)
+        return expr
 
     def parse_match(self) -> ast.MatchStmt:
         tok = self.expect("KEYWORD")
@@ -365,7 +373,7 @@ class Parser:
         self.expect(")")
         handler_block = self.parse_block()
         finally_block = None
-        if self.at("KEYWORD") and self.current().value == "now_do":
+        if self.at("KEYWORD") and self.current().value == "then":
             self.expect("KEYWORD")
             finally_block = self.parse_block()
         return ast.TryStmt(body=body, handlers=handlers, handler_block=handler_block, finally_block=finally_block, line=tok.line, column=tok.column)
@@ -429,14 +437,14 @@ class Parser:
             self.pos += 1
             mapping = {"true": True, "false": False, "fasle": False, "null": None}
             return ast.Literal(value=mapping[tok.value], literal_kind="bool", line=tok.line, column=tok.column)
-        if self.at("IDENT"):
+        if self.at("IDENT") or (self.at("KEYWORD") and tok.value == "err"):
             self.pos += 1
             ident = ast.Identifier(name=tok.value, line=tok.line, column=tok.column)
-            if tok.value == "a" and self.at("("):
+            if tok.value == "arr" and self.at("("):
                 return self.finish_builtin_collection(ast.ArrayLiteral, tok)
-            if tok.value == "s" and self.at("("):
+            if tok.value == "set" and self.at("("):
                 return self.finish_builtin_collection(ast.SetLiteral, tok)
-            if tok.value == "p" and self.at("("):
+            if tok.value == "pair" and self.at("("):
                 self.expect("(")
                 first = self.parse_expression()
                 self.expect(",")

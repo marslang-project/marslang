@@ -1,18 +1,31 @@
 from __future__ import annotations
 
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 import subprocess
 import sys
 import textwrap
 
 from marslang.compiler import compile_source
+from marslang.runtime import execute_program
 
 
-def test_compile_hot_inline_and_family():
+def run_compiled_source(source: str) -> tuple[str, dict]:
+    compiled = compile_source(source)
+    namespace: dict = {"__name__": "compiled_test_module"}
+    exec(compiled, namespace)
+    stdout = StringIO()
+    with redirect_stdout(stdout):
+        execute_program(namespace["PROGRAM"])
+    return stdout.getvalue(), namespace["PROGRAM"]
+
+
+def test_vm_backend_executes_hot_inline_and_family_program():
     source = textwrap.dedent(
         '''
         fixed hot pi (float) = 3.14159;
-        func area(float r;) => pi * r * r;
+        hot func area(float r;) => pi * r * r;
 
         family Circle{
             func init(float r;){
@@ -25,7 +38,7 @@ def test_compile_hot_inline_and_family():
         }
 
         func m{
-            nums (array[int]) = a(3,1,4,1,5);
+            nums (array[int]) = arr(3,1,4,1,5);
             nums.asort();
             out(nums.iget(0));
             c = Circle(5);
@@ -33,15 +46,14 @@ def test_compile_hot_inline_and_family():
         }
         '''
     )
-    compiled = compile_source(source)
-    assert "def area(r):" in compiled
-    assert "return ((3.14159 * r) * r)" in compiled or "return (3.14159 * r * r)" in compiled
-    assert "class Circle(object):" in compiled
-    assert "def __mars_main__():" in compiled
-    assert "nums = MArray([3, 1, 4, 1, 5], type_name='int')" in compiled
+    output, program = run_compiled_source(source)
+    assert output.splitlines() == ["1", "78.53975"]
+    assert program["kind"] == "Program"
+    assert any(item["kind"] == "FunctionDecl" and item["name"] == "area" for item in program["body"])
+    assert "pi" in program["constants"]
 
 
-def test_compile_control_flow_and_match():
+def test_then_and_match_and_for_loop_semantics():
     source = textwrap.dedent(
         '''
         func describe(int x;){
@@ -51,23 +63,35 @@ def test_compile_control_flow_and_match():
                 __ => { out("other"); };
             }
         }
+
+        func m{
+            total = 0;
+            for(i = 0, i < 3, i++){
+                total += i;
+            }
+            run{
+                err(Error, "boom");
+            } handle(Error){
+                out(total);
+            } then{
+                describe(3);
+            }
+        }
         '''
     )
-    compiled = compile_source(source)
-    assert "__mars_match_subject = x" in compiled
-    assert "if __mars_match_subject == 1:" in compiled
-    assert "elif (2 <= __mars_match_subject < 4):" in compiled
-    assert "else:" in compiled
+    output, _ = run_compiled_source(source)
+    assert output.splitlines() == ["3", "small"]
 
 
-def test_cli_compiles_and_runs(tmp_path: Path):
+def test_cli_compiles_and_runs_vm_output(tmp_path: Path):
     source = tmp_path / "hello.mrs"
     source.write_text(
         textwrap.dedent(
             '''
             hot x (int) = 5;
             func m{
-                out(x);
+                nums = arr(x, 6);
+                out(nums.iget(0));
             }
             '''
         )
@@ -81,3 +105,5 @@ def test_cli_compiles_and_runs(tmp_path: Path):
     assert result.returncode == 0, result.stderr
     assert "Compiled" in result.stdout
     assert result.stdout.rstrip().endswith("5")
+    compiled = source.with_suffix(".py").read_text()
+    assert "execute_program(PROGRAM)" in compiled

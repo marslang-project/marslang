@@ -19,7 +19,7 @@ KEYWORDS = {
     "for",
     "run",
     "handle",
-    "now_do",
+    "then",
     "err",
     "true",
     "false",
