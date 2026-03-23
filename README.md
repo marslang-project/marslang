@@ -1,64 +1,28 @@
-# marslang
+# Marslang
 
-Marslang v0.2 is an experimental language that compiles `.mrs` source files into a small Python-hosted VM program.
+Marslang is an experimental programming language with `.mrs` source files and a Python-hosted VM backend. The current repository implements **Marslang v0.3**, which keeps the v0.2 language syntax and runtime model, while improving the compiler/CLI workflow and adding more complete documentation.
 
-## What changed in v0.2
+## What is new in v0.3
 
-- `now_do { ... }` is now `then { ... }` for post-`handle` execution.
-- Collection constructors are now `arr(...)`, `set(...)`, and `pair(...)`.
-- `for` loops use `for(iterator, condition, change_iterator){...}` C++-style semantics with commas instead of semicolons.
-- The compiler backend now emits a VM program payload plus a Python runner instead of direct Python source translation.
+- The compiler and CLI are now aligned with the VM-based v0.2 backend.
+- The CLI supports `-v` / `--verbose` for detailed compilation progress output.
+- The compiler exposes richer program-analysis APIs for tooling and tests.
+- The documentation has been expanded with quickstart, language reference, compiler CLI, and runtime API guides in `docs/`.
 
-## What is implemented
+## Marslang at a glance
 
-This repository contains:
+Marslang currently supports:
 
-- A lexer that supports Marslang keywords, operators, comments, strings, multiline strings, and punctuation.
-- A recursive-descent parser that builds an AST for variables, functions, families, imports, conditionals, loops, match blocks, and error handling.
-- A compiler that lowers Marslang AST nodes into a VM program representation embedded in Python.
-- A runtime VM that executes compiled Marslang programs and provides Marslang-specific built-ins and data structures.
-- A `compiler` CLI that writes the generated Python file and can optionally run it.
+- `fixed`, `hot`, and `cold` modifiers.
+- Optional type syntax such as `name (type) = value;`.
+- `func` declarations, hot inline functions, and `family` declarations.
+- `ret`, `if`, `elif`, `else`, `repeat`, `for`, `match`, and `run` / `handle` / `then`.
+- Built-ins such as `out`, `slout`, `in()`, `inln()`, `err()`, and constructors `arr(...)`, `set(...)`, and `pair(...)`.
+- A compiler that emits a Python file containing a serialized Marslang VM program and a runner stub.
 
-## Supported Marslang v0.2 features
+## Quickstart
 
-The implementation covers the core alpha language, including:
-
-- `fixed`, `hot`, and `cold` variable modifiers.
-- Optional type annotations in the form `name (type) = value;`.
-- `func` declarations, single-expression functions via `=>`, hot inline functions, and `family` declarations.
-- `ret`, `if` / `elif` / `else`, `repeat`, `for`, `match`, and `run` / `handle` / `then`.
-- `out`, `slout`, `in()`, `inln()`, `err()`, and built-in collection constructors `arr(...)`, `set(...)`, `pair(...)`.
-- Arrays, sets, pairs, type-restricted arrays/sets, and helper methods such as `.add()`, `.iget()`, `.asort()`, `.slice()`, and more.
-- `takepkg module;` and `takepkg module = alias;` imports.
-- Hot constant inlining for compile-time constant variables and hot single-expression functions.
-- A Python-hosted VM runner via `marslang.runtime.execute_program`.
-
-(Older version:)
-Marslang v0.1 is a small experimental language that compiles `.mrs` source files into Python.
-
-## What is implemented
-
-This repository now contains:
-
-- A lexer that supports Marslang keywords, operators, comments, strings, multiline strings, and punctuation.
-- A recursive-descent parser that builds an AST for variables, functions, families, imports, conditionals, loops, match blocks, and error handling.
-- A Python code generator that transpiles Marslang into runnable Python and includes a runtime shim for Marslang-specific built-ins and data structures.
-- A `compiler` CLI that writes the generated Python file and can optionally run it.
-
-## Supported Marslang v0.1 features
-
-The implementation covers the core language described in the prompt, including:
-
-- `fixed`, `hot`, and `cold` variable modifiers.
-- Optional type annotations in the form `name (type) = value;`.
-- `func` declarations, single-expression functions via `=>`, and `family` declarations.
-- `ret`, `if` / `elif` / `else`, `repeat`, `for`, `match`, and `run` / `handle` / `now_do`.
-- `out`, `slout`, `in()`, `inln()`, `err()`, and built-in collection constructors `a(...)`, `s(...)`, `p(...)`.
-- Arrays, sets, pairs, type-restricted arrays/sets, and helper methods such as `.add()`, `.iget()`, `.asort()`, `.slice()`, and more.
-- `takepkg module;` and `takepkg module = alias;` imports.
-- Hot constant inlining for compile-time constant variables and hot single-expression functions.
-
-## Example
+### 1. Write a Marslang program
 
 ```marslang
 fixed hot pi (float) = 3.14159;
@@ -84,28 +48,50 @@ func m{
 }
 ```
 
-## Usage
-
-Compile a file:
+### 2. Compile it
 
 ```bash
 python3 -m marslang.cli examples/hello.mrs
 ```
 
-Or use the wrapper script:
+### 3. Compile with verbose output
 
 ```bash
-./bin/compiler examples/hello.mrs --run
+python3 -m marslang.cli examples/hello.mrs --verbose
 ```
 
-This emits a Python file containing the serialized VM program and runner.
+### 4. Compile and run
+
+```bash
+python3 -m marslang.cli examples/hello.mrs --run
+```
+
+### 5. Use the wrapper script
+
+```bash
+./bin/compiler examples/hello.mrs --run --verbose
+```
+
+## Documentation map
+
+Detailed docs live in `docs/`:
+
+- [`docs/quickstart.md`](docs/quickstart.md): first-run guide and common workflows.
+- [`docs/language-reference.md`](docs/language-reference.md): Marslang syntax and semantics reference.
+- [`docs/compiler-cli.md`](docs/compiler-cli.md): CLI flags, verbose mode, and compiler API details.
+- [`docs/runtime-api.md`](docs/runtime-api.md): runtime VM, collection types, and execution model.
 
 ## Project layout
 
 - `marslang/lexer.py`: tokenizer.
-- `marslang/parser.py`: AST builder.
+- `marslang/parser.py`: recursive-descent parser.
 - `marslang/ast.py`: AST node definitions.
-- `marslang/codegen.py`: VM program compiler.
-- `marslang/runtime.py`: VM, runtime helpers, and collection implementations.
-- `marslang/cli.py`: command-line entrypoint.
+- `marslang/codegen.py`: VM program serializer / code generator.
+- `marslang/compiler.py`: compile APIs and compilation result helpers.
+- `marslang/runtime.py`: VM executor and Marslang runtime library.
+- `marslang/cli.py`: command-line compiler.
 - `tests/test_compiler.py`: regression tests.
+
+## Status
+
+Marslang is still an alpha-stage language. The current implementation focuses on making the language runnable, testable, and hackable rather than fully optimizing every construct.

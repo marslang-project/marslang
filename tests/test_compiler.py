@@ -7,7 +7,7 @@ import subprocess
 import sys
 import textwrap
 
-from marslang.compiler import compile_source
+from marslang.compiler import compile_file_detailed, compile_source
 from marslang.runtime import execute_program
 
 
@@ -83,7 +83,28 @@ def test_then_and_match_and_for_loop_semantics():
     assert output.splitlines() == ["3", "small"]
 
 
-def test_cli_compiles_and_runs_vm_output(tmp_path: Path):
+def test_compile_file_detailed_reports_counts(tmp_path: Path):
+    source = tmp_path / "report.mrs"
+    source.write_text(
+        textwrap.dedent(
+            '''
+            hot x (int) = 5;
+            func helper(int y;) => x + y;
+            func m{
+                out(helper(2));
+            }
+            '''
+        ),
+        encoding="utf-8",
+    )
+    result = compile_file_detailed(source)
+    assert result.output_path == source.with_suffix(".py")
+    assert result.token_count > 0
+    assert result.top_level_count == 3
+    assert "execute_program(PROGRAM)" in result.python_source
+
+
+def test_cli_compiles_and_runs_vm_output_with_verbose(tmp_path: Path):
     source = tmp_path / "hello.mrs"
     source.write_text(
         textwrap.dedent(
@@ -94,16 +115,20 @@ def test_cli_compiles_and_runs_vm_output(tmp_path: Path):
                 out(nums.iget(0));
             }
             '''
-        )
+        ),
+        encoding="utf-8",
     )
     result = subprocess.run(
-        [sys.executable, "-m", "marslang.cli", str(source), "--run"],
+        [sys.executable, "-m", "marslang.cli", str(source), "--run", "--verbose"],
         capture_output=True,
         text=True,
         check=False,
     )
     assert result.returncode == 0, result.stderr
     assert "Compiled" in result.stdout
+    assert "[marslang] lexed" in result.stdout
+    assert "[marslang] parsed" in result.stdout
+    assert "[marslang] summary:" in result.stdout
     assert result.stdout.rstrip().endswith("5")
-    compiled = source.with_suffix(".py").read_text()
+    compiled = source.with_suffix(".py").read_text(encoding="utf-8")
     assert "execute_program(PROGRAM)" in compiled
