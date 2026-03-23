@@ -20,6 +20,12 @@ python3 -m pip install -e .
 compiler examples/hello.mrs --run
 ```
 
+On Windows Command Prompt you can also use:
+
+```bat
+bin\compiler.bat examples\hello.mrs --run
+```
+
 ## First program
 
 Create `hello.mrs`:
@@ -55,8 +61,9 @@ python3 -m marslang.cli hello.mrs --run --verbose
 1. Edit a `.mrs` file.
 2. Compile it with `compiler your_file.mrs`.
 3. Use `--verbose` when debugging parser/compiler behavior.
-4. Use `--run` for quick iteration.
-5. Inspect the generated `.py` file if you want to see the serialized VM program payload.
+4. On Unix-like systems use `./bin/compiler`; on Windows use `bin\compiler.bat`.
+5. Use `--run` for quick iteration.
+6. Inspect the generated `.py` file if you want to see the serialized VM program payload.
 
 ## Example program using v0.2+ / v0.4-hardened syntax
 

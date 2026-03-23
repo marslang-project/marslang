@@ -157,3 +157,8 @@ def test_cli_runtime_errors_are_user_friendly(tmp_path: Path):
     assert result.returncode == 1
     assert "marslang runtime error: boom" in result.stderr
     assert "Traceback" not in result.stderr
+
+
+def test_wrapper_scripts_exist_for_unix_and_windows():
+    assert Path("bin/compiler").exists()
+    assert Path("bin/compiler.bat").exists()

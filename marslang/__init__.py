@@ -1,4 +1,4 @@
-"""Marslang v0.4 compiler package."""
+"""Marslang v0.4.1 compiler package."""
 
 from .compiler import (
     CompilationResult,

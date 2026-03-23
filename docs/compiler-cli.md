@@ -8,10 +8,18 @@ Primary interface:
 python3 -m marslang.cli <input.mrs> [options]
 ```
 
-Wrapper script:
+Wrapper scripts:
+
+Unix-like shells:
 
 ```bash
 ./bin/compiler <input.mrs> [options]
+```
+
+Windows `cmd.exe`:
+
+```bat
+bin\compiler.bat <input.mrs> [options]
 ```
 
 ## CLI flags

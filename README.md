@@ -1,6 +1,12 @@
 # Marslang
 
-Marslang is an experimental programming language with `.mrs` source files and a Python-hosted VM backend. The current repository implements **Marslang v0.4**, which keeps the v0.2+ language shape while hardening parser/runtime behavior, improving CLI error handling, and expanding documentation and test coverage.
+Marslang is an experimental programming language with `.mrs` source files and a Python-hosted VM backend. The current repository implements **Marslang v0.4.1**, which keeps the v0.4 language/runtime behavior and improves packaging by shipping separate launcher wrappers for Unix-like and Windows systems.
+
+## What is new in v0.4.1
+
+- Added separate wrapper launchers for `/bin/compiler` (Unix-like shells) and `/bin/compiler.bat` (Windows `cmd.exe`).
+- Updated the docs to show both wrapper entrypoints clearly.
+- Bumped package metadata to v0.4.1 while keeping the v0.4 parser/runtime hardening intact.
 
 ## What is new in v0.4
 
@@ -69,10 +75,18 @@ python3 -m marslang.cli examples/hello.mrs --verbose
 python3 -m marslang.cli examples/hello.mrs --run
 ```
 
-### 5. Use the wrapper script
+### 5. Use the wrapper scripts
+
+Unix-like systems:
 
 ```bash
 ./bin/compiler examples/hello.mrs --run --verbose
+```
+
+Windows (`cmd.exe`):
+
+```bat
+bin\compiler.bat examples\hello.mrs --run --verbose
 ```
 
 ## Documentation map
@@ -86,6 +100,8 @@ Detailed docs live in `docs/`:
 
 ## Project layout
 
+- `bin/compiler`: Unix-like wrapper script.
+- `bin/compiler.bat`: Windows wrapper script.
 - `marslang/lexer.py`: tokenizer.
 - `marslang/parser.py`: recursive-descent parser.
 - `marslang/ast.py`: AST node definitions.
