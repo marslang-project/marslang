@@ -1,13 +1,14 @@
 # Marslang
 
-Marslang is an experimental programming language with `.mrs` source files and a Python-hosted VM backend. The current repository implements **Marslang v0.3**, which keeps the v0.2 language syntax and runtime model, while improving the compiler/CLI workflow and adding more complete documentation.
+Marslang is an experimental programming language with `.mrs` source files and a Python-hosted VM backend. The current repository implements **Marslang v0.4**, which keeps the v0.2+ language shape while hardening parser/runtime behavior, improving CLI error handling, and expanding documentation and test coverage.
 
-## What is new in v0.3
+## What is new in v0.4
 
-- The compiler and CLI are now aligned with the VM-based v0.2 backend.
-- The CLI supports `-v` / `--verbose` for detailed compilation progress output.
-- The compiler exposes richer program-analysis APIs for tooling and tests.
-- The documentation has been expanded with quickstart, language reference, compiler CLI, and runtime API guides in `docs/`.
+- The parser has been hardened: unsafe lookahead paths were removed, incomplete parsing refactors were cleaned up, and index syntax like `nums[0]` is now fully parsed.
+- Runtime semantics are more complete: union types are enforced, indexed reads/writes work, and `and/or` now behaves like a real inclusive boolean-or instead of silently acting like `and`.
+- The CLI now reports runtime failures from `--run` as clean `marslang runtime error: ...` messages rather than dumping raw Python tracebacks.
+- The test suite now covers parser edge cases, lexer failures, runtime type enforcement, CLI runtime error UX, and the verbose compiler path.
+- Documentation has been refreshed for v0.4, including compatibility notes and the legacy `fasle` alias.
 
 ## Marslang at a glance
 
@@ -18,6 +19,8 @@ Marslang currently supports:
 - `func` declarations, hot inline functions, and `family` declarations.
 - `ret`, `if`, `elif`, `else`, `repeat`, `for`, `match`, and `run` / `handle` / `then`.
 - Built-ins such as `out`, `slout`, `in()`, `inln()`, `err()`, and constructors `arr(...)`, `set(...)`, and `pair(...)`.
+- Array / set / pair type restrictions and union types such as `[int, string]`.
+- Index syntax like `arr[0]` in addition to collection helpers such as `.iget()`.
 - A compiler that emits a Python file containing a serialized Marslang VM program and a runner stub.
 
 ## Quickstart
@@ -78,8 +81,8 @@ Detailed docs live in `docs/`:
 
 - [`docs/quickstart.md`](docs/quickstart.md): first-run guide and common workflows.
 - [`docs/language-reference.md`](docs/language-reference.md): Marslang syntax and semantics reference.
-- [`docs/compiler-cli.md`](docs/compiler-cli.md): CLI flags, verbose mode, and compiler API details.
-- [`docs/runtime-api.md`](docs/runtime-api.md): runtime VM, collection types, and execution model.
+- [`docs/compiler-cli.md`](docs/compiler-cli.md): CLI flags, verbose mode, runtime error UX, and compiler API details.
+- [`docs/runtime-api.md`](docs/runtime-api.md): runtime VM, collection types, type enforcement, and execution model.
 
 ## Project layout
 
@@ -90,8 +93,13 @@ Detailed docs live in `docs/`:
 - `marslang/compiler.py`: compile APIs and compilation result helpers.
 - `marslang/runtime.py`: VM executor and Marslang runtime library.
 - `marslang/cli.py`: command-line compiler.
-- `tests/test_compiler.py`: regression tests.
+- `tests/test_compiler.py`: integration and CLI tests.
+- `tests/test_parser_runtime_edges.py`: parser, lexer, and runtime edge-case tests.
+
+## Compatibility note
+
+Marslang still accepts the legacy typo `fasle` as a deprecated compatibility alias for `false`, because earlier language notes explicitly allowed it. The docs now call this out clearly so it is no longer surprising.
 
 ## Status
 
-Marslang is still an alpha-stage language. The current implementation focuses on making the language runnable, testable, and hackable rather than fully optimizing every construct.
+Marslang is still alpha-stage. The current implementation prioritizes correctness, debuggability, and iteration speed over optimization.

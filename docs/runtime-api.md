@@ -47,6 +47,8 @@ Implements Marslang sets with de-duplication plus analogous helper methods.
 
 Simple mutable two-slot pair object with `.first` and `.second`.
 
+The v0.4 runtime also supports index access for arrays, sets, and pairs where applicable.
+
 ## Built-in runtime functions
 
 - `arr(*values)`
@@ -82,6 +84,14 @@ This allows the runtime to:
 - `FamilyDecl` nodes become Python classes created with `type(...)`.
 - `init` is mapped to `__init__`.
 - `me` and `self` are both populated in method-local environments.
+
+## Type enforcement
+
+The v0.4 runtime enforces:
+
+- scalar built-in types such as `int`, `float`, `string`, `char`, and `bool`
+- collection restrictions for `array[...]`, `set[...]`, and `pair[..., ...]`
+- union types written like `[int, string]`
 
 ## Notes
 

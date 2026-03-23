@@ -53,7 +53,11 @@ def main(argv: list[str] | None = None) -> int:
         print_summary(result)
     if args.run:
         verbose_print(args.verbose, f"running {result.output_path}")
-        runpy.run_path(str(Path(result.output_path).resolve()), run_name="__main__")
+        try:
+            runpy.run_path(str(Path(result.output_path).resolve()), run_name="__main__")
+        except Exception as exc:  # runtime execution should be user-friendly at the CLI boundary
+            print(f"marslang runtime error: {exc}", file=sys.stderr)
+            return 1
     return 0
 
 

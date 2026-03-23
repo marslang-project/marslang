@@ -93,6 +93,16 @@ tags (set[string]) = set("a", "b");
 point (pair[int, int]) = pair(3, 4);
 ```
 
+### Index syntax
+
+The v0.4 runtime/compiler supports index access and indexed assignment for array-like values:
+
+```marslang
+nums = arr(1, 2, 3);
+out(nums[1]);
+nums[1] = 9;
+```
+
 ## Control flow
 
 ### If / elif / else
@@ -158,6 +168,18 @@ run{
 - `run` maps to try behavior.
 - `handle(...)` maps to except behavior.
 - `then { ... }` is the post-handle/finally stage.
+
+## Booleans and compatibility
+
+- `true`
+- `false`
+- legacy compatibility alias: `fasle` (deprecated but still accepted)
+
+## Boolean operators
+
+- `and`
+- `or`
+- `and/or` (treated as inclusive OR in the current runtime implementation)
 
 ## Input / output
 

@@ -32,6 +32,10 @@ class MArray(list):
             raise TypeError("Expected string in array")
         if self.type_name == "float" and not isinstance(value, float):
             raise TypeError("Expected float in array")
+        if self.type_name == "char" and not (isinstance(value, str) and len(value) == 1):
+            raise TypeError("Expected char in array")
+        if self.type_name == "bool" and not isinstance(value, bool):
+            raise TypeError("Expected bool in array")
 
     def add(self, value):
         self._check(value)
@@ -103,6 +107,10 @@ class MSet:
             raise TypeError("Expected string in set")
         if self.type_name == "float" and not isinstance(value, float):
             raise TypeError("Expected float in set")
+        if self.type_name == "char" and not (isinstance(value, str) and len(value) == 1):
+            raise TypeError("Expected char in set")
+        if self.type_name == "bool" and not isinstance(value, bool):
+            raise TypeError("Expected bool in set")
 
     def add(self, value):
         self._check(value)
@@ -161,8 +169,17 @@ class MSet:
     def lenslice(self, startidx, length):
         return self.slice(startidx, startidx + length)
 
+    def __getitem__(self, index):
+        return self._values[index]
+
+    def __setitem__(self, index, value):
+        self.modify(index, value)
+
     def __iter__(self):
         return iter(self._values)
+
+    def __len__(self):
+        return len(self._values)
 
     def __repr__(self):
         return f"MSet({self._values!r})"
@@ -172,6 +189,17 @@ class MSet:
 class MPair:
     first: object
     second: object
+
+    def __getitem__(self, index):
+        return self.first if index == 0 else self.second
+
+    def __setitem__(self, index, value):
+        if index == 0:
+            self.first = value
+        elif index == 1:
+            self.second = value
+        else:
+            raise IndexError(index)
 
 
 def arr(*values):
@@ -309,7 +337,7 @@ class VirtualMachine:
             env.define(stmt["name"], value, constant=stmt.get("fixed", False))
             return None
         if kind == "FunctionDecl":
-            env.define(stmt["name"], self.make_function(stmt, env), constant=stmt.get("fixed", False))
+            env.define(stmt["name"], self.make_function(stmt, env), constant=stmt.get("fixed", False) or stmt.get("hot", False))
             return None
         if kind == "FamilyDecl":
             env.define(stmt["name"], self.make_family(stmt, env))
@@ -394,6 +422,14 @@ class VirtualMachine:
                 value = current + value if stmt["op"] == "+=" else current - value
             setattr(obj, target["name"], value)
             return value
+        if target["kind"] == "Index":
+            obj = self.eval_expr(target["obj"], env)
+            index = self.eval_expr(target["index"], env)
+            if stmt["op"] != "=":
+                current = obj[index]
+                value = current + value if stmt["op"] == "+=" else current - value
+            obj[index] = value
+            return value
         raise RuntimeError(f"Unsupported assign target {target['kind']}")
 
     def make_function(self, stmt: dict, defining_env: Environment):
@@ -455,14 +491,15 @@ class VirtualMachine:
             return env.get(expr["name"])
         if kind == "ArrayLiteral":
             values = [self.eval_expr(item, env) for item in expr["items"]]
-            type_name = self.container_type(expr.get("type"))
-            return MArray(values, type_name=type_name)
+            value = MArray(values, type_name=self.container_type(expr.get("type")))
+            return self.apply_type_restriction(value, expr.get("type"))
         if kind == "SetLiteral":
             values = [self.eval_expr(item, env) for item in expr["items"]]
-            type_name = self.container_type(expr.get("type"))
-            return MSet(values, type_name=type_name)
+            value = MSet(values, type_name=self.container_type(expr.get("type")))
+            return self.apply_type_restriction(value, expr.get("type"))
         if kind == "PairLiteral":
-            return MPair(self.eval_expr(expr["first"], env), self.eval_expr(expr["second"], env))
+            value = MPair(self.eval_expr(expr["first"], env), self.eval_expr(expr["second"], env))
+            return self.apply_type_restriction(value, expr.get("type"))
         if kind == "UnaryOp":
             value = self.eval_expr(expr["operand"], env)
             if expr["op"] == "-":
@@ -472,6 +509,10 @@ class VirtualMachine:
             if expr["op"] == "not":
                 return not value
         if kind == "BinaryOp":
+            if expr["op"] == "and":
+                return self.eval_expr(expr["left"], env) and self.eval_expr(expr["right"], env)
+            if expr["op"] in {"or", "and/or"}:
+                return self.eval_expr(expr["left"], env) or self.eval_expr(expr["right"], env)
             left = self.eval_expr(expr["left"], env)
             right = self.eval_expr(expr["right"], env)
             return self.apply_binary(expr["op"], left, right)
@@ -482,6 +523,10 @@ class VirtualMachine:
         if kind == "Attr":
             obj = self.eval_expr(expr["obj"], env)
             return getattr(obj, expr["name"])
+        if kind == "Index":
+            obj = self.eval_expr(expr["obj"], env)
+            index = self.eval_expr(expr["index"], env)
+            return obj[index]
         if kind == "Assign":
             return self.exec_assign(expr, env)
         if kind == "RangeExpr":
@@ -513,30 +558,71 @@ class VirtualMachine:
             return left > right
         if op == ">=":
             return left >= right
-        if op == "and":
-            return left and right
-        if op == "or":
-            return left or right
-        if op == "and/or":
-            return left and right
         raise RuntimeError(f"Unsupported operator {op}")
 
     def container_type(self, type_ref: dict | None):
         if type_ref and type_ref["name"] in {"array", "set"} and type_ref["args"]:
-            return type_ref["args"][0]["name"]
+            inner = type_ref["args"][0]
+            if inner["name"] != "union":
+                return inner["name"]
         return None
+
+    def type_repr(self, type_ref: dict | None) -> str:
+        if type_ref is None:
+            return "any"
+        if type_ref["name"] == "union":
+            return "[" + ", ".join(self.type_repr(opt) for opt in type_ref["options"]) + "]"
+        if type_ref["args"]:
+            return f"{type_ref['name']}[" + ", ".join(self.type_repr(arg) for arg in type_ref["args"]) + "]"
+        return type_ref["name"]
+
+    def matches_type(self, value, type_ref: dict | None) -> bool:
+        if type_ref is None:
+            return True
+        if type_ref["name"] == "union":
+            return any(self.matches_type(value, option) for option in type_ref["options"])
+        name = type_ref["name"]
+        if name in {"int", "longint"}:
+            return isinstance(value, int) and not isinstance(value, bool)
+        if name == "float":
+            return isinstance(value, (int, float)) and not isinstance(value, bool)
+        if name == "string":
+            return isinstance(value, str)
+        if name == "char":
+            return isinstance(value, str) and len(value) == 1
+        if name == "bool":
+            return isinstance(value, bool)
+        if name == "null":
+            return value is None
+        if name == "array":
+            return isinstance(value, MArray) and (
+                not type_ref["args"] or all(self.matches_type(item, type_ref["args"][0]) for item in value)
+            )
+        if name == "set":
+            return isinstance(value, MSet) and (
+                not type_ref["args"] or all(self.matches_type(item, type_ref["args"][0]) for item in value)
+            )
+        if name == "pair":
+            if not isinstance(value, MPair):
+                return False
+            if not type_ref["args"]:
+                return True
+            if len(type_ref["args"]) != 2:
+                return False
+            return self.matches_type(value.first, type_ref["args"][0]) and self.matches_type(value.second, type_ref["args"][1])
+        return True
 
     def apply_type_restriction(self, value, type_ref: dict | None):
         if type_ref is None:
             return value
+        if not self.matches_type(value, type_ref):
+            raise TypeError(f"Value {value!r} does not satisfy type {self.type_repr(type_ref)}")
+        if type_ref["name"] == "float" and isinstance(value, int) and not isinstance(value, bool):
+            return float(value)
         if type_ref["name"] == "array" and isinstance(value, MArray):
             value.type_name = self.container_type(type_ref)
-            for item in list(value):
-                value._check(item)
         if type_ref["name"] == "set" and isinstance(value, MSet):
             value.type_name = self.container_type(type_ref)
-            for item in list(value._values):
-                value._check(item)
         return value
 
 

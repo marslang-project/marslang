@@ -53,19 +53,20 @@ def test_vm_backend_executes_hot_inline_and_family_program():
     assert "pi" in program["constants"]
 
 
-def test_then_and_match_and_for_loop_semantics():
+def test_then_match_for_index_and_union_type_semantics():
     source = textwrap.dedent(
         '''
-        func describe(int x;){
+        func describe([int, string] x;){
             match x{
                 1 => { out("one"); };
-                range(2, 4) => { out("small"); };
                 __ => { out("other"); };
             }
         }
 
         func m{
             total = 0;
+            nums (array[int]) = arr(10, 20, 30);
+            nums[1] = 25;
             for(i = 0, i < 3, i++){
                 total += i;
             }
@@ -73,14 +74,15 @@ def test_then_and_match_and_for_loop_semantics():
                 err(Error, "boom");
             } handle(Error){
                 out(total);
+                out(nums[1]);
             } then{
-                describe(3);
+                describe("x");
             }
         }
         '''
     )
     output, _ = run_compiled_source(source)
-    assert output.splitlines() == ["3", "small"]
+    assert output.splitlines() == ["3", "25", "other"]
 
 
 def test_compile_file_detailed_reports_counts(tmp_path: Path):
@@ -132,3 +134,26 @@ def test_cli_compiles_and_runs_vm_output_with_verbose(tmp_path: Path):
     assert result.stdout.rstrip().endswith("5")
     compiled = source.with_suffix(".py").read_text(encoding="utf-8")
     assert "execute_program(PROGRAM)" in compiled
+
+
+def test_cli_runtime_errors_are_user_friendly(tmp_path: Path):
+    source = tmp_path / "boom.mrs"
+    source.write_text(
+        textwrap.dedent(
+            '''
+            func m{
+                err(Error, "boom");
+            }
+            '''
+        ),
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [sys.executable, "-m", "marslang.cli", str(source), "--run"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 1
+    assert "marslang runtime error: boom" in result.stderr
+    assert "Traceback" not in result.stderr

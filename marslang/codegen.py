@@ -116,6 +116,7 @@ class CodeGenerator:
             "type": self.serialize_type(node.type_ref),
             "value": self.serialize_expr(node.value, node.type_ref),
             "fixed": node.is_fixed,
+            "cold": node.is_cold,
         }
 
     def serialize_FunctionDecl(self, node: ast.FunctionDecl) -> dict:
@@ -139,6 +140,7 @@ class CodeGenerator:
             "body": body,
             "fixed": node.is_fixed,
             "hot": node.is_hot,
+            "cold": node.is_cold,
         }
 
     def serialize_FamilyDecl(self, node: ast.FamilyDecl) -> dict:
@@ -241,6 +243,12 @@ class CodeGenerator:
                 "obj": self.serialize_expr(node.obj),
                 "name": node.name,
             }
+        if isinstance(node, ast.Index):
+            return {
+                "kind": "Index",
+                "obj": self.serialize_expr(node.obj),
+                "index": self.serialize_expr(node.index),
+            }
         raise CodegenError(f"Unsupported assignment target {type(node).__name__}")
 
     def serialize_expr(self, node: ast.Node, type_ref: ast.TypeRef | None = None) -> dict:
@@ -292,6 +300,8 @@ class CodeGenerator:
             }
         if isinstance(node, ast.Attr):
             return {"kind": "Attr", "obj": self.serialize_expr(node.obj), "name": node.name}
+        if isinstance(node, ast.Index):
+            return {"kind": "Index", "obj": self.serialize_expr(node.obj), "index": self.serialize_expr(node.index)}
         if isinstance(node, ast.RangeExpr):
             return {"kind": "RangeExpr", "start": self.serialize_expr(node.start), "end": self.serialize_expr(node.end)}
         if isinstance(node, ast.Assign):

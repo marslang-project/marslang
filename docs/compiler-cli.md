@@ -88,4 +88,4 @@ Convenience properties:
 
 ## Error handling
 
-The CLI reports compiler and filesystem failures as `marslang compile error: ...` and exits with a non-zero status code.
+The CLI reports compiler and filesystem failures as `marslang compile error: ...` and exits with a non-zero status code. When `--run` is used, runtime failures are reported as `marslang runtime error: ...` so users are not exposed to raw Python stack traces during normal CLI usage.

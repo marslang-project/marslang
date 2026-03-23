@@ -2,7 +2,7 @@
 
 ## Overview
 
-Marslang programs are written in `.mrs` files and compiled into Python files that embed a serialized VM program plus a runner. You can then execute the generated Python file directly or ask the CLI to run it for you.
+Marslang programs are written in `.mrs` files and compiled into Python files that embed a serialized VM program plus a runner. You can then execute the generated Python file directly or ask the CLI to run it for you. As of v0.4, the parser/runtime path is also hardened for index syntax, union types, and cleaner CLI runtime failures.
 
 ## Installation / setup
 
@@ -44,7 +44,7 @@ python3 -m marslang.cli hello.mrs --run
 
 ## Verbose compilation
 
-Use `-v` or `--verbose` to show extra information such as token count, top-level node count, output path, and run stage details.
+Use `-v` or `--verbose` to show extra information such as token count, top-level node count, output path, and run stage details. Runtime failures triggered through `--run` are now reported cleanly at the CLI boundary.
 
 ```bash
 python3 -m marslang.cli hello.mrs --run --verbose
@@ -58,7 +58,7 @@ python3 -m marslang.cli hello.mrs --run --verbose
 4. Use `--run` for quick iteration.
 5. Inspect the generated `.py` file if you want to see the serialized VM program payload.
 
-## Example program using v0.2+ syntax
+## Example program using v0.2+ / v0.4-hardened syntax
 
 ```marslang
 hot x (int) = 5;
@@ -66,7 +66,7 @@ hot x (int) = 5;
 func m{
     nums (array[int]) = arr(x, 6, 7);
     for(i = 0, i < 3, i++){
-        out(nums.iget(i));
+        out(nums[i]);
     }
 }
 ```

@@ -46,6 +46,7 @@ class VarDecl(Node):
     value: Node | None = None
     is_hot: bool = False
     is_fixed: bool = False
+    is_cold: bool = False
 
 
 @dataclass
@@ -73,6 +74,7 @@ class FunctionDecl(Node):
     expr_body: Node | None = None
     is_hot: bool = False
     is_fixed: bool = False
+    is_cold: bool = False
 
 
 @dataclass

@@ -23,6 +23,7 @@ PRECEDENCE = {
 }
 
 ASSIGN_OPS = {"=", "+=", "-="}
+LEGACY_FALSE_ALIASES = {"fasle"}
 
 
 class Parser:
@@ -31,10 +32,11 @@ class Parser:
         self.pos = 0
 
     def current(self) -> Token:
-        return self.tokens[self.pos]
+        return self.tokens[min(self.pos, len(self.tokens) - 1)]
 
-    def previous(self) -> Token:
-        return self.tokens[self.pos - 1]
+    def peek(self, offset: int = 0) -> Token:
+        idx = min(self.pos + offset, len(self.tokens) - 1)
+        return self.tokens[idx]
 
     def at(self, *kinds: str) -> bool:
         tok = self.current()
@@ -94,12 +96,12 @@ class Parser:
                 idx += 1
             if depth != 0:
                 return False
-        return idx < len(self.tokens) and self.tokens[idx].value in {"=", "+=", "-="}
+        return idx < len(self.tokens) and self.tokens[idx].value in ASSIGN_OPS
 
-    def parse_modifiers(self) -> tuple[bool, bool]:
+    def parse_modifiers(self) -> tuple[bool, bool, bool]:
         is_fixed = False
         is_hot = False
-        seen_cold = False
+        is_cold = False
         while self.at("KEYWORD") and self.current().value in {"fixed", "hot", "cold"}:
             value = self.current().value
             self.pos += 1
@@ -107,16 +109,14 @@ class Parser:
                 is_fixed = True
             elif value == "hot":
                 is_hot = True
+                is_cold = False
             elif value == "cold":
-                seen_cold = True
-        if seen_cold and is_fixed:
-            pass
-        return is_fixed, is_hot
+                is_cold = True
+                is_hot = False
+        return is_fixed, is_hot, is_cold
 
     def parse_import(self) -> ast.ModuleImport:
         tok = self.expect("KEYWORD")
-        if tok.value != "takepkg":
-            raise ParserError("Expected takepkg")
         module = self.parse_dotted_name()
         alias = None
         if self.match("="):
@@ -132,45 +132,36 @@ class Parser:
 
     def parse_decl_or_stmt(self) -> ast.Node:
         save = self.pos
-        is_fixed, is_hot = self.parse_modifiers()
+        is_fixed, is_hot, is_cold = self.parse_modifiers()
         if self.at("KEYWORD") and self.current().value == "func":
-            return self.parse_function(is_fixed=is_fixed, is_hot=is_hot)
-        if self.at("IDENT") and self.tokens[self.pos + 1].value in {"(", "=", "+=", "-="}:
+            return self.parse_function(is_fixed=is_fixed, is_hot=is_hot, is_cold=is_cold)
+        next_tok = self.peek(1)
+        if self.at("IDENT") and next_tok.value in {"(", *ASSIGN_OPS}:
             name_tok = self.expect("IDENT")
             type_ref = None
             if self.match("("):
                 type_ref = self.parse_type_spec_param()
                 self.expect(")")
-            op = self.expect("=", "+=", "-=")
+            op = self.expect(*ASSIGN_OPS)
             value = self.parse_expression()
             self.expect(";")
             if op.value != "=":
                 target = ast.Identifier(name=name_tok.value, line=name_tok.line, column=name_tok.column)
                 return ast.Assign(target=target, value=value, op=op.value, line=name_tok.line, column=name_tok.column)
-            return ast.VarDecl(name=name_tok.value, type_ref=type_ref, value=value, is_hot=is_hot, is_fixed=is_fixed, line=name_tok.line, column=name_tok.column)
+            return ast.VarDecl(
+                name=name_tok.value,
+                type_ref=type_ref,
+                value=value,
+                is_hot=is_hot,
+                is_fixed=is_fixed,
+                is_cold=is_cold,
+                line=name_tok.line,
+                column=name_tok.column,
+            )
         self.pos = save
         return self.parse_statement()
 
-    def parse_type_until(self, closing: str) -> ast.TypeRef:
-        if self.match("["):
-            options = [self.parse_type_until(",")]
-            while self.match(","):
-                options.append(self.parse_type_until("," if not self.at("]") else "]"))
-            self.expect("]")
-            if self.at("IDENT") or (self.at("KEYWORD") and tok.value == "err"):
-                return ast.TypeRef(name="union", options=options)
-            return ast.TypeRef(name="union", options=options)
-        base_name = self.parse_dotted_name()
-        args: list[ast.TypeRef] = []
-        if self.match("["):
-            while not self.at("]"):
-                args.append(self.parse_type_until("," if not self.at("]") else "]"))
-                if not self.match(","):
-                    break
-            self.expect("]")
-        return ast.TypeRef(name=base_name, args=args)
-
-    def parse_function(self, is_fixed: bool = False, is_hot: bool = False) -> ast.FunctionDecl:
+    def parse_function(self, is_fixed: bool = False, is_hot: bool = False, is_cold: bool = False) -> ast.FunctionDecl:
         func_tok = self.expect("KEYWORD")
         if func_tok.value != "func":
             raise ParserError("Expected func")
@@ -188,20 +179,37 @@ class Parser:
         if self.match("=>"):
             expr = self.parse_expression()
             self.expect(";")
-            return ast.FunctionDecl(name=name.value, params=params, expr_body=expr, is_hot=is_hot, is_fixed=is_fixed, line=func_tok.line, column=func_tok.column)
+            return ast.FunctionDecl(
+                name=name.value,
+                params=params,
+                expr_body=expr,
+                is_hot=is_hot,
+                is_fixed=is_fixed,
+                is_cold=is_cold,
+                line=func_tok.line,
+                column=func_tok.column,
+            )
         body = self.parse_block()
         self.match(";")
-        return ast.FunctionDecl(name=name.value, params=params, body=body, is_hot=is_hot, is_fixed=is_fixed, line=func_tok.line, column=func_tok.column)
+        return ast.FunctionDecl(
+            name=name.value,
+            params=params,
+            body=body,
+            is_hot=is_hot,
+            is_fixed=is_fixed,
+            is_cold=is_cold,
+            line=func_tok.line,
+            column=func_tok.column,
+        )
 
     def parse_type_spec_param(self) -> ast.TypeRef:
-        if self.at("["):
-            self.expect("[")
+        if self.match("["):
             options = [self.parse_type_spec_param()]
             while self.match(","):
                 options.append(self.parse_type_spec_param())
             self.expect("]")
             return ast.TypeRef(name="union", options=options)
-        tok_name = self.parse_dotted_name()
+        type_name = self.parse_dotted_name()
         args = []
         if self.match("["):
             while not self.at("]"):
@@ -209,14 +217,14 @@ class Parser:
                 if not self.match(","):
                     break
             self.expect("]")
-        return ast.TypeRef(name=tok_name, args=args)
+        return ast.TypeRef(name=type_name, args=args)
 
     def parse_family(self) -> ast.FamilyDecl:
         tok = self.expect("KEYWORD")
         name = self.expect("IDENT")
         base = None
         if self.match("("):
-            base = self.expect("IDENT").value
+            base = self.parse_dotted_name()
             self.expect(")")
         self.expect("{")
         body = []
@@ -263,7 +271,7 @@ class Parser:
             if kw == "family":
                 return self.parse_family()
         expr = self.parse_expression()
-        if isinstance(expr, (ast.Identifier, ast.Attr)) and self.at(*ASSIGN_OPS):
+        if isinstance(expr, (ast.Identifier, ast.Attr, ast.Index)) and self.at(*ASSIGN_OPS):
             op = self.expect(*ASSIGN_OPS)
             value = self.parse_expression()
             self.expect(";")
@@ -325,7 +333,7 @@ class Parser:
 
     def parse_for_component(self) -> ast.Node:
         expr = self.parse_expression()
-        if isinstance(expr, (ast.Identifier, ast.Attr)) and self.at(*ASSIGN_OPS):
+        if isinstance(expr, (ast.Identifier, ast.Attr, ast.Index)) and self.at(*ASSIGN_OPS):
             op = self.expect(*ASSIGN_OPS)
             value = self.parse_expression()
             return ast.Assign(target=expr, value=value, op=op.value, line=expr.line, column=expr.column)
@@ -414,6 +422,11 @@ class Parser:
                 name = self.expect("IDENT")
                 expr = ast.Attr(obj=expr, name=name.value, line=name.line, column=name.column)
                 continue
+            if self.match("["):
+                index = self.parse_expression()
+                self.expect("]")
+                expr = ast.Index(obj=expr, index=index, line=expr.line, column=expr.column)
+                continue
             if self.match("++"):
                 one = ast.Literal(value=1, literal_kind="int", line=expr.line, column=expr.column)
                 expr = ast.Assign(target=expr, value=one, op="+=", line=expr.line, column=expr.column)
@@ -433,10 +446,13 @@ class Parser:
             return ast.Literal(value=int(tok.value), literal_kind="int", line=tok.line, column=tok.column)
         if self.match("STRING"):
             return ast.Literal(value=tok.value, literal_kind="string", line=tok.line, column=tok.column)
-        if self.at("KEYWORD") and tok.value in {"true", "false", "fasle", "null"}:
+        if self.at("KEYWORD") and tok.value in {"true", "false", *LEGACY_FALSE_ALIASES, "null"}:
             self.pos += 1
-            mapping = {"true": True, "false": False, "fasle": False, "null": None}
-            return ast.Literal(value=mapping[tok.value], literal_kind="bool", line=tok.line, column=tok.column)
+            mapping = {"true": True, "false": False, "null": None}
+            for alias in LEGACY_FALSE_ALIASES:
+                mapping[alias] = False
+            literal_kind = "null" if tok.value == "null" else "bool"
+            return ast.Literal(value=mapping[tok.value], literal_kind=literal_kind, line=tok.line, column=tok.column)
         if self.at("IDENT") or (self.at("KEYWORD") and tok.value == "err"):
             self.pos += 1
             ident = ast.Identifier(name=tok.value, line=tok.line, column=tok.column)
