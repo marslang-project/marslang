@@ -285,15 +285,42 @@ fn parse_stmt(line: &str) -> PResult<Stmt> {
     if is_var_decl(l) {
         return Ok(Stmt::Var(parse_var_decl(l)?));
     }
-    if let Some((lhs, rhs)) = l.trim_end_matches(';').split_once('=') {
-        if !lhs.contains("==") && !lhs.contains("!=") {
-            return Ok(Stmt::Assign {
-                target: parse_expr(lhs.trim()),
-                value: parse_expr(rhs.trim()),
-            });
-        }
+    if let Some(eq_idx) = find_plain_assignment(l.trim_end_matches(';')) {
+        let (lhs, rhs_with_eq) = l.trim_end_matches(';').split_at(eq_idx);
+        let rhs = &rhs_with_eq[1..];
+        return Ok(Stmt::Assign {
+            target: parse_expr(lhs.trim()),
+            value: parse_expr(rhs.trim()),
+        });
     }
     Ok(Stmt::Expr(parse_expr(l.trim_end_matches(';'))))
+}
+
+fn find_plain_assignment(text: &str) -> Option<usize> {
+    let mut depth = 0usize;
+    let chars: Vec<char> = text.chars().collect();
+    for (i, ch) in chars.iter().enumerate() {
+        match ch {
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth = depth.saturating_sub(1),
+            '=' if depth == 0 => {
+                let prev = if i > 0 { Some(chars[i - 1]) } else { None };
+                let next = chars.get(i + 1).copied();
+                if prev != Some('=')
+                    && prev != Some('!')
+                    && prev != Some('<')
+                    && prev != Some('>')
+                    && prev != Some('+')
+                    && prev != Some('-')
+                    && next != Some('=')
+                {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 fn parse_expr(text: &str) -> Expr {
