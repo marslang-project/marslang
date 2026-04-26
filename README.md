@@ -1,6 +1,6 @@
 # marslang
 
-Marslang is a Rust implementation of the **marslang rs-0.1.1** compiler.
+Marslang is a Rust implementation of the **marslang rs-0.1.2** compiler.
 
 It includes:
 - a lexer (`src/lexer.rs`)
@@ -29,7 +29,7 @@ Then run the generated JavaScript:
 node hello.js
 ```
 
-## Current rs-0.1.1 coverage
+## Current rs-0.1.2 coverage
 
 Implemented in this version:
 - `hot`, `cold`, `fixed` variable declarations (`hot`/`fixed` compile to `const`)

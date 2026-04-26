@@ -29,13 +29,13 @@ pub fn parse_program(input: &str) -> PResult<Program> {
             idx = next;
             continue;
         }
-        if is_var_decl(line) {
-            items.push(Item::Var(parse_var_decl(line)?));
-            idx += 1;
-            continue;
+        let (stmt, next) = parse_stmt_at(&lines, idx)?;
+        if let Stmt::Var(v) = stmt {
+            items.push(Item::Var(v));
+        } else {
+            items.push(Item::Stmt(stmt));
         }
-        items.push(Item::Stmt(parse_stmt(line)?));
-        idx += 1;
+        idx = next;
     }
 
     Ok(Program { items })
@@ -123,13 +123,17 @@ fn parse_family(lines: &[String], start: usize) -> PResult<(FamilyDecl, usize)> 
                 i + 1,
             ));
         }
+        if line.is_empty() {
+            i += 1;
+            continue;
+        }
         if line.starts_with("func ") {
             let (func, next) = parse_func(lines, i)?;
             methods.push(func);
             i = next;
             continue;
         }
-        i += 1;
+        return Err(format!("unexpected token in family body: '{line}'"));
     }
     Err("unterminated family block".to_string())
 }
@@ -158,28 +162,37 @@ fn parse_func(lines: &[String], start: usize) -> PResult<(FuncDecl, usize)> {
         .trim_end_matches('{')
         .trim();
     let (name, params) = parse_func_signature(sig)?;
-    let mut body = Vec::new();
+
     let mut i = start + 1;
-    while i < lines.len() {
-        let line = lines[i].trim();
-        if line == "}" || line == "};" {
-            return Ok((
-                FuncDecl {
-                    name,
-                    params,
-                    body: FuncBody::Block(body),
-                },
-                i + 1,
-            ));
-        }
+    let body = parse_block_stmts(lines, &mut i)?;
+    Ok((
+        FuncDecl {
+            name,
+            params,
+            body: FuncBody::Block(body),
+        },
+        i,
+    ))
+}
+
+fn parse_block_stmts(lines: &[String], idx: &mut usize) -> PResult<Vec<Stmt>> {
+    let mut stmts = Vec::new();
+    while *idx < lines.len() {
+        let line = lines[*idx].trim();
         if line.is_empty() {
-            i += 1;
+            *idx += 1;
             continue;
         }
-        body.push(parse_stmt(line)?);
-        i += 1;
+        if line == "}" || line == "};" {
+            *idx += 1;
+            return Ok(stmts);
+        }
+
+        let (stmt, next) = parse_stmt_at(lines, *idx)?;
+        stmts.push(stmt);
+        *idx = next;
     }
-    Err("unterminated function block".to_string())
+    Err("unterminated block".to_string())
 }
 
 fn parse_func_signature(sig: &str) -> PResult<(String, Vec<Param>)> {
@@ -209,8 +222,127 @@ fn parse_func_signature(sig: &str) -> PResult<(String, Vec<Param>)> {
     }
 }
 
+fn parse_stmt_at(lines: &[String], idx: usize) -> PResult<(Stmt, usize)> {
+    let l = lines[idx].trim();
+
+    if l.starts_with("if ") {
+        return parse_if_stmt(lines, idx);
+    }
+    if l.starts_with("repeat ") {
+        return parse_repeat_stmt(lines, idx);
+    }
+    Ok((parse_stmt_line(l)?, idx + 1))
+}
+
+fn parse_if_stmt(lines: &[String], start: usize) -> PResult<(Stmt, usize)> {
+    let line = lines[start].trim();
+    if !line.ends_with('{') {
+        return Err("if statement header must end with '{'".to_string());
+    }
+    let cond = parse_condition_between_parens(line, "if")?;
+
+    let mut i = start + 1;
+    let then_block = parse_block_stmts(lines, &mut i)?;
+
+    let mut elif_blocks = Vec::new();
+    let mut else_block = None;
+
+    while i < lines.len() {
+        let l = lines[i].trim();
+        if l.is_empty() {
+            i += 1;
+            continue;
+        }
+
+        if l.starts_with("elif ") {
+            if !l.ends_with('{') {
+                return Err("elif statement header must end with '{'".to_string());
+            }
+            let ec = parse_condition_between_parens(l, "elif")?;
+            i += 1;
+            let eb = parse_block_stmts(lines, &mut i)?;
+            elif_blocks.push((ec, eb));
+            continue;
+        }
+
+        if l.starts_with("else") {
+            if !l.ends_with('{') {
+                return Err("else statement header must end with '{'".to_string());
+            }
+            i += 1;
+            else_block = Some(parse_block_stmts(lines, &mut i)?);
+            break;
+        }
+
+        break;
+    }
+
+    Ok((
+        Stmt::If {
+            cond,
+            then_block,
+            elif_blocks,
+            else_block,
+        },
+        i,
+    ))
+}
+
+fn parse_repeat_stmt(lines: &[String], start: usize) -> PResult<(Stmt, usize)> {
+    let line = lines[start].trim();
+    if !line.ends_with('{') {
+        return Err("repeat statement header must end with '{'".to_string());
+    }
+    let expr_text = line
+        .trim_start_matches("repeat")
+        .trim()
+        .trim_end_matches('{')
+        .trim();
+
+    let mut i = start + 1;
+    let body = parse_block_stmts(lines, &mut i)?;
+    Ok((
+        Stmt::Repeat {
+            times: parse_expr(expr_text),
+            body,
+        },
+        i,
+    ))
+}
+
+fn parse_condition_between_parens(line: &str, keyword: &str) -> PResult<Expr> {
+    let after_kw = line
+        .trim_start_matches(keyword)
+        .trim()
+        .trim_end_matches('{')
+        .trim();
+    if !after_kw.starts_with('(') {
+        return Err(format!("{keyword} must start condition with '('"));
+    }
+    let close = find_matching_paren(after_kw)?;
+    let cond = &after_kw[1..close];
+    Ok(parse_expr(cond))
+}
+
+fn find_matching_paren(text: &str) -> PResult<usize> {
+    let mut depth = 0usize;
+    for (i, ch) in text.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return Ok(i);
+                }
+            }
+            _ => {}
+        }
+    }
+    Err("missing closing ')'".to_string())
+}
+
 fn is_var_decl(line: &str) -> bool {
-    (line.contains("=") && line.ends_with(';'))
+    (line.contains('=') && line.ends_with(';'))
         && (line.starts_with("fixed ")
             || line.starts_with("hot ")
             || line.starts_with("cold ")
@@ -269,18 +401,12 @@ fn parse_var_decl(line: &str) -> PResult<VarDecl> {
     })
 }
 
-fn parse_stmt(line: &str) -> PResult<Stmt> {
+fn parse_stmt_line(line: &str) -> PResult<Stmt> {
     let l = line.trim();
     if l.starts_with("ret ") {
         return Ok(Stmt::Ret(parse_expr(
             l.trim_start_matches("ret").trim().trim_end_matches(';'),
         )));
-    }
-    if l.starts_with("if ") {
-        return Ok(Stmt::Expr(Expr::Raw(l.to_string())));
-    }
-    if l.starts_with("repeat ") {
-        return Ok(Stmt::Expr(Expr::Raw(l.to_string())));
     }
     if is_var_decl(l) {
         return Ok(Stmt::Var(parse_var_decl(l)?));
@@ -340,23 +466,15 @@ fn parse_expr(text: &str) -> Expr {
     if (t.starts_with('"') && t.ends_with('"')) || (t.starts_with('\'') && t.ends_with('\'')) {
         return Expr::String(t.to_string());
     }
-    if let Some(dot) = t.find('.') {
-        let (obj, field) = t.split_at(dot);
-        if !obj.is_empty() && !field.is_empty() && !t.contains('(') {
-            return Expr::Member {
-                object: Box::new(parse_expr(obj)),
-                field: field.trim_start_matches('.').to_string(),
-            };
-        }
-    }
     if let Some(p) = t.find('(') {
         if t.ends_with(')') {
             let callee = t[..p].trim();
-            let args = t[p + 1..t.len() - 1]
-                .split(',')
-                .map(str::trim)
+            let args_text = &t[p + 1..t.len() - 1];
+            let args = split_top_level(args_text, ',')
+                .into_iter()
+                .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
-                .map(parse_expr)
+                .map(|s| parse_expr(&s))
                 .collect::<Vec<_>>();
             return Expr::Call {
                 callee: Box::new(parse_expr(callee)),
@@ -364,5 +482,57 @@ fn parse_expr(text: &str) -> Expr {
             };
         }
     }
+    if let Some(dot) = t.find('.') {
+        let (obj, field) = t.split_at(dot);
+        if !obj.is_empty() && !field.is_empty() && !t.contains(' ') {
+            return Expr::Member {
+                object: Box::new(parse_expr(obj)),
+                field: field.trim_start_matches('.').to_string(),
+            };
+        }
+    }
     Expr::Ident(t.to_string())
+}
+
+fn split_top_level(text: &str, delimiter: char) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut start = 0usize;
+    let mut paren = 0usize;
+    let mut bracket = 0usize;
+    let mut brace = 0usize;
+    let mut in_string: Option<char> = None;
+    let chars: Vec<char> = text.chars().collect();
+
+    let mut i = 0usize;
+    while i < chars.len() {
+        let ch = chars[i];
+        if let Some(q) = in_string {
+            if ch == q && (i == 0 || chars[i - 1] != '\\') {
+                in_string = None;
+            }
+            i += 1;
+            continue;
+        }
+
+        match ch {
+            '"' | '\'' => in_string = Some(ch),
+            '(' => paren += 1,
+            ')' => paren = paren.saturating_sub(1),
+            '[' => bracket += 1,
+            ']' => bracket = bracket.saturating_sub(1),
+            '{' => brace += 1,
+            '}' => brace = brace.saturating_sub(1),
+            _ => {}
+        }
+
+        if ch == delimiter && paren == 0 && bracket == 0 && brace == 0 {
+            parts.push(chars[start..i].iter().collect());
+            start = i + 1;
+        }
+
+        i += 1;
+    }
+
+    parts.push(chars[start..].iter().collect());
+    parts
 }
