@@ -1,6 +1,6 @@
 # marslang
 
-Marslang is a Rust implementation of the **marslang rs-0.1.2** compiler.
+Marslang is a Rust implementation of the **marslang rs-0.1.3** compiler.
 
 It includes:
 - a lexer (`src/lexer.rs`)
@@ -29,7 +29,7 @@ Then run the generated JavaScript:
 node hello.js
 ```
 
-## Current rs-0.1.2 coverage
+## Current rs-0.1.3 coverage
 
 Implemented in this version:
 - `hot`, `cold`, `fixed` variable declarations (`hot`/`fixed` compile to `const`)
@@ -74,3 +74,22 @@ func m{
 ```
 
 A starter marslang stdlib is included at `stdlib.mrs`.
+
+
+## REPL
+
+```bash
+cargo run -- repl
+```
+
+The REPL keeps a stateful source buffer and re-runs it after each line. Use `:show`, `:reset`, and `:exit`.
+
+## Building a Windows `.exe`
+
+From Windows (or with a Windows target toolchain installed), build:
+
+```bash
+cargo build --release
+```
+
+The executable will be at `target/release/compiler.exe` on Windows.
