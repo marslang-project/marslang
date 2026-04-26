@@ -1,0 +1,15 @@
+// marslang stdlib v0.1
+
+func min(int a; int b;){
+    if (a < b) {
+        ret a;
+    }
+    ret b;
+}
+
+func max(int a; int b;){
+    if (a > b) {
+        ret a;
+    }
+    ret b;
+}
