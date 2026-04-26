@@ -342,17 +342,28 @@ fn find_matching_paren(text: &str) -> PResult<usize> {
 }
 
 fn is_var_decl(line: &str) -> bool {
-    (line.contains('=') && line.ends_with(';'))
-        && (line.starts_with("fixed ")
-            || line.starts_with("hot ")
-            || line.starts_with("cold ")
-            || line.contains(" (")
-            || (line
-                .split('=')
-                .next()
-                .unwrap_or_default()
-                .trim()
-                .contains(' ')))
+    if !(line.contains('=') && line.ends_with(';')) {
+        return false;
+    }
+
+    let lhs = line.split('=').next().unwrap_or_default().trim();
+
+    line.starts_with("fixed ")
+        || line.starts_with("hot ")
+        || line.starts_with("cold ")
+        || line.contains(" (")
+        || lhs.contains(' ')
+        || is_bare_ident(lhs)
+}
+
+fn is_bare_ident(text: &str) -> bool {
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(c) if c == '_' || c.is_ascii_alphabetic() => {}
+        _ => return false,
+    }
+
+    chars.all(|c| c == '_' || c.is_ascii_alphanumeric())
 }
 
 fn parse_var_decl(line: &str) -> PResult<VarDecl> {

@@ -1,6 +1,8 @@
 use std::env;
 use std::fs;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 fn main() {
     if let Err(e) = run() {
@@ -12,7 +14,7 @@ fn main() {
 fn run() -> Result<(), String> {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
-        eprintln!("Usage: compiler <file.mrs> | compiler compile <file.mrs> [-o out.js] | compiler lex <file.mrs>");
+        eprintln!("Usage: compiler <file.mrs> | compiler compile <file.mrs> [-o out.js] | compiler lex <file.mrs> | compiler repl");
         return Ok(());
     }
 
@@ -31,6 +33,7 @@ fn run() -> Result<(), String> {
             }
             lex_cmd(Path::new(&args[2]))
         }
+        "repl" => repl_cmd(),
         _ => compile_cmd(Path::new(&args[1]), None),
     }
 }
@@ -64,5 +67,62 @@ fn lex_cmd(input: &Path) -> Result<(), String> {
     for tok in marslang::lexer::lex(&source) {
         println!("{:?} @{}", tok.kind, tok.pos);
     }
+    Ok(())
+}
+
+fn repl_cmd() -> Result<(), String> {
+    println!("marslang repl (stateful). Commands: :exit, :reset, :show");
+    println!("Each submitted line is appended to the current program and re-run.");
+
+    let mut source = String::new();
+    loop {
+        print!("mars> ");
+        io::stdout()
+            .flush()
+            .map_err(|e| format!("failed to flush stdout: {e}"))?;
+
+        let mut line = String::new();
+        let read = io::stdin()
+            .read_line(&mut line)
+            .map_err(|e| format!("failed to read line: {e}"))?;
+        if read == 0 {
+            println!();
+            break;
+        }
+
+        let trimmed = line.trim();
+        match trimmed {
+            ":exit" | ":quit" => break,
+            ":reset" => {
+                source.clear();
+                println!("state cleared");
+                continue;
+            }
+            ":show" => {
+                println!("----- source -----\n{}------------------", source);
+                continue;
+            }
+            "" => continue,
+            _ => {}
+        }
+
+        source.push_str(trimmed);
+        source.push('\n');
+
+        match marslang::compile_source_to_js(&source) {
+            Ok(js) => {
+                let run = Command::new("node").arg("-e").arg(&js).status();
+                match run {
+                    Ok(status) if status.success() => {}
+                    Ok(status) => eprintln!("node exited with status: {status}"),
+                    Err(_) => {
+                        eprintln!("node not found; compiled JS:\n{js}");
+                    }
+                }
+            }
+            Err(e) => eprintln!("parse/compile error: {e}"),
+        }
+    }
+
     Ok(())
 }

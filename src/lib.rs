@@ -3,7 +3,7 @@ pub mod eval;
 pub mod lexer;
 pub mod parser;
 
-pub const VERSION: &str = "rs-0.1.2";
+pub const VERSION: &str = "rs-0.1.3";
 
 pub fn compile_source_to_js(source: &str) -> Result<String, String> {
     let program = parser::parse_program(source)?;
@@ -37,6 +37,26 @@ mod tests {
         assert!(!js.contains("return __mars.a;"), "{js}");
     }
 
+    #[test]
+    fn bare_assignment_is_treated_as_declaration() {
+        let src = "func m{
+    x = 1;
+    c = Circle(5);
+}";
+        let js = compile_source_to_js(src).expect("compile failed");
+        assert!(js.contains("let x = 1;"), "{js}");
+        assert!(js.contains("let c = Circle(5);"), "{js}");
+    }
+
+    #[test]
+    fn member_assignment_stays_assignment() {
+        let src = "func m{
+    me.r = 1;
+}";
+        let js = compile_source_to_js(src).expect("compile failed");
+        assert!(js.contains("this.r = 1;"), "{js}");
+        assert!(!js.contains("let me.r"), "{js}");
+    }
     #[test]
     fn parses_if_and_repeat_blocks() {
         let src =
