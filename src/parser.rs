@@ -197,20 +197,49 @@ fn parse_block_stmts(lines: &[String], idx: &mut usize) -> PResult<Vec<Stmt>> {
 
 fn parse_func_signature(sig: &str) -> PResult<(String, Vec<Param>)> {
     if let Some((name, rest)) = sig.split_once('(') {
-        let params_part = rest.trim_end_matches(')').trim();
+        let params_part = rest.trim().strip_suffix(')')
+            .ok_or_else(|| "function parameter list must end with ')'".to_string())?
+            .trim();
+        if params_part.contains(';') {
+            return Err("function parameters use commas, not semicolons; omit the final semicolon".to_string());
+        }
+        let mut brackets = 0usize;
+        for ch in params_part.chars() {
+            match ch {
+                '[' => brackets += 1,
+                ']' if brackets > 0 => brackets -= 1,
+                ']' => return Err("unmatched ']' in function parameters".to_string()),
+                _ => {}
+            }
+        }
+        if brackets != 0 {
+            return Err("unclosed '[' in function parameters".to_string());
+        }
         let mut params = Vec::new();
-        for p in params_part
-            .split(';')
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-        {
-            let mut parts = p.split_whitespace();
-            let ty = parts
-                .next()
-                .ok_or_else(|| format!("missing param type in '{p}'"))?;
-            let name = parts
-                .next()
-                .ok_or_else(|| format!("missing param name in '{p}'"))?;
+        if params_part.is_empty() {
+            return Ok((name.trim().to_string(), params));
+        }
+        for p in split_top_level(params_part, ',') {
+            let p = p.trim();
+            let (ty, name) = p.rsplit_once(char::is_whitespace)
+                .ok_or_else(|| format!("expected 'type name' parameter, got '{p}'"))?;
+            let ty = ty.trim();
+            let mut depth = 0usize;
+            for ch in ty.chars() {
+                match ch {
+                    '[' => depth += 1,
+                    ']' => depth -= 1,
+                    ch if ch.is_whitespace() && depth == 0 => {
+                        return Err(format!("expected comma between parameters in '{p}'"));
+                    }
+                    _ => {}
+                }
+            }
+            if ty.is_empty() || !name.chars().enumerate().all(|(i, ch)| {
+                ch == '_' || ch.is_ascii_alphabetic() || (i > 0 && ch.is_ascii_digit())
+            }) || name.is_empty() {
+                return Err(format!("invalid function parameter '{p}'"));
+            }
             params.push(Param {
                 ty: ty.to_string(),
                 name: name.to_string(),

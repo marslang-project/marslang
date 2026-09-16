@@ -1,9 +1,9 @@
 fixed hot pi (float) = 3.14159;
 
-func area(float r;) => pi * r * r;
+func area(float r) => pi * r * r;
 
 family Circle{
-    func init(float r;){
+    func init(float r){
         me.r = r;
     }
 

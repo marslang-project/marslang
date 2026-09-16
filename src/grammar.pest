@@ -16,9 +16,10 @@ type_ann = { "(" ~ type_name ~ ")" }
 type_name = @{ (!")" ~ ANY)+ }
 
 func_decl = { "func" ~ ident ~ params? ~ (func_expr_body | func_block_body) ~ ";"? }
-params = { "(" ~ param* ~ ")" }
-param = { type_name_atom ~ ident ~ ";" }
-type_name_atom = @{ (!(";" | " " | "\t" | NEWLINE | ")") ~ ANY)+ }
+params = { "(" ~ (param ~ ("," ~ param)*)? ~ ")" }
+param = { type_name_atom ~ ident }
+type_name_atom = @{ (type_brackets | !(";" | "," | " " | "\t" | NEWLINE | ")" | "[" | "]") ~ ANY)+ }
+type_brackets = { "[" ~ (type_brackets | !("[" | "]") ~ ANY)* ~ "]" }
 func_expr_body = { "=>" ~ expr ~ ";" }
 func_block_body = { block }
 

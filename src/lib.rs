@@ -3,7 +3,7 @@ pub mod eval;
 pub mod lexer;
 pub mod parser;
 
-pub const VERSION: &str = "rs-0.1.3";
+pub const VERSION: &str = concat!("rs-", env!("CARGO_PKG_VERSION"));
 
 pub fn compile_source_to_js(source: &str) -> Result<String, String> {
     let program = parser::parse_program(source)?;
@@ -31,7 +31,7 @@ mod tests {
 
     #[test]
     fn builtin_names_can_be_shadowed() {
-        let src = "func f(int a;) => a;";
+        let src = "func f(int a) => a;";
         let js = compile_source_to_js(src).expect("compile failed");
         assert!(js.contains("return a;"), "{js}");
         assert!(!js.contains("return __mars.a;"), "{js}");
