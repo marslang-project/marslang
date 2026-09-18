@@ -1,0 +1,23 @@
+// Bundled std.math algorithms. The host boundary checks arity, matching numeric
+// kinds, reversed clamp bounds, and overflow; algorithms remain Marslang code.
+func min([int,longint,float] a, [int,longint,float] b){
+    if (a < b){ ret a; }
+    ret b;
+}
+
+func max([int,longint,float] a, [int,longint,float] b){
+    if (a > b){ ret a; }
+    ret b;
+}
+
+func abs([int,longint,float] value){
+    // Produce zero of the same numeric kind without an implicit conversion.
+    if (value < value - value){ ret -value; }
+    ret value;
+}
+
+func clamp([int,longint,float] value, [int,longint,float] low, [int,longint,float] high){
+    if (value < low){ ret low; }
+    if (value > high){ ret high; }
+    ret value;
+}

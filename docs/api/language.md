@@ -38,6 +38,24 @@ Supported runtime types include `int` (signed 32-bit), `longint` (signed 64-bit)
 use forms such as `array[int]`, `pair[string,int]`, and `map[string,int]`.
 This is runtime checking, not a complete static type system.
 
+Marslang is dynamically typed. An unannotated variable can change from an integer
+to a string or another kind of value on reassignment. An annotation restricts the
+binding at runtime; `fixed` prevents reassignment regardless of type. Plain `=`
+already provides automatic type detection; `:=` remains excluded.
+
+Numeric values retain their kind through calls, returns, fields, and containers.
+`1.0`, `1e0`, and `float(1)` remain floats even though their value is integral.
+Numeric unions prefer the actual kind instead of converting a float to the first
+integer alternative. Numeric annotation/conversion boundaries retain their checked
+conversion behavior: for example, assigning `1` to a `float` binding yields a float.
+For exact matching between arguments, see [std.math](std-math.md).
+
+Arithmetic follows the runtime operand kinds. An operation involving a float
+produces a float; non-integral number division also produces a float. Integer
+arithmetic checks overflow, including through union-typed parameters. Mixed
+longint/float arithmetic requires an explicit conversion. Numeric equality remains
+value-based (`1 == 1.0`); strings are never coerced to numbers for equality.
+
 ## Functions and families
 
 ```mars
@@ -98,7 +116,9 @@ Exponentiation is right-associative; arithmetic precedes comparisons, which prec
 ## Imports and pending syntax
 
 `takepkg module;` and `takepkg module = alias;` have bootstrap support through the
-JavaScript backend. Recursive `.mars` module compilation, exports, wildcard imports,
+JavaScript backend. The bundled `takepkg std.math;` binds `math`, or use an explicit
+alias, and compiles the Marslang library into the program. Recursive filesystem
+`.mars` module compilation, exports, wildcard imports,
 and a packaged standard library are not complete. Do not assume Python-compatible
 module discovery. `takepkg package = *;` is planned and currently rejected.
 

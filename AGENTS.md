@@ -21,3 +21,10 @@ Windows Cargo and Node can operate on this checkout without the old WSL UNC work
 ```
 
 The bundled example is covered by a Node execution test and prints `3` and `78.53975`. Run the full Rust suite, including `tests/execution.rs`; generated-text assertions alone do not establish correctness. Set `MARSLANG_NODE` to the Node executable if it is not on PATH. Use a separate target directory if switching between Windows and WSL-native Rust toolchains.
+
+WSL-native Rust/Cargo are also installed at `/home/kevib/.cargo/bin/`. The full
+suite has passed with WSL Rust and Windows Node using a separate target directory:
+
+```bash
+MARSLANG_NODE='/mnt/c/Program Files/nodejs/node.exe' /home/kevib/.cargo/bin/cargo test --target-dir target/wsl
+```

@@ -1,8 +1,8 @@
 # marslang
 
-Marslang is a Rust implementation of the **marslang rs-0.4.0** compiler.
+Marslang is a Rust implementation of the **marslang rs-0.5.0** compiler.
 
-See the [rs-0.4.0 release notes](docs/releases/rs-0.4.0.md) for the `.mars` extension migration and validation.
+See the [rs-0.5.0 release notes](docs/releases/rs-0.5.0.md) for the initial math package, dynamic numeric tracking, and validation.
 
 The development direction is to stabilize the Rust-to-JavaScript compiler before self-hosting. Discussion documents under `docs/` stay local; `docs/api/` and `docs/releases/` are available to Git.
 
@@ -10,7 +10,11 @@ Read the [language and API reference](docs/api/README.md) for current syntax and
 
 Run `cargo test` for current coverage, including Node execution tests. All existing regression cases are enabled. Node must be on PATH, or set `MARSLANG_NODE` to its executable path.
 
-Decorators, deque, standard libraries, complete module handling, and async remain pending. Maps, deep copies, and loop control are implemented. `:=` is excluded.
+This release adds dynamically tracked numeric types and a Marslang-written
+[`std.math`](docs/api/std-math.md). The math API is an initial design and will expand.
+Decorators, deque, further standard
+libraries, complete module handling, and async remain pending. Maps, deep copies,
+and loop control are implemented. `:=` is excluded.
 
 Function parameters now use commas: `func add(int a, int b) => a + b;`. The parser accepts this form and rejects semicolons inside parameter lists, including after the last parameter. The decorator package is `std.Decorator`; decorator execution remains pending.
 

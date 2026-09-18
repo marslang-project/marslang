@@ -404,3 +404,124 @@ fn slicing_dispatch_evaluates_once_and_preserves_family_methods() {
 fn public_api_string_example_executes() {
     executes(include_str!("../docs/api/examples/strings.mars"), "CDE\nEDCBA\nABCDE\n3\né👨‍👩‍👧‍👦\n0\n");
 }
+
+#[test]
+fn dynamic_variables_change_type_but_annotations_and_fixed_still_hold() {
+    executes(r#"takepkg std.math;
+        func identity([int,longint,float] value)=>value;
+        func m{
+            x=5; x="hello"; out(x); x=1.0;
+            out(math.min(identity(x),2.0));
+            x=longint(3); out(math.max(identity(x),longint(2)));
+            y (float)=1; out(math.min(y,2.0));
+        }"#, "hello\n1\n3\n1\n");
+    runtime_error("func m{x (int)=5;x=\"hello\";}","expected int");
+    assert!(marslang::compile_source_to_js("func m{fixed x=5;x=\"hello\";}").unwrap_err().contains("cannot reassign"));
+    assert!(marslang::compile_source_to_js("func m{x := 5;}").is_err());
+}
+
+#[test]
+fn std_math_algorithms_preserve_numeric_kinds_and_bounds() {
+    executes(r#"takepkg std.math;
+        func m{
+            out(math.min(3,2)); out(math.max(-3,-2)); out(math.abs(-7));
+            out(math.clamp(-1,0,5)); out(math.clamp(6,0,5)); out(math.clamp(3,0,5));
+            out(math.clamp(2,2,2));
+            out(math.min(math.abs(-1.0),2.0));
+            out(math.max(math.clamp(2.0,0.0,1.0),0.0));
+            out(math.abs(longint(-9223372036854775807)));
+            out(math.clamp(longint(3),longint(1),longint(2)));
+            f=math.min; out(f(4,5));
+        }"#, "2\n-2\n7\n0\n5\n3\n2\n1\n1\n9223372036854775807\n2\n4\n");
+}
+
+#[test]
+fn std_math_checks_types_arity_and_invalid_ranges() {
+    for expression in ["math.min(1,1.0)","math.max(1,longint(1))", "math.clamp(1.0,0.0,2)",
+        "math.abs(true)", "math.abs(\"1\")", "math.abs(null)", "math.min(1)",
+        "math.abs(1,2)", "math.max(arr(),arr())"] {
+        runtime_error(&format!("takepkg std.math;func m{{out({expression});}}"),"TypeError:");
+    }
+    runtime_error("takepkg std.math;func m{out(math.clamp(1,3,2));}","lower bound exceeds upper bound");
+    runtime_error("takepkg std.math;func m{out(math.abs(-2147483648));}","int overflow");
+    runtime_error("takepkg std.math;func m{out(math.abs(-9223372036854775808));}","longint overflow");
+    runtime_error("takepkg std.math;func m{out(math.abs(float(\"NaN\")));}","requires finite float");
+}
+
+#[test]
+fn numeric_kind_survives_returns_containers_fields_and_copy() {
+    executes(r#"takepkg std.math;
+        func identity([int,longint,float] v)=>v;
+        family Box{func init([int,longint,float] v){me.value=v;}func get=>me.value;}
+        func m{
+            v=identity(1.0); a=arr(v); d=map();d.set("v",v);p=pair(v,v);b=Box(v);
+            for(x,arr(a.copy().iget(0),d.copy().get("v"),p.copy().first,b.copy().get())){
+                out(math.min(x,2.0));
+            }
+            fixed f=1.0; out(math.min(f.copy(),2.0));
+            hot h (float)=1; out(math.min(h,2.0));
+            a2 (array[float])=arr(1);out(math.min(a2.iget(0),2.0));
+            p2 (pair[float,float])=pair(1,2);out(math.min(p2.first,2.0));
+            s2 (set[float])=set(1);for(x,s2){out(math.min(x,2.0));}
+            d2 (map[float,float])=map();d2.set(1,2);for(k,d2){out(math.min(k,d2.get(k)));}
+        }"#, "1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n");
+    runtime_error(r#"takepkg std.math;func identity([int,longint,float] v)=>v;
+        func m{out(math.min(identity(1.0),1));}"#, "requires matching numeric types");
+}
+
+#[test]
+fn float_tracking_preserves_scalar_equality_truth_and_collection_keys() {
+    executes(r#"takepkg std.math;func m{
+        out(1.0==1.0);out(1.0==1);out(1.0=="1");out(not 0.0);
+        a=arr(1.0,2.0,1.0);out(a.has(1.0));out(a.get(1.0));out(a.rget(1.0));
+        a.change(1.0,3.0);out(a.iget(0));
+        s=set(1.0,1.0,2.0);out(s.len());out(s.has(1.0));
+        for(x,s.copy()){out(math.min(x,3.0));}
+        d=map();d.set(1.0,2.0);d.set(1.0,3.0);out(d.len());out(d.get(1.0));
+        for(k,d.copy()){out(math.min(k,d.get(k)));}
+        out(d.remove(1.0));out(s.remove(1.0));
+        out(math.min(1.0+1.0,3.0));out(math.min(4.0/2.0,3.0));
+        out(math.min(-(-1.0),2.0));
+    }"#, "true\ntrue\nfalse\ntrue\ntrue\n0\n2\n3\n2\ntrue\n1\n2\n1\n3\n1\ntrue\ntrue\n2\n2\n1\n");
+}
+
+#[test]
+fn bundled_math_imports_are_isolated_aliased_and_deduplicated() {
+    executes(r#"takepkg std.math;takepkg std.math;
+        takepkg std.math = calc;takepkg std.math = out;
+        func min(int a,int b)=>99;
+        func m{slout(math.min(2,3));slout(calc.max(2,3));slout(out.abs(-4));slout(min(1,2));}
+    "#, "23499");
+    runtime_error("takepkg std.math;func m{math.min=1;}", "TypeError:");
+    assert!(marslang::compile_source_to_js("takepkg std.math = *;").unwrap_err().contains("wildcard"));
+    assert!(marslang::compile_source_to_js("takepkg std.file;").unwrap_err().contains("not implemented"));
+    assert!(marslang::compile_source_to_js("takepkg std.math = bad-name;").unwrap_err().contains("alias"));
+    assert!(marslang::compile_source_to_js("takepkg std.math;math=1;").unwrap_err().contains("cannot reassign"));
+}
+
+#[test]
+fn arithmetic_uses_runtime_numeric_kind_through_dynamic_boundaries() {
+    executes(r#"takepkg std.math;
+        func inc([int,longint,float] v)=>v+1;
+        func m{
+            i (int)=1; x=1.0; out(math.min(i+x,3.0));
+            out(math.min(inc(x),3.0));
+            x=2; out(math.min(inc(x),4));
+            out(math.min(5/2,3.0));out(math.min(5.0-3.0,3.0));
+        }"#, "2\n2\n3\n2.5\n2\n");
+    runtime_error("func inc([int,longint,float] v)=>v+1;func m{out(inc(2147483647));}","int overflow");
+    runtime_error("func m{x=1.0;y=longint(1);out(x+y);}","mixed longint/float");
+}
+
+#[test]
+fn fixed_numeric_containers_keep_their_value_kinds() {
+    executes(r#"takepkg std.math;func m{
+        fixed p=pair(1.0,2.0);q (pair[float,float])=p;
+        out(math.min(q.first,q.second));
+        fixed a=arr(1.0);b (array[float])=a;out(math.min(b.iget(0),2.0));
+    }"#, "1\n1\n");
+    for (value, ty) in [("arr(1)","array[float]"),("set(1)","set[float]"),
+        ("pair(1,2)","pair[float,float]")] {
+        runtime_error(&format!("func m{{fixed a={value};b ({ty})=a;}}"), "cannot mutate fixed");
+    }
+}

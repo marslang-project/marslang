@@ -1,1 +1,2 @@
 *.mars linguist-detectable=false
+*.js.inc linguist-detectable=false

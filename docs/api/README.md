@@ -1,6 +1,7 @@
 # Marslang language and API reference
 
-This reference describes the Rust-to-JavaScript compiler release `rs-0.4.0`.
+This reference describes the Rust-to-JavaScript release `rs-0.5.0`,
+including dynamic numeric type tracking and the first bundled `std.math` package.
 The source extension is `.mars`; earlier releases used `.mrs`.
 Use the matching source checkout for the filenames documented here.
 These API documents and release notes are eligible for Git tracking. Discussion
@@ -12,6 +13,7 @@ notes elsewhere under `docs/` remain local.
 - [Strings and slicing](strings.md): Unicode characters, reversal, and strict bounds.
 - [Collections](collections.md): arrays, sets, pairs, maps, and copying.
 - [Built-ins and errors](builtins.md): input/output, conversions, and runtime errors.
+- [std.math](std-math.md): min, max, abs, and clamp, implemented in Marslang.
 
 ## Compile and run
 
@@ -40,7 +42,7 @@ the Node executable if it is not on PATH. The example above is also an execution
 ## Current limits
 
 The compiler emits JavaScript for Node. The language is not self-hosted yet.
-Complete modules/exports, standard-library packages, decorators, deque,
+Complete filesystem modules/exports, additional standard-library packages, decorators, deque,
 `match`, `run/handle/then`, and async remain unimplemented. General named arguments
 are deferred; only slicing accepts `reverse=`. Proposed packages are not APIs.
 

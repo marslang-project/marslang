@@ -22,6 +22,12 @@ pub fn resolve(program: &mut Program) -> Result<(), String> {
             }
             Item::Stmt(s) => resolver.stmt(s)?,
             Item::Import(import) => {
+                if import.module == "std.math" {
+                    let alias = import.alias.as_ref().expect("prepared std import");
+                    let binding = resolver.bind(alias, true, None, None)?;
+                    import.alias = Some(binding.name);
+                    continue;
+                }
                 if let Some(alias) = &import.alias {
                     if alias == "*" { return Err("wildcard imports are not implemented yet".into()); }
                     if resolver.scopes[0].contains_key(alias) { return Err(format!("duplicate import alias '{alias}'")); }
@@ -97,7 +103,7 @@ impl Resolver {
                 v.is_fixed |= inherited;
                 let hot = if v.temp == TempKind::Hot {
                     if !constant(&v.value) { return Err(format!("hot '{}' needs a compile-time constant expression", v.name)); }
-                    Some(v.value.clone())
+                    Some(typed(v.value.clone(), &v.ty))
                 } else { None };
                 let binding = self.bind(&v.name, v.is_fixed || v.temp == TempKind::Hot, v.ty.clone(), hot)?;
                 v.name = binding.name;
@@ -144,7 +150,6 @@ impl Resolver {
         Ok(())
     }
     fn expr(&self, e: &mut Expr) -> Result<(), String> {
-        let numeric_type = self.numeric_type(e);
         match e {
             Expr::Ident(name) => {
                 if let Some(binding) = self.find(name) {
@@ -153,17 +158,11 @@ impl Resolver {
                     return Err(format!("unknown name '{name}'"));
                 }
             }
-            Expr::Unary { value, op } => {
+            Expr::Unary { value, .. } => {
                 self.expr(value)?;
-                if op != "not" && numeric_type.is_some() { *e = typed(e.clone(), &numeric_type); }
             }
-            Expr::Binary { left, right, op } => {
+            Expr::Binary { left, right, .. } => {
                 self.expr(left)?; self.expr(right)?;
-                if matches!(op.as_str(), "+" | "-" | "*" | "/" | "%" | "**") && numeric_type.is_some() {
-                    if numeric_type.as_deref() == Some("float") {
-                        *e = call("floatbin", vec![Expr::String(format!("\"{op}\"")), *left.clone(), *right.clone()]);
-                    } else { *e = typed(e.clone(), &numeric_type); }
-                }
             }
             Expr::Call { callee, args } => { self.expr(callee)?; for arg in args { self.expr(arg)?; } }
             Expr::Member { object, .. } => self.expr(object)?,
@@ -171,27 +170,13 @@ impl Resolver {
         }
         Ok(())
     }
-    fn numeric_type(&self, e: &Expr) -> Option<String> {
-        match e {
-            Expr::Number(n) if n.contains('.') || n.contains('e') || n.contains('E') => Some("float".into()),
-            Expr::Ident(n) => self.find(n).and_then(|b| b.ty).filter(|t| t == "int" || t == "longint" || t == "float"),
-            Expr::Unary { value, .. } => self.numeric_type(value),
-            Expr::Binary { left, right, .. } => {
-                let l = self.numeric_type(left); let r = self.numeric_type(right);
-                if l.as_deref() == Some("float") || r.as_deref() == Some("float") { Some("float".into()) }
-                else if l.as_deref() == Some("longint") || r.as_deref() == Some("longint") { Some("longint".into()) }
-                else { l.or(r) }
-            }
-            _ => None,
-        }
-    }
 }
 fn constant(e: &Expr) -> bool {
     match e {
         Expr::Number(_) | Expr::String(_) | Expr::Bool(_) | Expr::Null => true,
         Expr::Unary { value, .. } => constant(value),
         Expr::Binary { left, right, .. } => constant(left) && constant(right),
-        Expr::Call { callee, args } if matches!(callee.as_ref(), Expr::Ident(n) if n == "__mars.typed" || n == "__mars.floatbin") => args.iter().all(constant),
+        Expr::Call { callee, args } if matches!(callee.as_ref(), Expr::Ident(n) if n == "__mars.typed") => args.iter().all(constant),
         _ => false,
     }
 }

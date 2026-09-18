@@ -2,6 +2,7 @@ pub mod ast;
 pub mod eval;
 mod expression;
 mod resolve;
+mod stdlib;
 pub mod lexer;
 pub mod parser;
 
@@ -9,8 +10,9 @@ pub const VERSION: &str = concat!("rs-", env!("CARGO_PKG_VERSION"));
 
 pub fn compile_source_to_js(source: &str) -> Result<String, String> {
     let mut program = parser::parse_program(source)?;
+    let libraries = stdlib::prepare(&mut program)?;
     resolve::resolve(&mut program)?;
-    Ok(eval::compile_to_js(&program))
+    Ok(eval::compile_with_libraries(&program, &libraries))
 }
 
 #[cfg(test)]
