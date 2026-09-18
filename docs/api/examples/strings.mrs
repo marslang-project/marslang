@@ -1,0 +1,12 @@
+func m{
+    text = "ABCDE";
+    out(text.lenslice(0,3,reverse=true));
+    reversed = text.reverse();
+    out(reversed);
+    out(text);
+
+    unicode = "中é👨‍👩‍👧‍👦";
+    out(unicode.len());
+    out(unicode.lenslice(0,2,reverse=true));
+    out(unicode.lenslice(unicode.len(),0).len());
+}

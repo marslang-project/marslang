@@ -79,6 +79,20 @@ pub enum Stmt {
         times: Expr,
         body: Vec<Stmt>,
     },
+    While {
+        cond: Expr,
+        body: Vec<Stmt>,
+    },
+    ForEach {
+        name: String,
+        iterable: Expr,
+        body: Vec<Stmt>,
+    },
+    For {
+        init: Vec<Stmt>, cond: Expr, step: Vec<Stmt>, body: Vec<Stmt>,
+    },
+    Break,
+    Continue,
 }
 
 #[derive(Debug, Clone)]
@@ -89,6 +103,7 @@ pub enum Expr {
     Null,
     Ident(String),
     Raw(String),
+    Unary { op: String, value: Box<Expr> },
     Call {
         callee: Box<Expr>,
         args: Vec<Expr>,

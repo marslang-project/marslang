@@ -1,2 +1,7 @@
 /target
 *.js
+
+# Discussion output stays local; API documentation and release notes can be tracked.
+/docs/*
+!/docs/releases/
+!/docs/api/

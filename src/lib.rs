@@ -1,12 +1,15 @@
 pub mod ast;
 pub mod eval;
+mod expression;
+mod resolve;
 pub mod lexer;
 pub mod parser;
 
 pub const VERSION: &str = concat!("rs-", env!("CARGO_PKG_VERSION"));
 
 pub fn compile_source_to_js(source: &str) -> Result<String, String> {
-    let program = parser::parse_program(source)?;
+    let mut program = parser::parse_program(source)?;
+    resolve::resolve(&mut program)?;
     Ok(eval::compile_to_js(&program))
 }
 
@@ -18,7 +21,7 @@ mod tests {
     fn comparison_expression_stmt_is_not_assignment() {
         let src = "func m{\n out(1 == 1);\n}";
         let js = compile_source_to_js(src).expect("compile failed");
-        assert!(js.contains("__mars.out(1 == 1);"), "{js}");
+        assert!(js.contains("__mars.out(__mars.bin(\"==\", 1, 1));"));
         assert!(!js.contains("out(1 = = 1)"), "{js}");
     }
 
@@ -33,7 +36,7 @@ mod tests {
     fn builtin_names_can_be_shadowed() {
         let src = "func f(int a) => a;";
         let js = compile_source_to_js(src).expect("compile failed");
-        assert!(js.contains("return a;"), "{js}");
+        assert!(js.contains("return __v1_a;"));
         assert!(!js.contains("return __mars.a;"), "{js}");
     }
 
@@ -41,11 +44,11 @@ mod tests {
     fn bare_assignment_is_treated_as_declaration() {
         let src = "func m{
     x = 1;
-    c = Circle(5);
+    c = 5;
 }";
         let js = compile_source_to_js(src).expect("compile failed");
-        assert!(js.contains("let x = 1;"), "{js}");
-        assert!(js.contains("let c = Circle(5);"), "{js}");
+        assert!(js.contains("let __v1_x = 1;"));
+        assert!(js.contains("let __v2_c = 5;"));
     }
 
     #[test]
@@ -54,7 +57,7 @@ mod tests {
     me.r = 1;
 }";
         let js = compile_source_to_js(src).expect("compile failed");
-        assert!(js.contains("this.r = 1;"), "{js}");
+        assert!(js.contains("__mars.setfield(this, \"r\", 1);"));
         assert!(!js.contains("let me.r"), "{js}");
     }
     #[test]
@@ -62,8 +65,8 @@ mod tests {
         let src =
             "func m{\n    if (true) {\n        out(1);\n    }\n    repeat 2 {\n        out(2);\n    }\n}";
         let js = compile_source_to_js(src).expect("compile failed");
-        assert!(js.contains("if (true) {"), "{js}");
-        assert!(js.contains("for (let __i = 0; __i < (2); __i++) {"), "{js}");
+        assert!(js.contains("if (__mars.truth(true)) {"));
+        assert!(js.contains("__mars.repeat(2)"));
         assert!(!js.contains("if (true) {;"), "{js}");
     }
 

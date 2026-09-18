@@ -3,12 +3,12 @@ use crate::ast::*;
 pub type PResult<T> = Result<T, String>;
 
 pub fn parse_program(input: &str) -> PResult<Program> {
-    let lines = preprocess(input);
+    let lines = preprocess(input)?;
     let mut idx = 0usize;
     let mut items = Vec::new();
     while idx < lines.len() {
         let line = lines[idx].trim();
-        if line.is_empty() {
+        if line.is_empty() || line == ";" {
             idx += 1;
             continue;
         }
@@ -38,38 +38,127 @@ pub fn parse_program(input: &str) -> PResult<Program> {
         idx = next;
     }
 
+    for item in &items {
+        match item {
+            Item::Func(f) => validate_function_loops(f)?,
+            Item::Family(f) => {
+                for method in &f.methods { validate_function_loops(method)?; }
+            }
+            Item::Stmt(stmt) => validate_loop_control(std::slice::from_ref(stmt), 0)?,
+            _ => {}
+        }
+    }
     Ok(Program { items })
 }
 
-fn preprocess(input: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut in_block_comment = false;
-    for raw in input.lines() {
-        let mut line = raw.to_string();
-        if in_block_comment {
-            if let Some(end) = line.find("*/") {
-                line = line[end + 2..].to_string();
-                in_block_comment = false;
-            } else {
-                continue;
+fn validate_function_loops(function: &FuncDecl) -> PResult<()> {
+    if let FuncBody::Block(body) = &function.body { validate_loop_control(body, 0)?; }
+    Ok(())
+}
+
+fn validate_loop_control(body: &[Stmt], depth: usize) -> PResult<()> {
+    for stmt in body {
+        match stmt {
+            Stmt::Break | Stmt::Continue if depth == 0 => {
+                return Err("break/continue must be inside a loop".to_string());
             }
-        }
-        while let Some(start) = line.find("/*") {
-            if let Some(end_rel) = line[start + 2..].find("*/") {
-                let end = start + 2 + end_rel;
-                line.replace_range(start..end + 2, " ");
-            } else {
-                line.truncate(start);
-                in_block_comment = true;
-                break;
+            Stmt::Repeat { body, .. } | Stmt::While { body, .. } |
+            Stmt::ForEach { body, .. } | Stmt::For { body, .. } => validate_loop_control(body, depth + 1)?,
+            Stmt::If { then_block, elif_blocks, else_block, .. } => {
+                validate_loop_control(then_block, depth)?;
+                for (_, body) in elif_blocks { validate_loop_control(body, depth)?; }
+                if let Some(body) = else_block { validate_loop_control(body, depth)?; }
             }
+            _ => {}
         }
-        if let Some(pos) = line.find("//") {
-            line.truncate(pos);
-        }
-        out.push(line);
     }
-    out
+    Ok(())
+}
+
+fn preprocess(input: &str) -> PResult<Vec<String>> {
+    let mut clean = String::new();
+    let mut chars = input.chars().peekable();
+    let mut quote = None;
+    let mut escaped = false;
+    let mut block_start = None;
+    let mut line_comment = false;
+    let (mut line, mut column) = (1usize, 0usize);
+    while let Some(ch) = chars.next() {
+        column += 1;
+        if ch == '\n' {
+            line += 1;
+            column = 0;
+            line_comment = false;
+        }
+        if block_start.is_some() {
+            if ch == '*' && chars.peek() == Some(&'/') {
+                chars.next();
+                column += 1;
+                block_start = None;
+            } else if ch == '\n' {
+                clean.push(ch);
+            }
+            continue;
+        }
+        if line_comment {
+            continue;
+        }
+        if let Some(q) = quote {
+            clean.push(ch);
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == q {
+                quote = None;
+            }
+            continue;
+        }
+        if ch == '/' && chars.peek() == Some(&'/') {
+            chars.next();
+            column += 1;
+            line_comment = true;
+        } else if ch == '/' && chars.peek() == Some(&'*') {
+            block_start = Some((line, column));
+            chars.next();
+            column += 1;
+            clean.push(' ');
+        } else {
+            if ch == '\'' || ch == '"' {
+                quote = Some(ch);
+            }
+            clean.push(ch);
+        }
+    }
+    if let Some((line, column)) = block_start {
+        return Err(format!("unterminated block comment at {line}:{column}"));
+    }
+    if quote.is_some() {
+        return Err(format!("unterminated string at {line}:{column}"));
+    }
+    // Layout does not delimit statements. Split only outside strings and
+    // parenthesized headers/calls, so compact blocks use the same parser path.
+    let mut normalized = String::new();
+    let mut quote = None;
+    let mut escaped = false;
+    let mut depth = 0usize;
+    for ch in clean.chars() {
+        normalized.push(ch);
+        if let Some(q) = quote {
+            if escaped { escaped = false; }
+            else if ch == '\\' { escaped = true; }
+            else if ch == q { quote = None; }
+            continue;
+        }
+        match ch {
+            '\'' | '"' => quote = Some(ch),
+            '(' | '[' => depth += 1,
+            ')' | ']' => depth = depth.saturating_sub(1),
+            '{' | '}' | ';' if depth == 0 => normalized.push('\n'),
+            _ => {}
+        }
+    }
+    Ok(normalized.lines().map(str::to_string).collect())
 }
 
 fn parse_import(line: &str) -> PResult<ImportDecl> {
@@ -123,7 +212,7 @@ fn parse_family(lines: &[String], start: usize) -> PResult<(FamilyDecl, usize)> 
                 i + 1,
             ));
         }
-        if line.is_empty() {
+        if line.is_empty() || line == ";" {
             i += 1;
             continue;
         }
@@ -150,7 +239,7 @@ fn parse_func(lines: &[String], start: usize) -> PResult<(FuncDecl, usize)> {
             FuncDecl {
                 name,
                 params,
-                body: FuncBody::Expr(parse_expr(right.trim())),
+                body: FuncBody::Expr(parse_expr(right.trim())?),
             },
             start + 1,
         ));
@@ -179,7 +268,7 @@ fn parse_block_stmts(lines: &[String], idx: &mut usize) -> PResult<Vec<Stmt>> {
     let mut stmts = Vec::new();
     while *idx < lines.len() {
         let line = lines[*idx].trim();
-        if line.is_empty() {
+        if line.is_empty() || line == ";" {
             *idx += 1;
             continue;
         }
@@ -196,6 +285,10 @@ fn parse_block_stmts(lines: &[String], idx: &mut usize) -> PResult<Vec<Stmt>> {
 }
 
 fn parse_func_signature(sig: &str) -> PResult<(String, Vec<Param>)> {
+    let function_name = sig.split('(').next().unwrap_or_default().trim();
+    if !is_bare_ident(function_name) {
+        return Err(format!("invalid function name '{function_name}'"));
+    }
     if let Some((name, rest)) = sig.split_once('(') {
         let params_part = rest.trim().strip_suffix(')')
             .ok_or_else(|| "function parameter list must end with ')'".to_string())?
@@ -245,6 +338,12 @@ fn parse_func_signature(sig: &str) -> PResult<(String, Vec<Param>)> {
                 name: name.to_string(),
             });
         }
+        let mut names = std::collections::HashSet::new();
+        for param in &params {
+            if !names.insert(&param.name) {
+                return Err(format!("duplicate parameter '{}'", param.name));
+            }
+        }
         Ok((name.trim().to_string(), params))
     } else {
         Ok((sig.trim().to_string(), Vec::new()))
@@ -254,13 +353,79 @@ fn parse_func_signature(sig: &str) -> PResult<(String, Vec<Param>)> {
 fn parse_stmt_at(lines: &[String], idx: usize) -> PResult<(Stmt, usize)> {
     let l = lines[idx].trim();
 
-    if l.starts_with("if ") {
+    if l.starts_with("while ") || l.starts_with("while(") {
+        if !l.ends_with('{') { return Err("while must open a block".into()); }
+        let cond = parse_condition_between_parens(l, "while")?;
+        let mut next = idx + 1;
+        let body = parse_block_stmts(lines, &mut next)?;
+        return Ok((Stmt::While { cond, body }, next));
+    }
+    if l.starts_with("for ") || l.starts_with("for(") {
+        let header = l.trim_start_matches("for").trim().strip_suffix('{')
+            .ok_or("for must open a block")?.trim();
+        let header = header.strip_prefix('(').and_then(|s| s.strip_suffix(')'))
+            .ok_or("for requires a parenthesized header")?;
+        let parts = split_top_level(header, ',');
+        if parts.len() == 3 {
+            let init = parse_for_sequence(parts[0].trim())?;
+            let cond = parse_expr(parts[1].trim())?;
+            let step = parse_for_sequence(parts[2].trim())?;
+            let mut next = idx + 1;
+            let body = parse_block_stmts(lines, &mut next)?;
+            return Ok((Stmt::For { init, cond, step, body }, next));
+        }
+        if parts.len() != 2 {
+            return Err("expected for (item, iterable) or for (initializer, condition, change)".into());
+        }
+        let name = parts[0].trim();
+        if !is_bare_ident(name) || parts[1].trim().is_empty() {
+            return Err("expected for (itemname, iterable)".into());
+        }
+        let iterable = parse_expr(parts[1].trim())?;
+        let mut next = idx + 1;
+        let body = parse_block_stmts(lines, &mut next)?;
+        return Ok((Stmt::ForEach { name: name.into(), iterable, body }, next));
+    }
+
+    if l.starts_with("if ") || l.starts_with("if(") {
         return parse_if_stmt(lines, idx);
     }
     if l.starts_with("repeat ") {
         return parse_repeat_stmt(lines, idx);
     }
     Ok((parse_stmt_line(l)?, idx + 1))
+}
+
+fn parse_for_sequence(text: &str) -> PResult<Vec<Stmt>> {
+    let text = if text.starts_with('(') && find_matching_paren(text)? == text.len() - 1 {
+        &text[1..text.len()-1]
+    } else { text };
+    if text.trim().is_empty() { return Ok(Vec::new()); }
+    let mut parts = Vec::new(); let mut start = 0;
+    let mut quote = None; let mut escaped = false; let mut depth = 0usize;
+    for (i,ch) in text.char_indices() {
+        if let Some(q) = quote {
+            if escaped { escaped = false; } else if ch == '\\' { escaped = true; } else if ch == q { quote = None; }
+            continue;
+        }
+        match ch {
+            '\'' | '"' => quote = Some(ch),
+            '(' | '[' => depth += 1, ')' | ']' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => return Err("use 'also', not commas, inside grouped for sections".into()),
+            _ => {}
+        }
+        if depth == 0 && text[i..].starts_with(" also ") {
+            parts.push(&text[start..i]); start = i + 6;
+        }
+    }
+    parts.push(&text[start..]);
+    parts.into_iter().map(|part| {
+        let stmt = parse_stmt_line(&format!("{};", part.trim()))?;
+        if !matches!(stmt, Stmt::Var(_) | Stmt::Assign { .. } | Stmt::Expr(_)) {
+            return Err("invalid for initializer/change".into());
+        }
+        Ok(stmt)
+    }).collect()
 }
 
 fn parse_if_stmt(lines: &[String], start: usize) -> PResult<(Stmt, usize)> {
@@ -283,7 +448,7 @@ fn parse_if_stmt(lines: &[String], start: usize) -> PResult<(Stmt, usize)> {
             continue;
         }
 
-        if l.starts_with("elif ") {
+        if l.starts_with("elif ") || l.starts_with("elif(") {
             if !l.ends_with('{') {
                 return Err("elif statement header must end with '{'".to_string());
             }
@@ -332,7 +497,7 @@ fn parse_repeat_stmt(lines: &[String], start: usize) -> PResult<(Stmt, usize)> {
     let body = parse_block_stmts(lines, &mut i)?;
     Ok((
         Stmt::Repeat {
-            times: parse_expr(expr_text),
+            times: parse_expr(expr_text)?,
             body,
         },
         i,
@@ -350,13 +515,22 @@ fn parse_condition_between_parens(line: &str, keyword: &str) -> PResult<Expr> {
     }
     let close = find_matching_paren(after_kw)?;
     let cond = &after_kw[1..close];
-    Ok(parse_expr(cond))
+    parse_expr(cond)
 }
 
 fn find_matching_paren(text: &str) -> PResult<usize> {
     let mut depth = 0usize;
+    let mut quote = None;
+    let mut escaped = false;
     for (i, ch) in text.char_indices() {
+        if let Some(q) = quote {
+            if escaped { escaped = false; }
+            else if ch == '\\' { escaped = true; }
+            else if ch == q { quote = None; }
+            continue;
+        }
         match ch {
+            '\'' | '"' => quote = Some(ch),
             '(' => depth += 1,
             ')' => {
                 depth = depth.saturating_sub(1);
@@ -371,17 +545,16 @@ fn find_matching_paren(text: &str) -> PResult<usize> {
 }
 
 fn is_var_decl(line: &str) -> bool {
-    if !(line.contains('=') && line.ends_with(';')) {
+    if !line.ends_with(';') {
         return false;
     }
-
-    let lhs = line.split('=').next().unwrap_or_default().trim();
+    let Some(eq) = find_plain_assignment(line) else { return false; };
+    let lhs = line[..eq].trim();
 
     line.starts_with("fixed ")
         || line.starts_with("hot ")
         || line.starts_with("cold ")
-        || line.contains(" (")
-        || lhs.contains(' ')
+        || lhs.split_once('(').map(|(name, _)| is_bare_ident(name.trim())).unwrap_or(false)
         || is_bare_ident(lhs)
 }
 
@@ -432,21 +605,45 @@ fn parse_var_decl(line: &str) -> PResult<VarDecl> {
         (joined.trim().to_string(), None)
     };
 
+    if !is_bare_ident(&name) {
+        return Err(format!("invalid variable declaration '{name}'; fixed must precede hot/cold"));
+    }
+
     Ok(VarDecl {
         is_fixed,
         temp,
         name,
         ty,
-        value: parse_expr(value),
+        value: parse_expr(value)?,
     })
 }
 
 fn parse_stmt_line(line: &str) -> PResult<Stmt> {
     let l = line.trim();
+    if l == "break;" { return Ok(Stmt::Break); }
+    if l == "continue;" { return Ok(Stmt::Continue); }
+    for (suffix, op) in [("++;", "+"), ("--;", "-")] {
+        if let Some(target) = l.strip_suffix(suffix) {
+            let target = parse_expr(target)?;
+            return Ok(Stmt::Assign { target: target.clone(), value: Expr::Binary {
+                left: Box::new(target), op: op.into(), right: Box::new(Expr::Number("1".into())),
+            }});
+        }
+    }
+    for op in ["+=", "-="] {
+        if let Some((target, value)) = l.strip_suffix(';').and_then(|s| s.split_once(op)) {
+            if is_bare_ident(target.trim()) {
+                let target = parse_expr(target)?;
+                return Ok(Stmt::Assign { target: target.clone(), value: Expr::Binary {
+                    left: Box::new(target), op: op[..1].into(), right: Box::new(parse_expr(value)?),
+                }});
+            }
+        }
+    }
     if l.starts_with("ret ") {
         return Ok(Stmt::Ret(parse_expr(
             l.trim_start_matches("ret").trim().trim_end_matches(';'),
-        )));
+        )?));
     }
     if is_var_decl(l) {
         return Ok(Stmt::Var(parse_var_decl(l)?));
@@ -455,23 +652,34 @@ fn parse_stmt_line(line: &str) -> PResult<Stmt> {
         let (lhs, rhs_with_eq) = l.trim_end_matches(';').split_at(eq_idx);
         let rhs = &rhs_with_eq[1..];
         return Ok(Stmt::Assign {
-            target: parse_expr(lhs.trim()),
-            value: parse_expr(rhs.trim()),
+            target: parse_expr(lhs.trim())?,
+            value: parse_expr(rhs.trim())?,
         });
     }
-    Ok(Stmt::Expr(parse_expr(l.trim_end_matches(';'))))
+    Ok(Stmt::Expr(parse_expr(l.trim_end_matches(';'))?))
 }
 
 fn find_plain_assignment(text: &str) -> Option<usize> {
     let mut depth = 0usize;
-    let chars: Vec<char> = text.chars().collect();
-    for (i, ch) in chars.iter().enumerate() {
+    let mut quote = None;
+    let mut escaped = false;
+    let mut previous = None;
+    let mut chars = text.char_indices().peekable();
+    while let Some((i, ch)) = chars.next() {
+        if let Some(q) = quote {
+            if escaped { escaped = false; }
+            else if ch == '\\' { escaped = true; }
+            else if ch == q { quote = None; }
+            previous = Some(ch);
+            continue;
+        }
         match ch {
+            '\'' | '"' => quote = Some(ch),
             '(' | '[' | '{' => depth += 1,
             ')' | ']' | '}' => depth = depth.saturating_sub(1),
             '=' if depth == 0 => {
-                let prev = if i > 0 { Some(chars[i - 1]) } else { None };
-                let next = chars.get(i + 1).copied();
+                let prev = previous;
+                let next = chars.peek().map(|(_, ch)| *ch);
                 if prev != Some('=')
                     && prev != Some('!')
                     && prev != Some('<')
@@ -485,53 +693,13 @@ fn find_plain_assignment(text: &str) -> Option<usize> {
             }
             _ => {}
         }
+        previous = Some(ch);
     }
     None
 }
 
-fn parse_expr(text: &str) -> Expr {
-    let t = text.trim();
-    if t == "true" {
-        return Expr::Bool(true);
-    }
-    if t == "false" || t == "fasle" {
-        return Expr::Bool(false);
-    }
-    if t == "null" {
-        return Expr::Null;
-    }
-    if t.parse::<f64>().is_ok() {
-        return Expr::Number(t.to_string());
-    }
-    if (t.starts_with('"') && t.ends_with('"')) || (t.starts_with('\'') && t.ends_with('\'')) {
-        return Expr::String(t.to_string());
-    }
-    if let Some(p) = t.find('(') {
-        if t.ends_with(')') {
-            let callee = t[..p].trim();
-            let args_text = &t[p + 1..t.len() - 1];
-            let args = split_top_level(args_text, ',')
-                .into_iter()
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .map(|s| parse_expr(&s))
-                .collect::<Vec<_>>();
-            return Expr::Call {
-                callee: Box::new(parse_expr(callee)),
-                args,
-            };
-        }
-    }
-    if let Some(dot) = t.find('.') {
-        let (obj, field) = t.split_at(dot);
-        if !obj.is_empty() && !field.is_empty() && !t.contains(' ') {
-            return Expr::Member {
-                object: Box::new(parse_expr(obj)),
-                field: field.trim_start_matches('.').to_string(),
-            };
-        }
-    }
-    Expr::Ident(t.to_string())
+fn parse_expr(text: &str) -> PResult<Expr> {
+    crate::expression::parse(text)
 }
 
 fn split_top_level(text: &str, delimiter: char) -> Vec<String> {
@@ -541,13 +709,16 @@ fn split_top_level(text: &str, delimiter: char) -> Vec<String> {
     let mut bracket = 0usize;
     let mut brace = 0usize;
     let mut in_string: Option<char> = None;
+    let mut escaped = false;
     let chars: Vec<char> = text.chars().collect();
 
     let mut i = 0usize;
     while i < chars.len() {
         let ch = chars[i];
         if let Some(q) = in_string {
-            if ch == q && (i == 0 || chars[i - 1] != '\\') {
+            if escaped { escaped = false; }
+            else if ch == '\\' { escaped = true; }
+            else if ch == q {
                 in_string = None;
             }
             i += 1;

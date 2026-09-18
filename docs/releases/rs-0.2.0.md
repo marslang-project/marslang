@@ -34,5 +34,6 @@ wildcard/relative module handling, and copy/immutability semantics remain pendin
 
 Existing core gaps remain, including the bundled example's collection runtime
 failure, hot substitution, compound `me` expressions, and line-oriented parsing.
-See [LANGUAGE_CORE.md](../LANGUAGE_CORE.md) and
-[LIMITATIONS.md](../LIMITATIONS.md) before relying on unsupported syntax.
+The language contract and feature inventory are local discussion documents;
+they are not distributed in the current checkout. These release notes describe
+the rs-0.2.0 snapshot, not subsequent bug fixes.
