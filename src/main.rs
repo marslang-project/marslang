@@ -14,7 +14,7 @@ fn main() {
 fn run() -> Result<(), String> {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
-        eprintln!("Usage: compiler <file.mrs> | compiler compile <file.mrs> [-o out.js] | compiler lex <file.mrs> | compiler repl");
+        eprintln!("Usage: marslang <file.mars> | marslang compile <file.mars> [-o out.js] | marslang lex <file.mars> | marslang repl");
         return Ok(());
     }
 

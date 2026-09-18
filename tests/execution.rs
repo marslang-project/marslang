@@ -257,7 +257,7 @@ fn copy_preserves_cycles_and_shared_structure_without_fixed_state() {
 
 #[test]
 fn bundled_example_executes() {
-    executes(include_str!("../hello.mrs"), "3\n78.53975\n");
+    executes(include_str!("../hello.mars"), "3\n78.53975\n");
 }
 
 #[test]
@@ -402,5 +402,5 @@ fn slicing_dispatch_evaluates_once_and_preserves_family_methods() {
 
 #[test]
 fn public_api_string_example_executes() {
-    executes(include_str!("../docs/api/examples/strings.mrs"), "CDE\nEDCBA\nABCDE\n3\né👨‍👩‍👧‍👦\n0\n");
+    executes(include_str!("../docs/api/examples/strings.mars"), "CDE\nEDCBA\nABCDE\n3\né👨‍👩‍👧‍👦\n0\n");
 }

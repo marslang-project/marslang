@@ -1,8 +1,8 @@
 # marslang
 
-Marslang is a Rust implementation of the **marslang rs-0.3.0** compiler.
+Marslang is a Rust implementation of the **marslang rs-0.4.0** compiler.
 
-See the [rs-0.3.0 release notes](docs/releases/rs-0.3.0.md) for core improvements, migration notes, and known limitations.
+See the [rs-0.4.0 release notes](docs/releases/rs-0.4.0.md) for the `.mars` extension migration and validation.
 
 The development direction is to stabilize the Rust-to-JavaScript compiler before self-hosting. Discussion documents under `docs/` stay local; `docs/api/` and `docs/releases/` are available to Git.
 
@@ -27,12 +27,12 @@ It includes:
 cargo build
 ```
 
-## Compile a `.mrs` file
+## Compile a `.mars` file
 
 ```bash
-cargo run -- hello.mrs
+cargo run -- hello.mars
 # or
-cargo run -- compile hello.mrs -o hello.js
+cargo run -- compile hello.mars -o hello.js
 ```
 
 Then run the generated JavaScript:
@@ -112,7 +112,7 @@ func m{
 }
 ```
 
-A starter marslang stdlib is included at `stdlib.mrs`.
+A starter marslang stdlib is included at `stdlib.mars`.
 
 
 ## REPL

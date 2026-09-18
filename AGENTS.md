@@ -16,7 +16,7 @@ Windows Cargo and Node can operate on this checkout without the old WSL UNC work
 
 ```bash
 /mnt/c/Users/Kevin/.cargo/bin/cargo.exe test
-/mnt/c/Users/Kevin/.cargo/bin/cargo.exe run -- compile hello.mrs -o hello.js
+/mnt/c/Users/Kevin/.cargo/bin/cargo.exe run -- compile hello.mars -o hello.js
 '/mnt/c/Program Files/nodejs/node.exe' hello.js
 ```
 

@@ -1,7 +1,8 @@
 # Marslang language and API reference
 
-This reference describes the Rust-to-JavaScript compiler release `rs-0.3.0`.
-Use the matching source checkout for the APIs documented here.
+This reference describes the Rust-to-JavaScript compiler release `rs-0.4.0`.
+The source extension is `.mars`; earlier releases used `.mrs`.
+Use the matching source checkout for the filenames documented here.
 These API documents and release notes are eligible for Git tracking. Discussion
 notes elsewhere under `docs/` remain local.
 
@@ -18,11 +19,11 @@ Install Rust and Node.js. String operations require Node with `Intl.Segmenter`.
 Run from the repository root:
 
 ```sh
-cargo run -- compile docs/api/examples/strings.mrs -o target/api-strings.js
+cargo run -- compile docs/api/examples/strings.mars -o target/api-strings.js
 node target/api-strings.js
 ```
 
-The [runnable example](examples/strings.mrs) prints:
+The [runnable example](examples/strings.mars) prints:
 
 ```text
 CDE

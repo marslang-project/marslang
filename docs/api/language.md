@@ -1,6 +1,6 @@
 # Language syntax
 
-Source files end in `.mrs`. Statements end with `;`; blocks use `{...}`.
+Source files end in `.mars`. Statements end with `;`; blocks use `{...}`.
 `//` starts a line comment; `/* ... */` encloses a block comment.
 
 ## Variables and types
@@ -98,7 +98,7 @@ Exponentiation is right-associative; arithmetic precedes comparisons, which prec
 ## Imports and pending syntax
 
 `takepkg module;` and `takepkg module = alias;` have bootstrap support through the
-JavaScript backend. Recursive `.mrs` module compilation, exports, wildcard imports,
+JavaScript backend. Recursive `.mars` module compilation, exports, wildcard imports,
 and a packaged standard library are not complete. Do not assume Python-compatible
 module discovery. `takepkg package = *;` is planned and currently rejected.
 
