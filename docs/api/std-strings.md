@@ -11,7 +11,13 @@ func m{
 ```
 
 Positions and widths count characters (grapheme clusters), the same unit as
-`len()` and `lenslice()`. The package is named `strings` so that it does not hide
+`len()` and `lenslice()`. Searching, splitting, and replacing match whole characters
+only: a match must start and end at character boundaries, so a position from
+`find` always works with `lenslice`. A combining accent inside a character is not
+found on its own, and `"
+"` is one character, so `split(text, "
+")` does not
+split Windows line endings; use `lines(text)` for those. The package is named `strings` so that it does not hide
 the built-in `string(value)` conversion.
 
 | Function | Result |

@@ -24,7 +24,10 @@ pub fn package() -> Value {
                 _ => return type_err("rs.time.sleep expects a float"),
             };
             if !seconds.is_finite() || seconds < 0.0 { return range_err("sleep needs a finite, nonnegative number of seconds"); }
-            std::thread::sleep(Duration::from_secs_f64(seconds));
+            let Ok(duration) = Duration::try_from_secs_f64(seconds) else {
+                return range_err("sleep duration is too long");
+            };
+            std::thread::sleep(duration);
             Ok(Value::Null)
         })
         .build()

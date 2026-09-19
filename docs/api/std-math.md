@@ -209,7 +209,7 @@ and `rs.math` ([std/rs/math.rs](../../std/rs/math.rs)) for the platform's float 
 `sqrt`, `cbrt`, `exp`, `expm1`, `ln`, `log1p`, `log2`, `log10`, trigonometric and
 hyperbolic functions, `atan2`, float `pow`, and the float sign bit.
 
-Integer helpers (gcd/lcm and division helpers), combinatorics, approximate equality,
-adjacent-float operations, decimal/fraction, and the optional convenience functions
-from the expansion proposal remain future work. Package boundaries for statistics,
+Approximate equality, adjacent-float operations, inverse hyperbolic functions,
+decimal/fraction, and the optional convenience functions from the expansion proposal
+remain future work. Package boundaries for statistics,
 random generation, complex numbers, and linear algebra remain unchanged.

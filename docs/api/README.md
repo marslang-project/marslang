@@ -1,6 +1,6 @@
 # Marslang language and API reference
 
-This reference describes the Rust interpreter as of `rs-0.7.0`,
+This reference describes the Rust interpreter as of `rs-0.8.0`,
 including dynamic numeric type tracking and the expanded `std.math` package.
 The source extension is `.mars`; earlier releases used `.mrs`.
 Use the matching source checkout for the filenames documented here.
@@ -18,6 +18,7 @@ notes elsewhere under `docs/` remain local.
 - [std.strings](std-strings.md): splitting, searching, trimming, case, and padding.
 - [std.types](std-types.md): a value's kind, family checks.
 - [std.time](std-time.md): clocks and sleeping.
+- [std.Decorator](std-decorator.md): `@Decorator.private` and `@Decorator.subclass` methods.
 
 ## Run
 
@@ -44,8 +45,8 @@ and check their output. The example above is also an execution test.
 ## Current limits
 
 Programs run in a Rust tree-walking interpreter. The language is not self-hosted yet.
-Complete filesystem modules/exports, additional standard-library packages, decorators, deque,
-`match` and async remain unimplemented. General named arguments
+Additional standard-library packages, the remaining decorators (`static`, `class`,
+`overload`), `match`, and async remain unimplemented. General named arguments
 are deferred; only slicing accepts `reverse=`. Proposed packages are not APIs.
 
 The `lex` command uses a separate lexer from the parser. The REPL reruns its

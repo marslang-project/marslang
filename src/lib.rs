@@ -48,6 +48,7 @@ fn compile_in(source: &str, base: &std::path::Path) -> Result<Compiled, String> 
     let mut program = parser::parse_program(source)?;
     let mut loader = package::Loader::new(base);
     loader.load_imports(&mut program, None)?;
+    package::apply_decorators(&mut program)?;
     resolve::resolve(&mut program)?;
     Ok(Compiled { program, packages: loader.packages })
 }

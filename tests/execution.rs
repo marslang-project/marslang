@@ -982,3 +982,120 @@ fn std_time_clocks_and_sleep() {
         }"#, "true true true\n");
     runtime_error("takepkg std.time;\nfunc m{ time.sleep(-1); }", "nonnegative");
 }
+
+#[test]
+fn oversized_sleep_and_cyclic_error_messages_are_catchable() {
+    executes(r#"takepkg std.time;
+        func m{
+            run{ time.sleep(1e30); } handle(RangeError e){ out(e); } then{ out("cleanup"); }
+            run{
+                run{ err(Error, "original"); } handle(Error e){ e.message = arr(e); out(e); err(e); }
+            } handle(Error again){ out("rethrown", again); }
+        }"#, "RangeError: sleep duration is too long\ncleanup\nError: [<cycle>]\nrethrown Error: [<cycle>]\n");
+    runtime_error("func m{ run{ err(Error, \"x\"); } handle(Error e){ e.message = e; err(e); } }", "Error: Error: <cycle>");
+}
+
+#[test]
+fn union_alternatives_with_shared_containers_apply_atomically() {
+    executes(r#"takepkg std.types;
+        func choose([pair[array[longint],array[int]],pair[array[int],array[int]]] value) => value;
+        func m{
+            a=arr(1);
+            out(choose(pair(a,a)));
+            out(a, types.kind(a.iget(0)));
+            a.add(2); out(a.len());
+            // A whole annotation that cannot hold changes nothing.
+            b=arr(1);
+            run{ x (pair[array[longint],array[int]]) = pair(b,b); } handle(TypeError e){ out(e); }
+            out(types.kind(b.iget(0))); b.add("still unrestricted"); out(b.len());
+        }"#, "pair([1], [1])\n[1] int\n2\nTypeError: expected int\nint\n2\n");
+}
+
+#[test]
+fn gcd_handles_minimum_integers() {
+    executes(r#"takepkg std.math;
+        func m{
+            out(math.gcd(-2147483648, 1), math.gcd(-2147483648, -2147483648 + 2), math.gcd(longint("-9223372036854775808"), longint(2)));
+            out(math.lcm(-4, 6), math.comb(10, 3));
+        }"#, "1 2 2\n12 120\n");
+    runtime_error("takepkg std.math;\nfunc m{ math.gcd(-2147483648, 0); }", "int overflow");
+    runtime_error("takepkg std.math;\nfunc m{ math.lcm(-2147483648, 1); }", "int overflow");
+}
+
+#[test]
+fn priority_queue_items_are_in_pop_order_and_leave_the_queue_unchanged() {
+    executes(r#"takepkg std.containers;
+        func m{
+            q = containers.priority_queue();
+            q.push("c", 3).push("a", 1).push("b1", 2).push("b2", 2);
+            out(q.items(), q.len(), q.peek());
+            out(q.pop(), q.items());
+            out(containers.priority_queue().items());
+        }"#, "[\"a\", \"b1\", \"b2\", \"c\"] 4 a\na [\"b1\", \"b2\", \"c\"]\n[]\n");
+}
+
+#[test]
+fn string_searches_match_whole_characters_only() {
+    executes(r#"takepkg std.strings;
+        func m{
+            text = "e\u0301x";
+            out(text.len(), strings.find(text, "\u0301"), strings.rfind(text, "\u0301"), strings.find(text, "x"));
+            out(strings.contains(text, "e"), strings.contains(text, "e\u0301"), strings.starts_with(text, "e"), strings.ends_with(text, "x"));
+            out(strings.replace(text, "e", "a"), strings.replace("aXbXc", "X", "-"), strings.split("a\r\nb", "\n").len(), strings.lines("a\r\nb").len());
+            i = strings.find("中é👨‍👩‍👧‍👦x中", "中"); j = strings.rfind("中é👨‍👩‍👧‍👦x中", "中");
+            out(i, j, "中é👨‍👩‍👧‍👦x中".lenslice(j, 1));
+            out(strings.find("abc", ""), strings.rfind("abc", ""), strings.split("a,,b", ","));
+        }"#,
+        "2 -1 -1 1\nfalse true false true\ne\u{301}x a-b-c 1 2\n0 4 中\n0 3 [\"a\", \"\", \"b\"]\n");
+}
+
+#[test]
+fn decorator_private_and_subclass_control_who_can_call_methods() {
+    let program = |body: &str| format!(r#"takepkg std.Decorator;
+        family Account{{
+            func init(){{ me.balance = 0; }}
+            @Decorator.private
+            func _audit(string action) => "audit " + action;
+            @Decorator.subclass
+            func _limit() => 100;
+            func deposit(int amount){{ me.balance = me.balance + amount; ret me._audit("deposit"); }}
+        }}
+        family Savings(Account){{
+            func limit_twice() => me._limit() * 2;
+            func sneak() => me._audit("sneak");
+        }}
+        family Other{{
+            func peek(Account a) => a._limit();
+        }}
+        func m{{ {body} }}"#);
+    executes(&program("a = Account(); out(a.deposit(5), a.balance); s = Savings(); out(s.limit_twice(), s.deposit(1));"),
+        "audit deposit 5\n200 audit deposit\n");
+    for (body, message) in [
+        ("Account()._audit(\"x\");", "_audit is private to Account"),
+        ("f = Account()._audit;", "_audit is private to Account"),
+        ("Savings().sneak();", "_audit is private to Account"),
+        ("Account()._limit();", "_limit is only available to Account and families inheriting from it"),
+        ("Other().peek(Account());", "_limit is only available to Account"),
+    ] {
+        runtime_error(&program(body), message);
+    }
+}
+
+#[test]
+fn decorators_need_the_package_and_a_known_marker() {
+    executes("takepkg std.Decorator = D;\nfamily Box{\n @D.private func _x() => 1;\n func x() => me._x();\n}\nfunc m{ out(Box().x()); }", "1\n");
+    for (source, message) in [
+        ("family Box{\n @Decorator.private\n func _x() => 1;\n}", "needs `takepkg std.Decorator;`"),
+        ("takepkg std.Decorator;\nfamily Box{\n @Decorator.secret\n func _x() => 1;\n}", "unknown decorator @Decorator.secret"),
+        ("takepkg std.Decorator;\nfamily Box{\n @Decorator.static\n func x() => 1;\n}", "@Decorator.static is not implemented yet"),
+        ("takepkg std.Decorator;\nfamily Box{\n @Decorator.private @Decorator.subclass\n func x() => 1;\n}", "cannot be both private and subclass"),
+        ("takepkg std.Decorator;\nfamily Box{\n @Decorator.private\n func init(){}\n}", "constructors are always public"),
+        ("takepkg std.Decorator;\n@Decorator.private\nfunc x() => 1;", "only supported on family methods"),
+        ("takepkg std.Decorator;\nfamily Box{\n @Decorator.private\n}", "must be followed by a func"),
+        ("takepkg std.Decorator;\nfamily Box{\n @private\n func x() => 1;\n}", "invalid decorator"),
+    ] {
+        let error = marslang::compile(source).expect_err(source);
+        assert!(error.contains(message), "{source}: {error}");
+    }
+    runtime_error("takepkg std.containers;\nfunc m{ containers.deque()._slot(0); }", "_slot is private to deque");
+}

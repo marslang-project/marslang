@@ -1,0 +1,15 @@
+// std.Decorator: decorator markers written above family methods.
+//
+//     takepkg std.Decorator;
+//     family Account{
+//         @Decorator.private
+//         func _audit(){ ... }
+//     }
+//
+// Importing this package makes `@Decorator.NAME` (or `@alias.NAME`) available.
+// The markers are applied by the interpreter, so the package has no members:
+//
+//     @Decorator.private    callable only from methods of the declaring family
+//     @Decorator.subclass   also callable from families inheriting from it
+//
+// @Decorator.static, @Decorator.class, and @Decorator.overload are planned.

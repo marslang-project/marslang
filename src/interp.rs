@@ -23,6 +23,17 @@ enum MethodTarget { Method(Rc<Function>), Value(Value) }
 /// A container restriction from a matched annotation, applied after matching.
 struct Restriction { target: Value, args: Rc<[String]>, unit: usize }
 
+/// The computed result of restricting one container: its new restriction list
+/// and converted contents, written only once the whole plan has succeeded.
+struct Staged { target: Value, restrictions: Vec<(Rc<[String]>, usize)>, contents: Contents }
+
+enum Contents {
+    Array(Vec<Value>),
+    Set(IndexMap<Key, Value>),
+    Map(IndexMap<Key, (Value, Value)>),
+    Pair(Value, Value),
+}
+
 /// Globals and declarations of one source unit (the program or a bundled package).
 struct Unit {
     /// Package name, or `None` for the program itself.
@@ -36,6 +47,8 @@ struct Unit {
 
 struct Env {
     unit: usize,
+    /// The family whose method is running, for private/subclass access checks.
+    owner: Option<Rc<Family>>,
     /// `None` while running top-level statements, which declare globals.
     locals: Option<HashMap<String, Value>>,
     me: Option<Value>,
@@ -135,7 +148,7 @@ impl<'o> Interp<'o> {
         let mut decls = HashMap::new();
         for item in &program.items {
             match item {
-                Item::Func(f) => { functions.insert(f.name.clone(), Rc::new(Function { decl: f.clone(), package: index })); }
+                Item::Func(f) => { functions.insert(f.name.clone(), Rc::new(Function { decl: f.clone(), package: index, owner: None })); }
                 Item::Family(f) => { decls.insert(f.name.clone(), f); }
                 _ => {}
             }
@@ -147,7 +160,7 @@ impl<'o> Interp<'o> {
     }
 
     fn run_top_level(&mut self, program: &Program, unit: usize) -> RResult<()> {
-        let mut env = Env { unit, locals: None, me: None };
+        let mut env = Env { unit, owner: None, locals: None, me: None };
         for item in &program.items {
             match item {
                 Item::Import(import) => {
@@ -414,7 +427,7 @@ impl<'o> Interp<'o> {
             }
             Expr::Member { object, field } => {
                 let object = self.eval(object, env)?;
-                self.get_member(&object, field)?
+                self.get_member(&object, field, env.owner.as_ref())?
             }
             Expr::Call { callee, args } => return self.eval_call(callee, args, env),
         })
@@ -432,7 +445,7 @@ impl<'o> Interp<'o> {
                 // Select the target before evaluating arguments, so their side
                 // effects cannot replace it. Built-in string and collection
                 // methods are fixed by the receiver's type.
-                let target = self.method_target(&object, field)?;
+                let target = self.method_target(&object, field, env.owner.as_ref())?;
                 let args = self.eval_args(args, env)?;
                 match target {
                     Some(MethodTarget::Method(method)) => self.call_function(&method, Some(object), args),
@@ -472,7 +485,15 @@ impl<'o> Interp<'o> {
                 if args.len() != function.arity {
                     return type_err(format!("{} expects {} argument(s), got {}", function.name, function.arity, args.len()));
                 }
-                (function.imp)(&args)
+                // A bug in a native package must not take down the interpreter:
+                // a panic becomes an ordinary, catchable error.
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (function.imp)(&args)))
+                    .unwrap_or_else(|panic| {
+                        let detail = panic.downcast_ref::<&str>().map(|s| s.to_string())
+                            .or_else(|| panic.downcast_ref::<String>().cloned())
+                            .unwrap_or_else(|| "unknown panic".into());
+                        err(ErrorKind::Error, format!("internal error in {}: {detail}", function.name))
+                    })
             }
         }
     }
@@ -491,7 +512,8 @@ impl<'o> Interp<'o> {
         for (param, arg) in decl.params.iter().zip(args) {
             locals.insert(param.name.clone(), self.typed(arg, &param.ty, function.package)?);
         }
-        let mut env = Env { unit: function.package, locals: Some(locals), me };
+        let owner = function.owner.as_ref().and_then(|owner| owner.upgrade());
+        let mut env = Env { unit: function.package, owner, locals: Some(locals), me };
         self.depth += 1;
         let result = match &decl.body {
             FuncBody::Expr(e) => self.eval(e, &mut env),
@@ -516,28 +538,28 @@ impl<'o> Interp<'o> {
 
     /// What `object.name(...)` calls. `None` means a built-in string or
     /// collection method, dispatched after the arguments are evaluated.
-    fn method_target(&self, object: &Value, name: &str) -> RResult<Option<MethodTarget>> {
+    fn method_target(&self, object: &Value, name: &str, caller: Option<&Rc<Family>>) -> RResult<Option<MethodTarget>> {
         Ok(Some(match object {
             Value::Instance(instance) => {
                 // A field holding a function takes precedence over a method.
                 if let Some(field) = instance.fields.borrow().get(name) { return Ok(Some(MethodTarget::Value(field.clone()))); }
                 match instance.family.method(name) {
-                    Some(method) => MethodTarget::Method(method),
+                    Some(method) => { check_access(&method, caller)?; MethodTarget::Method(method) }
                     None => return type_err(format!("{} has no method '{name}'", instance.family.name)),
                 }
             }
-            Value::Package(_) | Value::Pair(_) => MethodTarget::Value(self.get_member(object, name)?),
+            Value::Package(_) | Value::Pair(_) => MethodTarget::Value(self.get_member(object, name, caller)?),
             Value::Str(_) | Value::Array(_) | Value::Set(_) | Value::Map(_) => return Ok(None),
             other => return type_err(format!("{} has no method '{name}'", other.type_name())),
         }))
     }
 
-    fn get_member(&self, object: &Value, field: &str) -> RResult<Value> {
+    fn get_member(&self, object: &Value, field: &str, caller: Option<&Rc<Family>>) -> RResult<Value> {
         match object {
             Value::Instance(instance) => {
                 if let Some(value) = instance.fields.borrow().get(field) { return Ok(value.clone()); }
                 match instance.family.method(field) {
-                    Some(method) => Ok(Value::method(object.clone(), method)),
+                    Some(method) => { check_access(&method, caller)?; Ok(Value::method(object.clone(), method)) }
                     None => type_err(format!("{} has no field '{field}'", instance.family.name)),
                 }
             }
@@ -816,7 +838,8 @@ impl<'o> Interp<'o> {
     pub fn typed(&mut self, value: Value, ty: &str, unit: usize) -> RResult<Value> {
         let mut pending = Vec::new();
         let value = self.plan_type(value, ty, unit, &mut pending)?;
-        for restriction in pending { self.restrict(restriction)?; }
+        let staged = self.stage(&pending)?;
+        Self::commit(staged);
         Ok(value)
     }
 
@@ -829,12 +852,16 @@ impl<'o> Interp<'o> {
             if let Some(kind) = value.num_kind() {
                 if options.iter().any(|o| o == kind.name()) { return self.plan_type(value, kind.name(), unit, pending); }
             }
-            // A failed alternative leaves no changes behind for the next one.
+            // Plans change nothing, so a failed alternative leaves nothing behind.
+            // An alternative only matches if its whole plan can be applied,
+            // including restrictions that meet on shared (aliased) containers.
             for option in &options {
                 let mut attempt = Vec::new();
                 if let Ok(result) = self.plan_type(value.clone(), option, unit, &mut attempt) {
-                    pending.append(&mut attempt);
-                    return Ok(result);
+                    if self.stage(&attempt).is_ok() {
+                        pending.append(&mut attempt);
+                        return Ok(result);
+                    }
                 }
             }
             return type_err(format!("value does not match {ty}"));
@@ -894,50 +921,81 @@ impl<'o> Interp<'o> {
         Ok(value)
     }
 
-    /// Record a planned restriction and convert the container's elements to it.
-    fn restrict(&mut self, restriction: Restriction) -> RResult<()> {
-        let Restriction { target, args, unit } = restriction;
-        let meta = target.meta().unwrap();
-        meta.restrictions.borrow_mut().push((args, unit));
-        match &target {
-            Value::Array(a) => {
-                let items = a.items.borrow().clone();
-                let items = items.into_iter().map(|v| self.convert(meta, v, 0)).collect::<RResult<Vec<_>>>()?;
-                *a.items.borrow_mut() = items;
-            }
-            Value::Set(s) => {
-                let items: Vec<Value> = s.items.borrow().values().cloned().collect();
-                let mut rebuilt = IndexMap::new();
-                for v in items { let v = self.convert(meta, v, 0)?; rebuilt.entry(Key::of(&v)).or_insert(v); }
-                *s.items.borrow_mut() = rebuilt;
-            }
-            Value::Map(m) => {
-                let entries: Vec<(Value, Value)> = m.items.borrow().values().cloned().collect();
-                let mut rebuilt = IndexMap::new();
-                for (k, v) in entries {
-                    let k = self.convert(meta, k, 0)?;
-                    let v = self.convert(meta, v, 1)?;
-                    rebuilt.insert(Key::of(&k), (k, v));
-                }
-                *m.items.borrow_mut() = rebuilt;
-            }
-            Value::Pair(p) => {
-                let first = self.convert(meta, p.first.borrow().clone(), 0)?;
-                let second = self.convert(meta, p.second.borrow().clone(), 1)?;
-                if first.num_kind() != p.first.borrow().num_kind() { mutable(meta)?; *p.first.borrow_mut() = first; }
-                if second.num_kind() != p.second.borrow().num_kind() { mutable(meta)?; *p.second.borrow_mut() = second; }
-            }
-            _ => unreachable!(),
+    /// Compute the complete outcome of a plan without changing anything: for
+    /// every container it restricts (grouped by identity, so aliases combine),
+    /// the full restriction list and the converted contents. Fails if any
+    /// element cannot satisfy every restriction on its container, or if a fixed
+    /// container's numeric kinds would change.
+    fn stage(&mut self, pending: &[Restriction]) -> RResult<Vec<Staged>> {
+        let mut order: Vec<usize> = Vec::new();
+        let mut groups: HashMap<usize, (Value, Vec<(Rc<[String]>, usize)>)> = HashMap::new();
+        for restriction in pending {
+            let id = restriction.target.object_id().unwrap();
+            let entry = groups.entry(id).or_insert_with(|| {
+                order.push(id);
+                let existing = restriction.target.meta().unwrap().restrictions.borrow().clone();
+                (restriction.target.clone(), existing)
+            });
+            entry.1.push((restriction.args.clone(), restriction.unit));
         }
-        Ok(())
+        let mut staged = Vec::with_capacity(order.len());
+        for id in order {
+            let (target, restrictions) = groups.remove(&id).unwrap();
+            let frozen = target.meta().unwrap().frozen.get();
+            let convert = |this: &mut Self, value: Value, part: usize| -> RResult<Value> {
+                let mut converted = value.clone();
+                for (args, unit) in &restrictions {
+                    converted = this.plan_type(converted, &args[part], *unit, &mut Vec::new())?;
+                }
+                if frozen && converted.num_kind() != value.num_kind() { mutable(target.meta().unwrap())?; }
+                Ok(converted)
+            };
+            let contents = match &target {
+                Value::Array(a) => {
+                    let items = a.items.borrow().clone();
+                    Contents::Array(items.into_iter().map(|v| convert(self, v, 0)).collect::<RResult<_>>()?)
+                }
+                Value::Set(s) => {
+                    let items: Vec<Value> = s.items.borrow().values().cloned().collect();
+                    let mut rebuilt = IndexMap::new();
+                    for v in items { let v = convert(self, v, 0)?; rebuilt.entry(Key::of(&v)).or_insert(v); }
+                    Contents::Set(rebuilt)
+                }
+                Value::Map(m) => {
+                    let entries: Vec<(Value, Value)> = m.items.borrow().values().cloned().collect();
+                    let mut rebuilt = IndexMap::new();
+                    for (k, v) in entries {
+                        let (k, v) = (convert(self, k, 0)?, convert(self, v, 1)?);
+                        rebuilt.insert(Key::of(&k), (k, v));
+                    }
+                    Contents::Map(rebuilt)
+                }
+                Value::Pair(p) => {
+                    let (first, second) = (p.first.borrow().clone(), p.second.borrow().clone());
+                    Contents::Pair(convert(self, first, 0)?, convert(self, second, 1)?)
+                }
+                _ => unreachable!("restrictions only target containers"),
+            };
+            staged.push(Staged { target, restrictions, contents });
+        }
+        Ok(staged)
     }
 
-    /// Convert an element through all of a container's restrictions. Nested
-    /// containers already received their own restrictions from the same plan.
-    fn convert(&mut self, meta: &Meta, mut value: Value, part: usize) -> RResult<Value> {
-        let restrictions = meta.restrictions.borrow().clone();
-        for (args, unit) in restrictions.iter() { value = self.plan_type(value, &args[part], *unit, &mut Vec::new())?; }
-        Ok(value)
+    /// Write staged outcomes. Nothing here can fail, so a plan applies entirely.
+    fn commit(staged: Vec<Staged>) {
+        for Staged { target, restrictions, contents } in staged {
+            *target.meta().unwrap().restrictions.borrow_mut() = restrictions;
+            match (&target, contents) {
+                (Value::Array(a), Contents::Array(items)) => *a.items.borrow_mut() = items,
+                (Value::Set(s), Contents::Set(items)) => *s.items.borrow_mut() = items,
+                (Value::Map(m), Contents::Map(items)) => *m.items.borrow_mut() = items,
+                (Value::Pair(p), Contents::Pair(first, second)) => {
+                    *p.first.borrow_mut() = first;
+                    *p.second.borrow_mut() = second;
+                }
+                _ => unreachable!("staged contents match their container"),
+            }
+        }
     }
 
     /// A family annotation: the family declared in `unit` (or `alias.Family` from
@@ -1064,13 +1122,35 @@ fn build_family(name: &str, decls: &HashMap<String, &FamilyDecl>, built: &mut Ha
         None => None,
     };
     visiting.pop();
-    let methods = decl.methods.iter()
-        .map(|m| (m.name.clone(), Rc::new(Function { decl: m.clone(), package: unit })))
-        .collect();
     let error_kind = parent.as_ref().and_then(|p| p.error_kind);
-    let family = Rc::new(Family { name: name.to_string(), parent, methods, error_kind });
+    // Each method keeps a weak link to its family, for access checks.
+    let family = Rc::new_cyclic(|owner| {
+        let methods = decl.methods.iter()
+            .map(|m| (m.name.clone(), Rc::new(Function { decl: m.clone(), package: unit, owner: Some(owner.clone()) })))
+            .collect();
+        Family { name: name.to_string(), parent, methods, error_kind }
+    });
     built.insert(name.to_string(), family.clone());
     Ok(family)
+}
+
+/// Enforce `@Decorator.private` (callers must be methods of the declaring
+/// family) and `@Decorator.subclass` (or of a family inheriting from it).
+fn check_access(method: &Rc<Function>, caller: Option<&Rc<Family>>) -> RResult<()> {
+    let access = method.decl.access;
+    if access == Access::Public { return Ok(()); }
+    let Some(owner) = method.owner.as_ref().and_then(|owner| owner.upgrade()) else { return Ok(()) };
+    let allowed = match (access, caller) {
+        (Access::Private, Some(caller)) => Rc::ptr_eq(caller, &owner),
+        (Access::Subclass, Some(caller)) => descends(caller, &owner),
+        _ => false,
+    };
+    if allowed { return Ok(()); }
+    let name = &method.decl.name;
+    match access {
+        Access::Private => type_err(format!("{name} is private to {}", owner.name)),
+        _ => type_err(format!("{name} is only available to {} and families inheriting from it", owner.name)),
+    }
 }
 
 /// `Error` and the built-in kinds that inherit from it.

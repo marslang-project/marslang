@@ -172,6 +172,7 @@ impl Loader {
         // module file belongs to its parent (none for a top-level file).
         let package = if is_init { Some(module) } else { module.rsplit_once('.').map(|(parent, _)| parent) };
         self.load_imports(&mut program, package)?;
+        apply_decorators(&mut program)?;
         let constants: Vec<(usize, String)> = program.items.iter().enumerate().filter_map(|(index, item)| match item {
             Item::Var(v) if v.is_fixed || v.temp == TempKind::Hot => Some((index, v.name.clone())),
             _ => None,
@@ -214,4 +215,38 @@ fn resolve_name(written: &str, package: Option<&str>) -> Result<String, String> 
 fn is_ident(text: &str) -> bool {
     let mut chars = text.chars();
     chars.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_') && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Check each family method's decorators and record their effect. A decorator
+/// `@X.name` needs `X` to be the alias of a `takepkg std.Decorator;` in the file.
+pub(crate) fn apply_decorators(program: &mut Program) -> Result<(), String> {
+    let aliases: HashSet<String> = program.items.iter().filter_map(|item| match item {
+        Item::Import(import) if import.key.as_deref() == Some("std.Decorator") => import.alias.clone(),
+        _ => None,
+    }).collect();
+    for item in &mut program.items {
+        let Item::Family(family) = item else { continue };
+        for method in &mut family.methods {
+            for decorator in &method.decorators {
+                let (alias, name) = decorator.split_once('.').expect("the parser checks decorator shape");
+                if !aliases.contains(alias) {
+                    return Err(format!("@{decorator} needs `takepkg std.Decorator;` (or an alias named {alias})"));
+                }
+                let access = match name {
+                    "private" => Access::Private,
+                    "subclass" => Access::Subclass,
+                    "static" | "class" | "overload" => return Err(format!("@{decorator} is not implemented yet")),
+                    _ => return Err(format!("unknown decorator @{decorator}; available: private, subclass")),
+                };
+                if method.access != Access::Public && method.access != access {
+                    return Err(format!("{}.{} cannot be both private and subclass", family.name, method.name));
+                }
+                if method.name == "init" {
+                    return Err(format!("{}.init cannot be @{decorator}; constructors are always public", family.name));
+                }
+                method.access = access;
+            }
+        }
+    }
+    Ok(())
 }

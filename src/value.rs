@@ -212,7 +212,12 @@ impl Value {
 }
 
 /// A user function or method, bound to the package whose globals it reads.
-pub struct Function { pub decl: FuncDecl, pub package: usize }
+pub struct Function {
+    pub decl: FuncDecl,
+    pub package: usize,
+    /// The family declaring this method; `None` for a free function.
+    pub owner: Option<std::rc::Weak<Family>>,
+}
 
 pub struct Family {
     pub name: String,
@@ -461,9 +466,11 @@ fn write_value(value: &Value, out: &mut String, seen: &mut Vec<usize>, nested: b
             out.push(')');
         }
         Value::Instance(o) if o.family.error_kind.is_some() => {
-            // Errors print as `Name: message`.
-            let message = o.fields.borrow().get("message").map(to_display_string).unwrap_or_default();
-            let _ = write!(out, "{}: {message}", o.family.name);
+            // Errors print as `Name: message`. The message is formatted with the same
+            // visited set, since it can be any value, including the error itself.
+            let _ = write!(out, "{}: ", o.family.name);
+            let message = o.fields.borrow().get("message").cloned();
+            if let Some(message) = message { write_value(&message, out, seen, false); }
         }
         Value::Instance(o) => {
             out.push_str(&o.family.name);
@@ -489,6 +496,21 @@ fn write_value(value: &Value, out: &mut String, seen: &mut Vec<usize>, nested: b
 #[cfg(test)]
 mod tests {
     use super::format_float;
+
+    #[test]
+    fn an_error_whose_message_contains_itself_prints_without_recursing() {
+        use super::*;
+        // Runs on the test thread's ordinary stack, where unbounded recursion would abort.
+        let family = Rc::new(Family { name: "Error".into(), parent: None, methods: HashMap::new(), error_kind: Some(ErrorKind::Error) });
+        let error = Value::new_instance(family, Meta::default());
+        let Value::Instance(o) = &error else { unreachable!() };
+        o.fields.borrow_mut().insert(Rc::from("message"), error.clone());
+        assert_eq!(to_display_string(&error), "Error: <cycle>");
+        let list = Value::array(vec![error.clone()]);
+        o.fields.borrow_mut().insert(Rc::from("message"), list);
+        assert_eq!(to_display_string(&error), "Error: [<cycle>]");
+        o.fields.borrow_mut().clear();
+    }
 
     #[test]
     fn floats_print_like_the_bootstrap_backend() {

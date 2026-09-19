@@ -285,15 +285,15 @@ func is_finite([int,longint,float] x){ _kind("is_finite", arr(x), "float"); ret 
 
 // ----- integers (int or longint; results keep the arguments' kind) -----
 
+// Euclid on signed values; only the final result is made positive, so a minimum
+// integer input works unless the gcd itself is out of range (gcd(INT_MIN, 0)).
 func _gcd([int,longint] a, [int,longint] b){
-    a = _abs(a);
-    b = _abs(b);
     while (b != 0){
         rest = a % b;
         a = b;
         b = rest;
     }
-    ret a;
+    ret _abs(a);
 }
 
 // Greatest common divisor, never negative; gcd(0, 0) is 0.

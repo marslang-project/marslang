@@ -1,8 +1,8 @@
 # marslang
 
-Marslang is an interpreted language. This repository is its Rust implementation (**marslang rs-0.7.0**): it parses and checks a `.mars` program, then runs it directly. No JavaScript or Node is involved.
+Marslang is an interpreted language. This repository is its Rust implementation (**marslang rs-0.8.0**): it parses and checks a `.mars` program, then runs it directly. No JavaScript or Node is involved.
 
-See the [rs-0.7.0 release notes](docs/releases/rs-0.7.0.md) for error handling, cycle collection, and new standard packages, and the [rs-0.6.0 release notes](docs/releases/rs-0.6.0.md) for the Rust interpreter and package system.
+See the [rs-0.8.0 release notes](docs/releases/rs-0.8.0.md) for private methods and reliability fixes, the [rs-0.7.0 release notes](docs/releases/rs-0.7.0.md) for error handling and new standard packages, and the [rs-0.6.0 release notes](docs/releases/rs-0.6.0.md) for the Rust interpreter and package system.
 
 The development direction is to stabilize the Rust interpreter before self-hosting. Discussion documents under `docs/` stay local; `docs/api/` and `docs/releases/` are available to Git.
 
@@ -10,15 +10,15 @@ Read the [language and API reference](docs/api/README.md) for current syntax and
 
 Run `cargo test` for current coverage. The execution tests run each program in the interpreter and assert its output or runtime error. Only Rust is required.
 
-This release adds error handling (`err`, `run{} handle(...){} then{}`), a cycle
-collector so self-referencing data is freed, the `any` type, and the standard
-packages `std.containers`, `std.strings`, `std.types`, and `std.time`, plus integer
-helpers in [`std.math`](docs/api/std-math.md).
-Decorators, further standard
+This release adds private methods through `std.Decorator` (`@Decorator.private`,
+`@Decorator.subclass`) and fixes two crash paths and four correctness issues from the
+rs-0.7.0 review. Earlier releases added error handling, cycle collection, and the
+standard packages `std.containers`, `std.strings`, `std.types`, and `std.time`.
+The remaining decorators, further standard
 libraries, complete module handling, and async remain pending. Maps, deep copies,
 and loop control are implemented. `:=` is excluded.
 
-Function parameters now use commas: `func add(int a, int b) => a + b;`. The parser accepts this form and rejects semicolons inside parameter lists, including after the last parameter. The decorator package is `std.Decorator`; decorator execution remains pending.
+Function parameters now use commas: `func add(int a, int b) => a + b;`. The parser accepts this form and rejects semicolons inside parameter lists, including after the last parameter. The decorator package is `std.Decorator`; `@Decorator.private` and `@Decorator.subclass` are implemented.
 
 It includes:
 - a lexer (`src/lexer.rs`)

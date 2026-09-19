@@ -112,6 +112,49 @@ are truthy. `fasle` is an accepted alias of `false`.
 `inf` is not a keyword. Use `float("inf")`, `float("-inf")`, or `float("nan")`
 for non-finite float values; see [math classification](std-math.md#infinity-nan-and-classification).
 
+## Private methods
+
+```mars
+takepkg std.Decorator;
+
+family Account{
+    func init(){ me.balance = 0; }
+
+    @Decorator.private
+    func _audit(string action){ out("audit " + action); }
+
+    @Decorator.subclass
+    func _limit() => 100;
+
+    func deposit(int amount){
+        me._audit("deposit");        // allowed: a method of Account
+        me.balance = me.balance + amount;
+    }
+}
+
+family Savings(Account){
+    func limit() => me._limit();     // allowed: Savings inherits from Account
+}
+
+func m{
+    Account()._audit("x");           // TypeError: _audit is private to Account
+}
+```
+
+Decorators are written on the line above a family method (or before `func` on the
+same line) and need `takepkg std.Decorator;`; with `takepkg std.Decorator = D;`
+write `@D.private`.
+
+| Decorator | Who can call the method |
+| --- | --- |
+| `@Decorator.private` | Only methods of the family that declares it; not inheriting families |
+| `@Decorator.subclass` | Methods of the declaring family and of every family inheriting from it |
+
+Anything else, including top-level code and free functions, gets a `TypeError`,
+both when calling the method and when taking it as a value (`f = obj._audit;`).
+Methods without a decorator are public. Fields are always public; the `_name`
+convention marks fields meant for internal use. `init` cannot be private.
+
 ## Error handling
 
 ```mars
@@ -206,5 +249,6 @@ cannot express (platform float functions, raising a named error, reading a value
 kind) come from native packages written in Rust under `std/rs/`, imported as
 `takepkg rs.NAME;`. Only standard packages may import `rs.*` packages.
 
-Decorators, async, and `match` are pending. `:=` and native bitwise
+`@Decorator.static`, `@Decorator.class`, `@Decorator.overload`, async, and `match`
+are pending. `:=` and native bitwise
 operators are excluded. Proposed syntax is not an implemented API.

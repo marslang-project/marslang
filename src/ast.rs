@@ -41,6 +41,21 @@ pub struct FuncDecl {
     pub name: String,
     pub params: Vec<Param>,
     pub body: FuncBody,
+    /// Decorators written above the function, without `@` (`Decorator.private`).
+    pub decorators: Vec<String>,
+    /// Who may call a family method, from its decorators.
+    pub access: Access,
+}
+
+/// Method access set by `@Decorator.private` / `@Decorator.subclass`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Access {
+    #[default]
+    Public,
+    /// Only methods of the declaring family.
+    Private,
+    /// Methods of the declaring family and of families inheriting from it.
+    Subclass,
 }
 
 #[derive(Debug, Clone)]

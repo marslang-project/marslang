@@ -23,6 +23,9 @@ pub fn parse_program(input: &str) -> PResult<Program> {
             idx = next;
             continue;
         }
+        if line.starts_with('@') {
+            return Err(format!("decorators are only supported on family methods: '{line}'"));
+        }
         if line.starts_with("func ") {
             let (func, next) = parse_func(&lines, idx)?;
             items.push(Item::Func(func));
@@ -206,9 +209,33 @@ fn parse_family(lines: &[String], start: usize) -> PResult<(FamilyDecl, usize)> 
     };
 
     let mut methods = Vec::new();
+    let mut decorators: Vec<String> = Vec::new();
     let mut i = start + 1;
     while i < lines.len() {
-        let line = lines[i].trim();
+        let mut line = lines[i].trim();
+        if line.starts_with('@') {
+            // `@Alias.name` markers, one or more per line, before a func.
+            while let Some(rest) = line.strip_prefix('@') {
+                let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+                let name = &rest[..end];
+                let parts: Vec<&str> = name.split('.').collect();
+                if parts.len() != 2 || !parts.iter().all(|p| is_bare_ident(p)) {
+                    return Err(format!("invalid decorator '@{name}'; decorators look like @Decorator.private"));
+                }
+                decorators.push(name.to_string());
+                line = rest[end..].trim_start();
+            }
+            if line.is_empty() { i += 1; continue; }
+            if !line.starts_with("func ") { return Err("decorators must be followed by a func".into()); }
+            let (mut func, next) = parse_func_from(line, lines, i)?;
+            func.decorators = std::mem::take(&mut decorators);
+            methods.push(func);
+            i = next;
+            continue;
+        }
+        if !decorators.is_empty() && !line.starts_with("func ") && !line.is_empty() {
+            return Err("decorators must be followed by a func".into());
+        }
         if line == "}" || line == "};" {
             return Ok((
                 FamilyDecl {
@@ -224,7 +251,8 @@ fn parse_family(lines: &[String], start: usize) -> PResult<(FamilyDecl, usize)> 
             continue;
         }
         if line.starts_with("func ") {
-            let (func, next) = parse_func(lines, i)?;
+            let (mut func, next) = parse_func(lines, i)?;
+            func.decorators = std::mem::take(&mut decorators);
             methods.push(func);
             i = next;
             continue;
@@ -235,7 +263,12 @@ fn parse_family(lines: &[String], start: usize) -> PResult<(FamilyDecl, usize)> 
 }
 
 fn parse_func(lines: &[String], start: usize) -> PResult<(FuncDecl, usize)> {
-    let header = lines[start].trim();
+    parse_func_from(lines[start].trim(), lines, start)
+}
+
+/// Parse a function whose header is `header` (normally `lines[start]`); a block
+/// body continues on the following lines.
+fn parse_func_from(header: &str, lines: &[String], start: usize) -> PResult<(FuncDecl, usize)> {
     if header.contains("=>") {
         let (left, right) = header
             .trim_end_matches(';')
@@ -247,6 +280,8 @@ fn parse_func(lines: &[String], start: usize) -> PResult<(FuncDecl, usize)> {
                 name,
                 params,
                 body: FuncBody::Expr(parse_expr(right.trim())?),
+                decorators: Vec::new(),
+                access: Access::Public,
             },
             start + 1,
         ));
@@ -266,6 +301,8 @@ fn parse_func(lines: &[String], start: usize) -> PResult<(FuncDecl, usize)> {
             name,
             params,
             body: FuncBody::Block(body),
+            decorators: Vec::new(),
+            access: Access::Public,
         },
         i,
     ))

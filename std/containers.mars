@@ -1,5 +1,6 @@
 // std.containers: stack, queue, deque, and priority queue, written in Marslang.
 // Empty containers return null from pop and peek, like built-in arrays.
+takepkg std.Decorator;
 
 // Last in, first out.
 family stack{
@@ -24,7 +25,9 @@ family deque{
         me._head = 0;
         me._count = 0;
     }
+    @Decorator.private
     func _slot(int offset) => (me._head + offset) % me._ring.len();
+    @Decorator.private
     func _grow(){
         if (me._count < me._ring.len()){ ret null; }
         bigger = arr();
@@ -100,12 +103,14 @@ family priority_queue{
         me._pushed = 0;
     }
     // Entries are pair(pair(priority, order), item).
+    @Decorator.private
     func _before(int a, int b){
         x = me._heap.iget(a).first;
         y = me._heap.iget(b).first;
         if (x.first != y.first){ ret x.first < y.first; }
         ret x.second < y.second;
     }
+    @Decorator.private
     func _swap(int a, int b){
         held = me._heap.iget(a);
         me._heap.modify(a, me._heap.iget(b));
@@ -150,4 +155,12 @@ family priority_queue{
     }
     func len => me._heap.len();
     func is_empty => me._heap.is_empty();
+    // Items in the order pop would return them; the queue is unchanged.
+    func items(){
+        drain = priority_queue();
+        drain._heap = me._heap.slice(0, me._heap.len());
+        result = arr();
+        while (not drain.is_empty()){ result.add(drain.pop()); }
+        ret result;
+    }
 }

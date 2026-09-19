@@ -20,7 +20,7 @@ A `fixed` container cannot be changed.
 | `containers.stack()` | `push(item)`, `pop()`, `peek()`: last in, first out. `items()` is bottom to top. |
 | `containers.queue()` | `push(item)`, `pop()`, `peek()`: first in, first out. `items()` is front to back. |
 | `containers.deque()` | `push_front(item)`, `push_back(item)`, `pop_front()`, `pop_back()`, `peek_front()`, `peek_back()`. `items()` is front to back. |
-| `containers.priority_queue()` | `push(item, priority)`, `pop()`, `peek()`: the lowest priority number comes out first; equal priorities come out in push order. Priorities are numbers of any kind. |
+| `containers.priority_queue()` | `push(item, priority)`, `pop()`, `peek()`: the lowest priority number comes out first; equal priorities come out in push order. Priorities are numbers of any kind. `items()` is in pop order. |
 
 Adding or removing at either end of a deque, and at the front of a queue, does not
 move the other items. The package is written in Marslang: [std/containers.mars](../../std/containers.mars).
