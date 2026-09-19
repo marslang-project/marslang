@@ -1,90 +1,75 @@
 use std::env;
 use std::fs;
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::Path;
+use std::process::ExitCode;
 
-fn main() {
-    if let Err(e) = run() {
-        eprintln!("error: {e}");
-        std::process::exit(1);
+const USAGE: &str = "Usage: marslang <file.mars> | marslang run <file.mars> | marslang check <file.mars> | marslang lex <file.mars> | marslang repl | marslang --version";
+
+fn main() -> ExitCode {
+    match run() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::FAILURE
+        }
     }
 }
 
 fn run() -> Result<(), String> {
     let args: Vec<String> = env::args().collect();
-    if args.len() < 2 {
-        eprintln!("Usage: marslang <file.mars> | marslang compile <file.mars> [-o out.js] | marslang lex <file.mars> | marslang repl");
-        return Ok(());
-    }
-
-    match args[1].as_str() {
-        "compile" => {
-            if args.len() < 3 {
-                return Err("missing input file".to_string());
-            }
-            let input = PathBuf::from(&args[2]);
-            let output = find_output_arg(&args[3..]);
-            compile_cmd(&input, output)
+    let file = |i: usize| args.get(i).map(Path::new).ok_or_else(|| "missing input file".to_string());
+    match args.get(1).map(String::as_str) {
+        None | Some("-h" | "--help" | "help") => {
+            eprintln!("{USAGE}");
+            Ok(())
         }
-        "lex" => {
-            if args.len() < 3 {
-                return Err("missing input file".to_string());
-            }
-            lex_cmd(Path::new(&args[2]))
+        Some("-V" | "--version" | "version") => {
+            println!("marslang {}", marslang::VERSION);
+            Ok(())
         }
-        "repl" => repl_cmd(),
-        _ => compile_cmd(Path::new(&args[1]), None),
+        Some("run") => run_cmd(file(2)?),
+        Some("check") => {
+            marslang::compile_file(file(2)?)?;
+            println!("ok");
+            Ok(())
+        }
+        Some("lex") => lex_cmd(file(2)?),
+        Some("repl") => repl_cmd(),
+        Some(path) => run_cmd(Path::new(path)),
     }
 }
 
-fn find_output_arg(rest: &[String]) -> Option<PathBuf> {
-    let mut i = 0;
-    while i + 1 < rest.len() {
-        if rest[i] == "-o" || rest[i] == "--output" {
-            return Some(PathBuf::from(&rest[i + 1]));
-        }
-        i += 1;
-    }
-    None
+fn read(input: &Path) -> Result<String, String> {
+    fs::read_to_string(input).map_err(|e| format!("failed to read source file {}: {e}", input.display()))
 }
 
-fn compile_cmd(input: &Path, output: Option<PathBuf>) -> Result<(), String> {
-    let source = fs::read_to_string(input)
-        .map_err(|e| format!("failed to read source file {}: {e}", input.display()))?;
-    let js = marslang::compile_source_to_js(&source)?;
-
-    let output = output.unwrap_or_else(|| input.with_extension("js"));
-    fs::write(&output, js)
-        .map_err(|e| format!("failed to write output file {}: {e}", output.display()))?;
-    println!("compiled {} -> {}", input.display(), output.display());
-    Ok(())
+fn run_cmd(input: &Path) -> Result<(), String> {
+    let compiled = marslang::compile_file(input)?;
+    marslang::run(compiled).map_err(|e| e.to_string())
 }
 
 fn lex_cmd(input: &Path) -> Result<(), String> {
-    let source = fs::read_to_string(input)
-        .map_err(|e| format!("failed to read source file {}: {e}", input.display()))?;
-    for tok in marslang::lexer::lex(&source) {
+    for tok in marslang::lexer::lex(&read(input)?) {
         println!("{:?} @{}", tok.kind, tok.pos);
     }
     Ok(())
 }
 
+/// The REPL keeps the submitted program and replays it after each line, showing
+/// only output that the new line produced. Lines that fail are discarded.
 fn repl_cmd() -> Result<(), String> {
-    println!("marslang repl (stateful). Commands: :exit, :reset, :show");
-    println!("Each submitted line is appended to the current program and re-run.");
+    println!("marslang {} repl. Commands: :exit, :reset, :show", marslang::VERSION);
+    println!("Each line is added to the program, which is re-run; only new output is shown.");
 
     let mut source = String::new();
+    let mut shown = 0usize;
     loop {
         print!("mars> ");
-        io::stdout()
-            .flush()
-            .map_err(|e| format!("failed to flush stdout: {e}"))?;
+        io::stdout().flush().map_err(|e| format!("failed to flush stdout: {e}"))?;
 
         let mut line = String::new();
-        let read = io::stdin()
-            .read_line(&mut line)
-            .map_err(|e| format!("failed to read line: {e}"))?;
+        let read = io::stdin().read_line(&mut line).map_err(|e| format!("failed to read line: {e}"))?;
         if read == 0 {
             println!();
             break;
@@ -95,32 +80,34 @@ fn repl_cmd() -> Result<(), String> {
             ":exit" | ":quit" => break,
             ":reset" => {
                 source.clear();
+                shown = 0;
                 println!("state cleared");
                 continue;
             }
             ":show" => {
-                println!("----- source -----\n{}------------------", source);
+                println!("----- source -----\n{source}------------------");
                 continue;
             }
             "" => continue,
             _ => {}
         }
 
-        source.push_str(trimmed);
-        source.push('\n');
-
-        match marslang::compile_source_to_js(&source) {
-            Ok(js) => {
-                let run = Command::new("node").arg("-e").arg(&js).status();
-                match run {
-                    Ok(status) if status.success() => {}
-                    Ok(status) => eprintln!("node exited with status: {status}"),
-                    Err(_) => {
-                        eprintln!("node not found; compiled JS:\n{js}");
-                    }
-                }
+        let candidate = format!("{source}{trimmed}\n");
+        let compiled = match marslang::compile(&candidate) {
+            Ok(compiled) => compiled,
+            Err(e) => {
+                eprintln!("error: {e}");
+                continue;
             }
-            Err(e) => eprintln!("parse/compile error: {e}"),
+        };
+        let (output, result) = marslang::run_captured(compiled, "");
+        print!("{}", output.get(shown..).unwrap_or(&output));
+        match result {
+            Ok(()) => {
+                source = candidate;
+                shown = output.len();
+            }
+            Err(e) => eprintln!("error: {e}"),
         }
     }
 

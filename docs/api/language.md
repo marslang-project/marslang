@@ -53,8 +53,10 @@ For exact matching between arguments, see [std.math](std-math.md).
 Arithmetic follows the runtime operand kinds. An operation involving a float
 produces a float; non-integral number division also produces a float. Integer
 arithmetic checks overflow, including through union-typed parameters. Mixed
-longint/float arithmetic requires an explicit conversion. Numeric equality remains
-value-based (`1 == 1.0`); strings are never coerced to numbers for equality.
+longint/float arithmetic requires an explicit conversion. Equality and ordering
+compare numbers by exact value across all kinds: `1 == 1.0`, `1 == longint(1)`, and
+`longint(5) < 10` are all true, and equal numbers are the same set element or map key.
+Strings are never coerced to numbers for equality.
 
 ## Functions and families
 
@@ -116,14 +118,41 @@ String `+` joins two strings. Typed integer overflow raises an error.
 Exponentiation is right-associative; arithmetic precedes comparisons, which precede
 `not`, then `and`, then `or`.
 
-## Imports and pending syntax
+## Packages
 
-`takepkg module;` and `takepkg module = alias;` have bootstrap support through the
-JavaScript backend. The bundled `takepkg std.math;` binds `math`, or use an explicit
-alias, and compiles the Marslang library into the program. Recursive filesystem
-`.mars` module compilation, exports, wildcard imports,
-and a packaged standard library are not complete. Do not assume Python-compatible
-module discovery. `takepkg package = *;` is planned and currently rejected.
+`takepkg name;` imports a package and binds it to the last segment of its name;
+`takepkg name = alias;` chooses the binding. Members are read with `alias.member`
+and are read-only.
+
+Packages work much like Python's. Absolute names resolve from the program's root
+directory (the main file's directory); a directory containing `init.mars` is a
+package, and dotted names map to subdirectories.
+
+| Form | Loads |
+| --- | --- |
+| `takepkg std.math;` | A standard package, written in Marslang and built into `marslang` |
+| `takepkg util;` | `util/init.mars` if `util/` is a package, otherwise `util.mars` |
+| `takepkg shapes.circle;` | `shapes/circle/init.mars` or `shapes/circle.mars` |
+| `takepkg .vec;` | `vec` in the current package (a sibling module) |
+| `takepkg ..helpers;` | `helpers` in the parent package; each extra dot goes up one level |
+
+A module file belongs to the package of its directory, and an `init.mars` file
+is its directory's package. Relative imports need a parent package: the main program
+and top-level files use absolute names, and going above the top-level package is an
+error. Importing `a.b.c` first runs `a/init.mars` and `a/b/init.mars` when
+they exist. A package may import its own modules from `init.mars`. The name `init`
+is reserved for these files, so no module can be named `init`.
+
+Each package is loaded once under its absolute name, however it is written or however
+many files import it; its top-level statements run once, before the importing file's.
+A package exports its functions, families, and `fixed`/`hot` top-level bindings.
+Names that start with `_` are private to the package. A package's `m` function is not
+run. Circular imports are rejected. `takepkg package = *;` is planned and currently rejected.
+
+Standard packages are written in Marslang under `std/`. The few primitives Marslang
+cannot express (platform float functions, raising a named error, reading a value's
+kind) come from native packages written in Rust under `std/rs/`, imported as
+`takepkg rs.NAME;`. Only standard packages may import `rs.*` packages.
 
 Decorators, async, `match`, and `run/handle/then` are pending. `:=` and native bitwise
 operators are excluded. Proposed syntax is not an implemented API.

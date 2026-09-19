@@ -112,7 +112,7 @@ Negative inputs that round to zero keep negative zero; inspect it using `signbit
 | --- | --- |
 | `sqrt(x)` | Float to float; negative x raises an error |
 | `cbrt(x)` | Float to float; negative inputs are supported |
-| `hypot(a,b)` | Two floats to float; stable Euclidean magnitude using the host primitive |
+| `hypot(a,b)` | Two floats to float; scaled to avoid overflow and underflow, written in Marslang |
 | `pow(base,exponent)` | Matching numeric kinds; preserves the kind |
 
 Integer pow requires a nonnegative exponent and computes exact integer powers
@@ -123,7 +123,7 @@ the input kind. A negative base with a fractional float exponent raises an error
 
 ## Exponentials and logarithms
 
-All arguments/results are floats. These use host numeric primitives.
+All arguments/results are floats. These call the native `rs.math` primitives.
 
 | Function | Behavior/domain |
 | --- | --- |
@@ -142,7 +142,7 @@ All inputs/results are floats; angles use radians.
 | `sin(x)`, `cos(x)`, `tan(x)` | Standard trigonometric functions |
 | `asin(x)`, `acos(x)` | Inverse sine/cosine; x in `[-1,1]` |
 | `atan(x)` | Inverse tangent |
-| `atan2(y,x)` | Quadrant-aware angle; note y comes first; signed-zero behavior follows the host primitive |
+| `atan2(y,x)` | Quadrant-aware angle; note y comes first; signed-zero behavior follows the platform math library |
 | `sinh(x)`, `cosh(x)`, `tanh(x)` | Hyperbolic functions |
 
 ## Infinity, NaN, and classification
@@ -176,17 +176,21 @@ func m{
 }
 ```
 
-The compiler bundles the package into generated JavaScript, so running the output
-does not require locating a separate library file. General filesystem modules,
-wildcard imports, and other standard packages remain pending.
+The package source is built into the `marslang` executable, so running a program
+does not require locating a separate library file.
 
 ## Implementation
 
-The basic algorithms live in [std/math.mars](../../std/math.mars). Rust compiles
-that source using the same parser/resolver/emitter as user code. Rounding, roots,
-transcendentals, sign-bit operations, and checked integer pow use host helpers in
-the Node runtime. The runtime also checks the numeric contract at the package
-boundary. All exports share the program's runtime.
+The whole public API is Marslang: [std/math.mars](../../std/math.mars). That file checks
+arity, matching numeric kinds, float-only inputs, finite inputs, and finite results,
+and implements min/max/abs/clamp, signs, `copysign`, rounding (truncation via `% 1.0`,
+floor, ceil, half-to-even), checked integer `pow`, `hypot`, `log`, and interpolation.
+
+It imports two native packages written in Rust: `rs.core`
+([std/rs/core.rs](../../std/rs/core.rs)) to raise named errors and read a value's kind,
+and `rs.math` ([std/rs/math.rs](../../std/rs/math.rs)) for the platform's float primitives:
+`sqrt`, `cbrt`, `exp`, `expm1`, `ln`, `log1p`, `log2`, `log10`, trigonometric and
+hyperbolic functions, `atan2`, float `pow`, and the float sign bit.
 
 Integer helpers (gcd/lcm and division helpers), combinatorics, approximate equality,
 adjacent-float operations, decimal/fraction, and the optional convenience functions

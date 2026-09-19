@@ -9,7 +9,7 @@
 | `in()` | Read standard input to the end as a string |
 | `inln()` | Read successive buffered lines; currently returns `""` after exhaustion |
 
-Input is synchronous in the Node backend. `inln()` buffers standard input; mixing
+Input is synchronous. `inln()` buffers standard input; mixing
 `in()` and `inln()` is not a supported streaming input model. Container display
 format is not a stable serialization format.
 
@@ -20,7 +20,7 @@ format is not a stable serialization format.
 | `int(value)` | Convert to a number, then require an integer within signed 32-bit bounds |
 | `longint(value)` | Require an exact signed 64-bit integer; decimal integer strings are accepted |
 | `float(value)` | Convert to float, including `"inf"`, `"-inf"`, and `"nan"` strings |
-| `string(value)` | Convert using the bootstrap backend's string conversion |
+| `string(value)` | Convert to text: numbers as `out` prints them (but `-0.0` gives `"0"`), containers in display form |
 | `value.copy()` | Deep-copy containers/objects; immutable scalar values are returned as values |
 
 Prefer decimal strings for converting very large numbers to `longint`, so they
@@ -45,7 +45,10 @@ Constructors `arr`, `set`, `pair`, `map`, and `dict` are documented in
 | `Error` | Mutation through a fixed alias and other runtime contract violations |
 
 `OutOfBoundsError` is the runtime error name, not just text inside a generic error.
-Errors currently terminate execution with a diagnostic and nonzero exit status.
+Errors currently terminate execution with `error: <Kind>: <message>` on standard error
+and exit status 1. `SyntaxError` is raised for invalid `longint(...)` strings.
+Calls nested deeper than 10,000 levels raise `RangeError: maximum call depth exceeded`.
+Calling a function, method, or built-in with the wrong number of arguments raises `TypeError`.
 Marslang `run/handle/then` and user-defined error raising are not implemented yet;
 these names are not currently callable Marslang error constructors.
 

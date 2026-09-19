@@ -170,11 +170,13 @@ fn parse_import(line: &str) -> PResult<ImportDecl> {
         Ok(ImportDecl {
             module: module.trim().to_string(),
             alias: Some(alias.trim().to_string()),
+            key: None,
         })
     } else {
         Ok(ImportDecl {
             module: body.to_string(),
             alias: None,
+            key: None,
         })
     }
 }

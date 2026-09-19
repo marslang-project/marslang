@@ -1,18 +1,12 @@
-use std::process::Command;
-
 fn executes(source: &str, expected: &str) {
-    let js = marslang::compile_source_to_js(source).expect("Marslang compilation failed");
-    let node = std::env::var_os("MARSLANG_NODE").unwrap_or_else(|| "node".into());
-    let result = Command::new(node)
-        .arg("-e")
-        .arg(&js)
-        .output()
-        .expect("Node is required: put node on PATH or set MARSLANG_NODE");
-    let stderr = String::from_utf8_lossy(&result.stderr);
-    assert!(result.status.success(), "Node failed: {}\n{stderr}\n{js}", result.status);
-    assert!(stderr.is_empty(), "unexpected stderr: {stderr}");
-    let stdout = String::from_utf8(result.stdout).expect("stdout must be UTF-8");
-    assert_eq!(stdout.replace("\r\n", "\n"), expected);
+    let compiled = marslang::compile(source).expect("Marslang compilation failed");
+    let (stdout, result) = marslang::run_captured(compiled, "");
+    if let Err(error) = result {
+        panic!("runtime error: {error}
+output so far:
+{stdout}");
+    }
+    assert_eq!(stdout, expected);
 }
 
 #[test]
@@ -62,7 +56,7 @@ fn semicolon_parameters_are_rejected_with_migration_hint() {
         "func add(int a, int b;) => a + b;",
         "func one(int a;) => a;",
     ] {
-        let error = marslang::compile_source_to_js(source).expect_err(source);
+        let error = marslang::compile(source).expect_err(source);
         assert!(error.contains("commas, not semicolons"), "{error}");
     }
 }
@@ -78,7 +72,7 @@ fn malformed_parameter_lists_are_rejected() {
         "func f(int] value) => value;",
         "func f(int a => a;",
     ] {
-        assert!(marslang::compile_source_to_js(source).is_err(), "accepted: {source}");
+        assert!(marslang::compile(source).is_err(), "accepted: {source}");
     }
 }
 
@@ -114,7 +108,7 @@ fn array_sort_is_descending() {
 
 #[test]
 fn unterminated_comment_has_diagnostic() {
-    let diagnostic = marslang::compile_source_to_js("/* unfinished")
+    let diagnostic = marslang::compile("/* unfinished")
         .expect_err("unterminated comment must be rejected");
     assert!(diagnostic.to_lowercase().contains("comment"), "{diagnostic}");
     assert!(diagnostic.contains("1:1"), "expected opening location 1:1: {diagnostic}");
@@ -122,7 +116,7 @@ fn unterminated_comment_has_diagnostic() {
 
 #[test]
 fn hot_reassignment_is_rejected() {
-    let diagnostic = marslang::compile_source_to_js("func m{\n hot x = 5;\n x = 6;\n}")
+    let diagnostic = marslang::compile("func m{\n hot x = 5;\n x = 6;\n}")
         .expect_err("hot reassignment must be rejected");
     assert!(diagnostic.contains("x"), "diagnostic must identify binding: {diagnostic}");
 }
@@ -135,7 +129,7 @@ fn duplicate_parameters_and_invalid_function_names_are_rejected() {
         ("func 123(int x) => x;", "invalid function name"),
         ("func bad name(int x) => x;", "invalid function name"),
     ] {
-        let error = marslang::compile_source_to_js(source).expect_err(source);
+        let error = marslang::compile(source).expect_err(source);
         assert!(error.contains(diagnostic), "{error}");
     }
 }
@@ -160,25 +154,23 @@ func m{
     out(x);
 }
 "#, "say \"// hello\"\nC:\\\n3\n");
-    let error = marslang::compile_source_to_js("// ignored\n  /* open").unwrap_err();
+    let error = marslang::compile("// ignored\n  /* open").unwrap_err();
     assert!(error.contains("2:3"), "{error}");
-    assert!(marslang::compile_source_to_js("out(\"unfinished);").is_err());
+    assert!(marslang::compile("out(\"unfinished);").is_err());
 }
 
 fn runtime_error(source: &str, expected: &str) {
-    let js = marslang::compile_source_to_js(source).expect("compile failed");
-    let node = std::env::var_os("MARSLANG_NODE").unwrap_or_else(|| "node".into());
-    let result = Command::new(node).args(["-e", &js]).output().expect("Node required");
-    assert!(!result.status.success(), "expected runtime error: {source}");
-    let stderr = String::from_utf8_lossy(&result.stderr);
-    assert!(stderr.contains(expected), "expected {expected}, got {stderr}");
+    let compiled = marslang::compile(source).expect("compile failed");
+    let (_, result) = marslang::run_captured(compiled, "");
+    let error = result.expect_err(&format!("expected runtime error: {source}")).to_string();
+    assert!(error.contains(expected), "expected {expected}, got {error}");
 }
 
 #[test]
 fn scope_assignment_and_explicit_shadowing() {
     executes("x = 1; func change { x = 2; } func m { change(); out(x); if (true) { x = 3; cold x = x + 1; out(x); x = 5; out(x); } out(x); x (int) = 10; if (true) { x = 11; } out(x); }", "2\n4\n5\n3\n11\n");
-    assert!(marslang::compile_source_to_js("func m{ cold x=1; cold x=2; }").unwrap_err().contains("duplicate local"));
-    assert!(marslang::compile_source_to_js("func m{ out(missing); }").unwrap_err().contains("unknown name"));
+    assert!(marslang::compile("func m{ cold x=1; cold x=2; }").unwrap_err().contains("duplicate local"));
+    assert!(marslang::compile("func m{ out(missing); }").unwrap_err().contains("unknown name"));
 }
 
 #[test]
@@ -186,7 +178,7 @@ fn fixed_aliases_and_deep_copy() {
     runtime_error("func m{ a1=arr(1); fixed a2=a1; a1.add(2); }", "cannot mutate fixed value");
     runtime_error("func m{ nested=arr(1); fixed a1=arr(nested); nested.add(2); }", "cannot mutate fixed value");
     runtime_error("func m{ p1=pair(1,2); fixed p2=p1; p1.first=3; }", "cannot mutate fixed value");
-    assert!(marslang::compile_source_to_js("func m{ fixed x=5; y=x; y=6; }").unwrap_err().contains("fixed/hot"));
+    assert!(marslang::compile("func m{ fixed x=5; y=x; y=6; }").unwrap_err().contains("fixed/hot"));
     executes("func m{ fixed x=5; y=x.copy(); y=6; out(y); fixed a1=arr(arr(1)); a2=a1.copy(); a2.iget(0).add(2); out(a1.iget(0).len()); out(a2.iget(0).len()); }", "6\n1\n2\n");
 }
 
@@ -216,7 +208,7 @@ fn maps_membership_order_and_missing_values() {
 fn while_foreach_break_continue_and_loop_scope() {
     executes("func m{ i=0; total=0; while(i<6){ i+=1; if(i==2){continue;} if(i==5){break;} total=total+i; } out(total); item=99; for(item,arr(1,2,3)){ if(item==2){continue;} out(item); } out(item); for(value,set(3,1,3)){ out(value); } }", "8\n1\n3\n99\n3\n1\n");
     for source in ["func m{break;}", "func m{if(true){continue;}}"] {
-        assert!(marslang::compile_source_to_js(source).unwrap_err().contains("inside a loop"));
+        assert!(marslang::compile(source).unwrap_err().contains("inside a loop"));
     }
 }
 
@@ -234,8 +226,8 @@ fn repeat_count_is_evaluated_once_and_nested_loops_do_not_capture_names() {
 #[test]
 fn three_part_for_updates_on_continue_and_supports_also() {
     executes("func m{ total=0; for(i=0,i<5,i++){if(i==2){continue;} total+=i;} out(total); for((i=0 also n=3),i<3,(i++ also n--)){out(i+n);} for(i=0,i<9,i++){if(i==2){break;} out(i);} }", "8\n3\n3\n3\n0\n1\n");
-    assert!(marslang::compile_source_to_js("func m{for(i=0,i<2,i++){} out(i);}").is_err());
-    assert!(marslang::compile_source_to_js("func m{for((i=0,n=0),i<2,i++){}}").is_err());
+    assert!(marslang::compile("func m{for(i=0,i<2,i++){} out(i);}").is_err());
+    assert!(marslang::compile("func m{for((i=0,n=0),i<2,i++){}}").is_err());
 }
 
 #[test]
@@ -246,7 +238,7 @@ fn collection_iteration_uses_a_snapshot() {
 #[test]
 fn hot_constants_substitute_and_keep_numeric_checks() {
     executes("hot x (int)=2; hot y=x+3; func m{out(y*2);}", "10\n");
-    assert!(marslang::compile_source_to_js("func m{ x=1; hot y=x; }").unwrap_err().contains("compile-time constant"));
+    assert!(marslang::compile("func m{ x=1; hot y=x; }").unwrap_err().contains("compile-time constant"));
     runtime_error("func m{ x (int)=-2147483648; out(-x); }", "int overflow");
 }
 
@@ -304,7 +296,7 @@ fn string_reverse_dispatch_preserves_other_reverse_methods() {
 #[test]
 fn named_reverse_is_restricted_to_the_third_slicing_argument() {
     for method in ["slice", "lenslice"] {
-        let expr = marslang::compile_source_to_js(&format!("func m{{ text=\"ABCDE\"; out(text.{method}(0,3,reverse=true)); }}"));
+        let expr = marslang::compile(&format!("func m{{ text=\"ABCDE\"; out(text.{method}(0,3,reverse=true)); }}"));
         assert!(expr.is_ok(), "{expr:?}");
     }
     for source in [
@@ -314,7 +306,7 @@ fn named_reverse_is_restricted_to_the_third_slicing_argument() {
         "text.lenslice(0,3,reverse=true,1)", "text.lenslice(0,3,reverse=)",
     ] {
         let program = format!("func f(int x)=>x; func m{{text=\"ABCDE\"; {source};}}");
-        assert!(marslang::compile_source_to_js(&program).is_err(), "accepted {source}");
+        assert!(marslang::compile(&program).is_err(), "accepted {source}");
     }
 }
 
@@ -416,8 +408,8 @@ fn dynamic_variables_change_type_but_annotations_and_fixed_still_hold() {
             y (float)=1; out(math.min(y,2.0));
         }"#, "hello\n1\n3\n1\n");
     runtime_error("func m{x (int)=5;x=\"hello\";}","expected int");
-    assert!(marslang::compile_source_to_js("func m{fixed x=5;x=\"hello\";}").unwrap_err().contains("cannot reassign"));
-    assert!(marslang::compile_source_to_js("func m{x := 5;}").is_err());
+    assert!(marslang::compile("func m{fixed x=5;x=\"hello\";}").unwrap_err().contains("cannot reassign"));
+    assert!(marslang::compile("func m{x := 5;}").is_err());
 }
 
 #[test]
@@ -493,10 +485,10 @@ fn bundled_math_imports_are_isolated_aliased_and_deduplicated() {
         func m{slout(math.min(2,3));slout(calc.max(2,3));slout(out.abs(-4));slout(min(1,2));}
     "#, "23499");
     runtime_error("takepkg std.math;func m{math.min=1;}", "TypeError:");
-    assert!(marslang::compile_source_to_js("takepkg std.math = *;").unwrap_err().contains("wildcard"));
-    assert!(marslang::compile_source_to_js("takepkg std.file;").unwrap_err().contains("not implemented"));
-    assert!(marslang::compile_source_to_js("takepkg std.math = bad-name;").unwrap_err().contains("alias"));
-    assert!(marslang::compile_source_to_js("takepkg std.math;math=1;").unwrap_err().contains("cannot reassign"));
+    assert!(marslang::compile("takepkg std.math = *;").unwrap_err().contains("wildcard"));
+    assert!(marslang::compile("takepkg std.file;").unwrap_err().contains("not implemented"));
+    assert!(marslang::compile("takepkg std.math = bad-name;").unwrap_err().contains("alias"));
+    assert!(marslang::compile("takepkg std.math;math=1;").unwrap_err().contains("cannot reassign"));
 }
 
 #[test]
@@ -546,7 +538,7 @@ fn float_infinity_conversion_and_classification_without_a_keyword() {
         out(math.is_finite(1.0));out(math.is_finite(-0.0));
         out(float("-inf")<0.0);out(float("inf")>0.0);
     }"#, "7\ntrue\nfalse\nfalse\ntrue\nfalse\nfalse\ntrue\nfalse\nfalse\ntrue\nfalse\nfalse\ntrue\nfalse\nfalse\ntrue\ntrue\ntrue\ntrue\n");
-    assert!(marslang::compile_source_to_js("func m{out(inf);}").unwrap_err().contains("unknown name"));
+    assert!(marslang::compile("func m{out(inf);}").unwrap_err().contains("unknown name"));
     runtime_error("takepkg std.math;func m{out(math.is_finite(1));}","requires float");
 }
 
@@ -652,4 +644,99 @@ fn expanded_math_checks_float_types_arity_and_first_class_calls() {
     executes("takepkg std.math = calc;func m{f=calc.sqrt;out(f(4.0));g=calc.round;out(g(2.5));}","2\n2\n");
     runtime_error("takepkg std.math;func m{out(math.pow(2.0,2));}","matching numeric types");
     runtime_error("takepkg std.math;func m{out(math.copysign(2,2.0));}","matching numeric types");
+}
+
+#[test]
+fn numbers_compare_by_value_across_kinds() {
+    executes(r#"func m{
+        out(longint(5) < 10); out(1 == longint(1)); out(longint(2) < 2.5); out(1.0 == longint(1));
+        out(longint(9007199254740993) == 9007199254740992.0); out(longint(-3) >= -3);
+        out(set(1, longint(1), 1.0).len());
+        d=map(); d.set(longint(2),"a"); out(d.get(2)); out(d.get(2.0));
+        out(arr(longint(7)).has(7)); out(arr(3, longint(1), 2.5).asort().iget(0));
+    }"#, "true\ntrue\ntrue\ntrue\nfalse\ntrue\n1\na\na\ntrue\n1\n");
+}
+
+/// Write package files under a fresh temporary directory and return it.
+fn package_dir(name: &str, files: &[(&str, &str)]) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("marslang-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    for (path, source) in files {
+        let path = dir.join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, source).unwrap();
+    }
+    dir
+}
+
+fn run_file(path: &std::path::Path) -> (String, Result<(), marslang::RuntimeError>) {
+    marslang::run_captured(marslang::compile_file(path).expect("compile failed"), "")
+}
+
+#[test]
+fn takepkg_loads_marslang_package_files() {
+    let dir = package_dir("packages", &[
+        ("main.mars", "takepkg util;\ntakepkg shapes.circle = c;\nfunc m{ out(util.twice(21)); out(util.LIMIT); out(c.area(c.Circle(2.0))); out(util.count()); }"),
+        ("util.mars", "fixed LIMIT (int) = 10;\nloads = 0;\nloads = loads + 1;\nfunc twice(int x) => x * 2;\nfunc count => loads;\nfunc _hidden => 1;"),
+        ("shapes/circle.mars", "takepkg std.math;\ntakepkg util;\nfamily Circle{ func init(float r){ me.r = r; } }\nfunc area(Circle shape) => math.PI * shape.r * shape.r + util.count() - 1;"),
+    ]);
+    let (out, result) = run_file(&dir.join("main.mars"));
+    result.expect("runtime error");
+    // util is imported twice but loaded once: its top-level code ran one time.
+    assert_eq!(out, "42\n10\n12.566370614359172\n1\n");
+
+    std::fs::write(dir.join("main.mars"), "takepkg util;\nfunc m{ util._hidden(); }").unwrap();
+    let error = run_file(&dir.join("main.mars")).1.unwrap_err().to_string();
+    assert!(error.contains("has no member '_hidden'"), "{error}");
+
+    std::fs::write(dir.join("main.mars"), "takepkg util;\nfunc m{ util.LIMIT = 3; }").unwrap();
+    assert!(run_file(&dir.join("main.mars")).1.unwrap_err().to_string().contains("read-only"));
+}
+
+#[test]
+fn takepkg_reports_missing_circular_and_native_packages() {
+    let dir = package_dir("package-errors", &[
+        ("a.mars", "takepkg b;\nfunc f => 1;"),
+        ("b.mars", "takepkg a;\nfunc g => 2;"),
+        ("main.mars", "takepkg a;\nfunc m{}"),
+    ]);
+    let error = marslang::compile_file(&dir.join("main.mars")).unwrap_err();
+    assert!(error.contains("circular package import: a -> b -> a"), "{error}");
+    let error = marslang::compile("takepkg nowhere.to_be_found;").unwrap_err();
+    assert!(error.contains("package 'nowhere.to_be_found' not found"), "{error}");
+    let error = marslang::compile("takepkg rs.math;").unwrap_err();
+    assert!(error.contains("only available to standard packages"), "{error}");
+    assert!(marslang::compile("takepkg bad-name;").is_err());
+}
+
+#[test]
+fn takepkg_packages_init_files_and_relative_imports() {
+    let dir = package_dir("python-packages", &[
+        ("main.mars", "takepkg app;\ntakepkg app.core.calc;\nfunc m{ out(app.VERSION); out(calc.total(2)); out(app.describe()); }"),
+        // A directory with init.mars is a package; its init may import its own children.
+        ("app/init.mars", "takepkg .core.calc;\nslout(\"init app;\");\nfixed VERSION (string) = \"1.0\";\nfunc describe => \"app with \" + string(calc.total(0));"),
+        ("app/helpers.mars", "func base => 100;"),
+        // Directories without init.mars are plain folders on the path.
+        ("app/core/calc.mars", "takepkg .offset;\ntakepkg ..helpers;\nfunc total(int x) => helpers.base() + offset.OFFSET + x;"),
+        ("app/core/offset.mars", "fixed OFFSET (int) = 10;"),
+    ]);
+    let (out, result) = run_file(&dir.join("main.mars"));
+    result.expect("runtime error");
+    // app/init runs once, before main, even though calc is imported twice.
+    assert_eq!(out, "init app;1.0\n112\napp with 110\n");
+
+    for (source, message) in [
+        ("takepkg .helpers;\nfunc m{}", "has no parent package"),
+        ("takepkg app.core.calc;\ntakepkg app.missing;\nfunc m{}", "package 'app.missing' not found"),
+        ("takepkg app.init;\nfunc m{}", "'init' is reserved"),
+    ] {
+        std::fs::write(dir.join("main.mars"), source).unwrap();
+        let error = marslang::compile_file(&dir.join("main.mars")).unwrap_err();
+        assert!(error.contains(message), "{error}");
+    }
+    // From module app.helpers (package app), two dots would leave the top-level package.
+    std::fs::write(dir.join("app/helpers.mars"), "takepkg ..other;\nfunc base => 1;").unwrap();
+    std::fs::write(dir.join("main.mars"), "takepkg app.helpers;\nfunc m{}").unwrap();
+    let error = marslang::compile_file(&dir.join("main.mars")).unwrap_err();
+    assert!(error.contains("beyond the top-level package 'app'"), "{error}");
 }

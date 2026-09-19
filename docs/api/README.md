@@ -1,6 +1,6 @@
 # Marslang language and API reference
 
-This reference describes the Rust-to-JavaScript working tree after `rs-0.5.0`,
+This reference describes the Rust interpreter as of `rs-0.6.0`,
 including dynamic numeric type tracking and the expanded `std.math` package.
 The source extension is `.mars`; earlier releases used `.mrs`.
 Use the matching source checkout for the filenames documented here.
@@ -13,16 +13,14 @@ notes elsewhere under `docs/` remain local.
 - [Strings and slicing](strings.md): Unicode characters, reversal, and strict bounds.
 - [Collections](collections.md): arrays, sets, pairs, maps, and copying.
 - [Built-ins and errors](builtins.md): input/output, conversions, and runtime errors.
-- [std.math](std-math.md): 42 math functions and six constants, with Marslang algorithms and host numeric primitives.
+- [std.math](std-math.md): 42 math functions and six constants, written in Marslang on native float primitives.
 
-## Compile and run
+## Run
 
-Install Rust and Node.js. String operations require Node with `Intl.Segmenter`.
-Run from the repository root:
+Install Rust. Run from the repository root:
 
 ```sh
-cargo run -- compile docs/api/examples/strings.mars -o target/api-strings.js
-node target/api-strings.js
+cargo run -- docs/api/examples/strings.mars
 ```
 
 The [runnable example](examples/strings.mars) prints:
@@ -36,15 +34,15 @@ é👨‍👩‍👧‍👦
 0
 ```
 
-Use `cargo test` to run the Rust and Node execution tests. Set `MARSLANG_NODE` to
-the Node executable if it is not on PATH. The example above is also an execution test.
+Use `cargo test` to run the execution tests, which run programs in the interpreter
+and check their output. The example above is also an execution test.
 
 ## Current limits
 
-The compiler emits JavaScript for Node. The language is not self-hosted yet.
+Programs run in a Rust tree-walking interpreter. The language is not self-hosted yet.
 Complete filesystem modules/exports, additional standard-library packages, decorators, deque,
 `match`, `run/handle/then`, and async remain unimplemented. General named arguments
 are deferred; only slicing accepts `reverse=`. Proposed packages are not APIs.
 
-The `lex` command uses a separate lexer from compilation. The REPL reruns its
-accumulated source rather than retaining a persistent runtime.
+The `lex` command uses a separate lexer from the parser. The REPL reruns its
+accumulated source rather than retaining a persistent runtime; it shows only new output.

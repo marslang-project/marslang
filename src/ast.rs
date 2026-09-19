@@ -16,6 +16,8 @@ pub enum Item {
 pub struct ImportDecl {
     pub module: String,
     pub alias: Option<String>,
+    /// Identity of the loaded package, filled in by the package loader.
+    pub key: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -97,12 +99,20 @@ pub enum Stmt {
 
 #[derive(Debug, Clone)]
 pub enum Expr {
+    /// Numeric literal source text; resolution lowers it to Int/Long/Float.
     Number(String),
+    Int(i64),
+    Long(i64),
+    Float(f64),
+    /// Decoded string contents (escapes already applied).
     String(String),
     Bool(bool),
     Null,
     Ident(String),
-    Raw(String),
+    /// Runtime check/conversion against a type annotation.
+    Typed { value: Box<Expr>, ty: String },
+    /// Recursively freeze the value of a fixed binding.
+    Freeze(Box<Expr>),
     Unary { op: String, value: Box<Expr> },
     Call {
         callee: Box<Expr>,

@@ -1,0 +1,217 @@
+//! `takepkg`: loading packages. The model is similar to Python's packages.
+//!
+//! - `takepkg std.NAME;` loads a standard package bundled into the executable.
+//!   Standard packages are Marslang source under `std/`.
+//! - `takepkg rs.NAME;` loads a native package written in Rust (`std/rs/NAME.rs`),
+//!   compiled into the interpreter. Only standard packages may import them.
+//! - `takepkg a.b;` is an absolute import from the program's root directory (the
+//!   main file's directory): `a/b/init.mars` if `a/b` is a package directory,
+//!   otherwise `a/b.mars`. Parent packages' `init.mars` files run first.
+//! - `takepkg .b;` / `takepkg ..c.d;` are relative imports: one dot is the current
+//!   package, each further dot goes up one level. The main program and top-level
+//!   files are not in a package, so they cannot use relative imports.
+//!
+//! `build.rs` registers every `std/*.mars` and `std/rs/*.rs` file.
+//!
+//! The alias defaults to the last name segment (`takepkg std.math;` binds `math`).
+//! Each package is loaded once, under its absolute name, and shared by every
+//! import. A package exports its functions, families, and `fixed`/`hot` top-level
+//! bindings, except names that start with `_`. Its top-level statements run once,
+//! before the importer's.
+
+use std::collections::HashSet;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use crate::ast::*;
+
+include!(concat!(env!("OUT_DIR"), "/std_packages.rs"));
+
+pub(crate) enum Source { Native(fn() -> crate::value::Value), Program(Program) }
+
+pub(crate) enum Export {
+    /// A top-level binding, by its resolved global name.
+    Binding(String),
+    Function(String),
+    Family(String),
+}
+
+pub(crate) struct LoadedPackage {
+    /// Absolute dotted name, which also identifies the package.
+    pub key: String,
+    pub name: String,
+    pub source: Source,
+    pub exports: Vec<(String, Export)>,
+}
+
+pub(crate) struct Loader {
+    /// Directory that absolute package names are resolved against.
+    root: PathBuf,
+    /// Loaded packages, each after the packages it imports.
+    pub packages: Vec<LoadedPackage>,
+    loaded: HashSet<String>,
+    /// Names of packages being loaded, to report import cycles.
+    loading: Vec<String>,
+}
+
+/// Where a package's source comes from.
+enum Found {
+    Native(fn() -> crate::value::Value),
+    Bundled(&'static str),
+    /// A `.mars` file; `true` when it is a directory's `init.mars`.
+    File(PathBuf, bool),
+}
+
+impl Loader {
+    pub fn new(root: &Path) -> Self {
+        Loader { root: root.to_path_buf(), packages: Vec::new(), loaded: HashSet::new(), loading: Vec::new() }
+    }
+
+    /// Load every package `program` imports, recursively, and record each
+    /// import's package key and alias. `package` is the importer's enclosing
+    /// package (`None` for the main program), which relative imports start from.
+    /// Repeated identical imports are dropped.
+    pub fn load_imports(&mut self, program: &mut Program, package: Option<&str>) -> Result<(), String> {
+        let standard = package.is_some_and(|p| p == "std" || p.starts_with("std."));
+        let mut seen = HashSet::new();
+        let mut keep = Vec::with_capacity(program.items.len());
+        for item in program.items.iter_mut() {
+            let Item::Import(import) = item else { keep.push(true); continue };
+            let written = import.module.trim().to_string();
+            if import.alias.as_deref() == Some("*") { return Err("wildcard imports are not implemented yet".into()); }
+            let module = resolve_name(&written, package)?;
+            if module.split('.').any(|segment| !is_ident(segment)) {
+                return Err(format!("invalid package name '{written}'"));
+            }
+            if module.split('.').any(|segment| segment == "init") {
+                return Err(format!("'init' is reserved for package init files; import the package itself instead of '{written}'"));
+            }
+            let alias = import.alias.clone().unwrap_or_else(|| module.rsplit('.').next().unwrap().to_string());
+            if !is_ident(&alias) { return Err(format!("invalid import alias '{alias}' for package '{written}'")); }
+            if (module == "rs" || module.starts_with("rs.")) && !standard {
+                return Err(format!("native package '{module}' is only available to standard packages"));
+            }
+            self.load(&module)?;
+            keep.push(seen.insert((module.clone(), alias.clone())));
+            import.alias = Some(alias);
+            import.key = Some(module);
+        }
+        let mut keep = keep.into_iter();
+        program.items.retain(|_| keep.next().unwrap());
+        Ok(())
+    }
+
+    /// Load a package by absolute name, after its parent packages.
+    fn load(&mut self, module: &str) -> Result<(), String> {
+        if self.loaded.contains(module) { return Ok(()); }
+        if let Some(start) = self.loading.iter().position(|name| name == module) {
+            let chain: Vec<&str> = self.loading[start..].iter().map(String::as_str).chain([module]).collect();
+            return Err(format!("circular package import: {}", chain.join(" -> ")));
+        }
+        let found = self.find(module)?;
+        if let Found::File(..) = found {
+            // Importing a.b.c first runs a/init.mars and a/b/init.mars.
+            // A parent that is already loading (its init imports this child) is skipped.
+            let segments: Vec<&str> = module.split('.').collect();
+            for end in 1..segments.len() {
+                let parent = segments[..end].join(".");
+                if !self.loading.contains(&parent) && self.init_file(&parent).is_file() { self.load(&parent)?; }
+            }
+            if self.loaded.contains(module) { return Ok(()); }
+        }
+        let (source, exports) = match found {
+            Found::Native(native) => (Source::Native(native), Vec::new()),
+            Found::Bundled(text) => self.compile_package(module, text, false)?,
+            Found::File(path, is_init) => {
+                let text = fs::read_to_string(&path)
+                    .map_err(|e| format!("failed to read package '{module}' at {}: {e}", path.display()))?;
+                self.compile_package(module, &text, is_init)?
+            }
+        };
+        self.packages.push(LoadedPackage { key: module.to_string(), name: module.to_string(), source, exports });
+        self.loaded.insert(module.to_string());
+        Ok(())
+    }
+
+    fn find(&self, module: &str) -> Result<Found, String> {
+        if module == "rs" || module.starts_with("rs.") {
+            return native::PACKAGES.iter().find(|(name, _)| *name == module).map(|(_, p)| Found::Native(*p))
+                .ok_or_else(|| format!("native package '{module}' does not exist"));
+        }
+        if module == "std" || module.starts_with("std.") {
+            return BUNDLED.iter().find(|(name, _)| *name == module).map(|(_, text)| Found::Bundled(text))
+                .ok_or_else(|| format!("standard package '{module}' is not implemented yet"));
+        }
+        // A package directory takes precedence over a module file of the same name.
+        let init = self.init_file(module);
+        if init.is_file() { return Ok(Found::File(init, true)); }
+        let mut file = self.root.clone();
+        file.extend(module.split('.'));
+        file.set_extension("mars");
+        if file.is_file() { return Ok(Found::File(file, false)); }
+        Err(format!("package '{module}' not found: looked for {} and {}", init.display(), file.display()))
+    }
+
+    fn init_file(&self, module: &str) -> PathBuf {
+        let mut path = self.root.clone();
+        path.extend(module.split('.'));
+        path.join("init.mars")
+    }
+
+    fn compile_package(&mut self, module: &str, text: &str, is_init: bool) -> Result<(Source, Vec<(String, Export)>), String> {
+        self.loading.push(module.to_string());
+        let compiled = self.compile_source(module, text, is_init);
+        self.loading.pop();
+        let (program, exports) = compiled.map_err(|e| format!("in package {module}: {e}"))?;
+        Ok((Source::Program(program), exports))
+    }
+
+    fn compile_source(&mut self, module: &str, text: &str, is_init: bool) -> Result<(Program, Vec<(String, Export)>), String> {
+        let mut program = crate::parser::parse_program(text)?;
+        // The enclosing package: a directory's init is its own package; a
+        // module file belongs to its parent (none for a top-level file).
+        let package = if is_init { Some(module) } else { module.rsplit_once('.').map(|(parent, _)| parent) };
+        self.load_imports(&mut program, package)?;
+        let constants: Vec<(usize, String)> = program.items.iter().enumerate().filter_map(|(index, item)| match item {
+            Item::Var(v) if v.is_fixed || v.temp == TempKind::Hot => Some((index, v.name.clone())),
+            _ => None,
+        }).collect();
+        crate::resolve::resolve(&mut program)?;
+        let mut exports = Vec::new();
+        for (index, name) in constants {
+            let Item::Var(v) = &program.items[index] else { unreachable!("explicit declarations stay declarations") };
+            exports.push((name, Export::Binding(v.name.clone())));
+        }
+        for item in &program.items {
+            match item {
+                Item::Func(f) => exports.push((f.name.clone(), Export::Function(f.name.clone()))),
+                Item::Family(f) => exports.push((f.name.clone(), Export::Family(f.name.clone()))),
+                _ => {}
+            }
+        }
+        exports.retain(|(name, _)| !name.starts_with('_'));
+        Ok((program, exports))
+    }
+}
+
+/// Turn a relative name (`.b`, `..c.d`) into an absolute one, from the
+/// importer's enclosing package. Absolute names are returned unchanged.
+fn resolve_name(written: &str, package: Option<&str>) -> Result<String, String> {
+    let level = written.chars().take_while(|c| *c == '.').count();
+    if level == 0 { return Ok(written.to_string()); }
+    let rest = &written[level..];
+    if rest.is_empty() { return Err(format!("relative import '{written}' must name a package, such as takepkg .name;")); }
+    let package = package.filter(|p| !p.is_empty()).ok_or_else(|| {
+        format!("relative import '{written}' has no parent package; the main program and top-level files must use absolute names")
+    })?;
+    let parts: Vec<&str> = package.split('.').collect();
+    if level > parts.len() {
+        return Err(format!("relative import '{written}' goes beyond the top-level package '{}'", parts[0]));
+    }
+    Ok(format!("{}.{rest}", parts[..parts.len() + 1 - level].join(".")))
+}
+
+fn is_ident(text: &str) -> bool {
+    let mut chars = text.chars();
+    chars.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_') && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}

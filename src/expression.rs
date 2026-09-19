@@ -53,7 +53,8 @@ pub fn parse(text: &str) -> Result<Expr, String> {
                 else if c == '\\' { escaped = true; }
                 else if c == ch { end = Some(offset + c.len_utf8()); break; }
             }
-            tokens.push(Token::String(text[start..end.ok_or("unterminated string")?].into()));
+            let end = end.ok_or("unterminated string")?;
+            tokens.push(Token::String(decode_string(&text[start + 1..end - 1])?));
         } else {
             let mut op = ch.to_string();
             if let Some((_, next)) = chars.peek() {
@@ -151,4 +152,60 @@ impl Parser {
         }
         Ok(left)
     }
+}
+
+/// Decode the escapes of a quoted literal's contents: \n \r \t \b \f \v \0,
+/// \xHH, \uHHHH (surrogate pairs combine), \u{H..}, and \<char> for any other char.
+fn decode_string(body: &str) -> Result<String, String> {
+    fn hex(chars: &mut std::iter::Peekable<std::str::Chars>, count: usize) -> Result<u32, String> {
+        let mut value = 0;
+        for _ in 0..count {
+            let digit = chars.next().and_then(|c| c.to_digit(16)).ok_or("invalid hexadecimal escape in string")?;
+            value = value * 16 + digit;
+        }
+        Ok(value)
+    }
+    let mut out = String::with_capacity(body.len());
+    let mut chars = body.chars().peekable();
+    let mut pending_high: Option<u32> = None;
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            if pending_high.take().is_some() { out.push('\u{FFFD}'); }
+            out.push(ch);
+            continue;
+        }
+        let esc = chars.next().ok_or("unterminated escape in string")?;
+        let code = match esc {
+            'n' => '\n' as u32, 'r' => '\r' as u32, 't' => '\t' as u32,
+            'b' => 8, 'f' => 12, 'v' => 11, '0' => 0,
+            'x' => hex(&mut chars, 2)?,
+            'u' if chars.peek() == Some(&'{') => {
+                chars.next();
+                let mut value = 0u32;
+                let mut digits = 0;
+                loop {
+                    let c = chars.next().ok_or("unterminated \\u{...} escape in string")?;
+                    if c == '}' { break; }
+                    value = value.checked_mul(16).and_then(|v| v.checked_add(c.to_digit(16)?))
+                        .filter(|v| *v <= 0x10FFFF).ok_or("invalid \\u{...} escape in string")?;
+                    digits += 1;
+                }
+                if digits == 0 { return Err("invalid \\u{...} escape in string".into()); }
+                value
+            }
+            'u' => hex(&mut chars, 4)?,
+            other => other as u32,
+        };
+        if let Some(high) = pending_high.take() {
+            if (0xDC00..0xE000).contains(&code) {
+                out.push(char::from_u32(0x10000 + ((high - 0xD800) << 10) + (code - 0xDC00)).unwrap());
+                continue;
+            }
+            out.push('\u{FFFD}');
+        }
+        if (0xD800..0xDC00).contains(&code) { pending_high = Some(code); continue; }
+        out.push(char::from_u32(code).unwrap_or('\u{FFFD}'));
+    }
+    if pending_high.is_some() { out.push('\u{FFFD}'); }
+    Ok(out)
 }

@@ -1,5 +1,9 @@
-// Bundled std.math algorithms. The host boundary checks arity, matching numeric
-// kinds, reversed clamp bounds, and overflow; algorithms remain Marslang code.
+// std.math: the whole public API is written in Marslang. Argument and result
+// checks, rounding, signs, integer powers, hypot, and interpolation live here;
+// only the platform float primitives come from the native rs.math package.
+takepkg rs.core;
+takepkg rs.math = native;
+
 fixed PI (float) = 3.141592653589793;
 fixed E (float) = 2.718281828459045;
 fixed TAU (float) = 6.283185307179586;
@@ -7,17 +11,76 @@ fixed SQRT2 (float) = 1.4142135623730951;
 fixed LN2 (float) = 0.6931471805599453;
 fixed LN10 (float) = 2.302585092994046;
 
+fixed _INF (float) = float("inf");
+
+// ----- checks shared by every export -----
+
+func _is_finite(float x) => x == x and x != _INF and x != -_INF;
+
+// All arguments must share one numeric kind; "float" input also requires floats.
+func _kind(string name, array args, string input){
+    kind = core.kind(args.iget(0));
+    for (value, args){
+        if (core.kind(value) != kind){
+            core.raise("TypeError", "std.math." + name + " requires matching numeric types");
+        }
+    }
+    if (input == "float" and kind != "float"){
+        core.raise("TypeError", "std.math." + name + " requires float arguments");
+    }
+    ret kind;
+}
+
+// Like _kind, and float arguments must also be finite.
+func _checked(string name, array args, string input){
+    kind = _kind(name, args, input);
+    if (kind == "float"){
+        for (value, args){
+            if (not _is_finite(value)){
+                core.raise("RangeError", "std.math requires finite float values");
+            }
+        }
+    }
+    ret kind;
+}
+
+// A NaN or infinite result means a domain error or overflow.
+func _result(string name, float value){
+    if (not _is_finite(value)){
+        core.raise("RangeError", "std.math." + name + " domain error or non-finite result");
+    }
+    ret value;
+}
+
+func _intermediate(float value){
+    if (not _is_finite(value)){
+        core.raise("RangeError", "std.math non-finite intermediate result");
+    }
+    ret value;
+}
+
+// ----- comparison and sign -----
+
 func min([int,longint,float] a, [int,longint,float] b){
+    if (_checked("min", arr(a, b), "same") == "float" and a == 0.0 and b == 0.0){
+        // Zero ties do not depend on argument order: -0.0 is the smaller zero.
+        if (native.signbit(a) or native.signbit(b)){ ret -0.0; }
+        ret 0.0;
+    }
     if (a < b){ ret a; }
     ret b;
 }
 
 func max([int,longint,float] a, [int,longint,float] b){
+    if (_checked("max", arr(a, b), "same") == "float" and a == 0.0 and b == 0.0){
+        if (native.signbit(a) and native.signbit(b)){ ret -0.0; }
+        ret 0.0;
+    }
     if (a > b){ ret a; }
     ret b;
 }
 
-func abs([int,longint,float] value){
+func _abs([int,longint,float] value){
     // Produce zero of the same numeric kind without an implicit conversion.
     zero = value - value;
     if (value == zero){ ret zero; }
@@ -25,32 +88,194 @@ func abs([int,longint,float] value){
     ret value;
 }
 
+func abs([int,longint,float] value){
+    _checked("abs", arr(value), "same");
+    ret _abs(value);
+}
+
 func clamp([int,longint,float] value, [int,longint,float] low, [int,longint,float] high){
+    _checked("clamp", arr(value, low, high), "same");
+    if (low > high){
+        core.raise("RangeError", "std.math.clamp lower bound exceeds upper bound");
+    }
     if (value < low){ ret low; }
     if (value > high){ ret high; }
     ret value;
 }
 
+// -1, 0, or 1 as an int, for any numeric kind.
 func sign([int,longint,float] value){
-    zero = value - value;
-    if (value < zero){ ret -1; }
-    if (value > zero){ ret 1; }
+    _checked("sign", arr(value), "same");
+    if (value < 0){ ret -1; }
+    if (value > 0){ ret 1; }
     ret 0;
 }
 
-func lerp(float a, float b, float t) => a + (b - a) * t;
-
-func inverse_lerp(float a, float b, float value) => (value - a) / (b - a);
-
-func remap(float value, float in_low, float in_high, float out_low, float out_high){
-    ret lerp(out_low, out_high, inverse_lerp(in_low, in_high, value));
+func signbit([int,longint,float] value){
+    if (_checked("signbit", arr(value), "same") == "float"){ ret native.signbit(value); }
+    ret value < 0;
 }
 
-func step(float edge, float x){
+// The magnitude of value with the sign of sign_of.
+func copysign([int,longint,float] value, [int,longint,float] sign_of){
+    kind = _checked("copysign", arr(value, sign_of), "same");
+    negative = signbit(sign_of);
+    if (kind == "float"){
+        magnitude = _abs(value);
+        if (negative){ ret -magnitude; }
+        ret magnitude;
+    }
+    // Negating the most negative integer raises the kind's overflow error.
+    if (negative == (value < 0)){ ret value; }
+    ret -value;
+}
+
+// ----- rounding -----
+
+func _trunc(float x){
+    whole = x - x % 1.0;
+    if (whole == 0.0 and native.signbit(x)){ ret -0.0; }
+    ret whole;
+}
+
+func _floor(float x){
+    whole = _trunc(x);
+    if (whole > x){ ret whole - 1.0; }
+    ret whole;
+}
+
+func _ceil(float x){
+    whole = _trunc(x);
+    if (whole < x){ ret whole + 1.0; }
+    ret whole;
+}
+
+// Round half to even, keeping negative zero.
+func _round(float x){
+    if (x == 0.0 or _abs(x) >= 4503599627370496.0){ ret x; }
+    lower = _floor(x);
+    fraction = x - lower;
+    rounded = lower;
+    if (fraction > 0.5 or (fraction == 0.5 and lower % 2.0 != 0.0)){ rounded = lower + 1.0; }
+    if (rounded == 0.0 and native.signbit(x)){ ret -0.0; }
+    ret rounded;
+}
+
+func floor([int,longint,float] x){ _checked("floor", arr(x), "float"); ret _result("floor", _floor(x)); }
+func ceil([int,longint,float] x){ _checked("ceil", arr(x), "float"); ret _result("ceil", _ceil(x)); }
+func trunc([int,longint,float] x){ _checked("trunc", arr(x), "float"); ret _result("trunc", _trunc(x)); }
+func round([int,longint,float] x){ _checked("round", arr(x), "float"); ret _result("round", _round(x)); }
+
+// ----- powers, roots, and logarithms -----
+
+func pow([int,longint,float] base, [int,longint,float] exponent){
+    if (_checked("pow", arr(base, exponent), "same") == "float"){
+        ret _result("pow", native.pow(base, exponent));
+    }
+    if (exponent < 0){
+        core.raise("RangeError", "std.math.pow integer exponent must be nonnegative");
+    }
+    // Square-and-multiply in the base's kind; overflow raises that kind's error.
+    result = base - base + 1;
+    factor = base;
+    power = exponent;
+    while (power > 0){
+        if (power % 2 == 1){ result = result * factor; }
+        power = (power - power % 2) / 2;
+        if (power > 0){ factor = factor * factor; }
+    }
+    ret result;
+}
+
+func sqrt([int,longint,float] x){ _checked("sqrt", arr(x), "float"); ret _result("sqrt", native.sqrt(x)); }
+func cbrt([int,longint,float] x){ _checked("cbrt", arr(x), "float"); ret _result("cbrt", native.cbrt(x)); }
+
+// Scaled so that large or tiny inputs do not overflow or underflow.
+func hypot([int,longint,float] x, [int,longint,float] y){
+    _checked("hypot", arr(x, y), "float");
+    big = _abs(x);
+    small = _abs(y);
+    if (small > big){
+        big = _abs(y);
+        small = _abs(x);
+    }
+    if (big == 0.0){ ret 0.0; }
+    ratio = small / big;
+    ret _result("hypot", big * native.sqrt(1.0 + ratio * ratio));
+}
+
+func exp([int,longint,float] x){ _checked("exp", arr(x), "float"); ret _result("exp", native.exp(x)); }
+func exp2([int,longint,float] x){ _checked("exp2", arr(x), "float"); ret _result("exp2", native.pow(2.0, x)); }
+func expm1([int,longint,float] x){ _checked("expm1", arr(x), "float"); ret _result("expm1", native.expm1(x)); }
+func ln([int,longint,float] x){ _checked("ln", arr(x), "float"); ret _result("ln", native.ln(x)); }
+func log2([int,longint,float] x){ _checked("log2", arr(x), "float"); ret _result("log2", native.log2(x)); }
+func log10([int,longint,float] x){ _checked("log10", arr(x), "float"); ret _result("log10", native.log10(x)); }
+func log1p([int,longint,float] x){ _checked("log1p", arr(x), "float"); ret _result("log1p", native.log1p(x)); }
+
+func log([int,longint,float] x, [int,longint,float] base){
+    _checked("log", arr(x, base), "float");
+    if (x <= 0.0 or base <= 0.0 or base == 1.0){
+        core.raise("RangeError", "std.math.log invalid domain");
+    }
+    ret _result("log", native.ln(x) / native.ln(base));
+}
+
+// ----- trigonometry -----
+
+func sin([int,longint,float] x){ _checked("sin", arr(x), "float"); ret _result("sin", native.sin(x)); }
+func cos([int,longint,float] x){ _checked("cos", arr(x), "float"); ret _result("cos", native.cos(x)); }
+func tan([int,longint,float] x){ _checked("tan", arr(x), "float"); ret _result("tan", native.tan(x)); }
+func asin([int,longint,float] x){ _checked("asin", arr(x), "float"); ret _result("asin", native.asin(x)); }
+func acos([int,longint,float] x){ _checked("acos", arr(x), "float"); ret _result("acos", native.acos(x)); }
+func atan([int,longint,float] x){ _checked("atan", arr(x), "float"); ret _result("atan", native.atan(x)); }
+func sinh([int,longint,float] x){ _checked("sinh", arr(x), "float"); ret _result("sinh", native.sinh(x)); }
+func cosh([int,longint,float] x){ _checked("cosh", arr(x), "float"); ret _result("cosh", native.cosh(x)); }
+func tanh([int,longint,float] x){ _checked("tanh", arr(x), "float"); ret _result("tanh", native.tanh(x)); }
+
+func atan2([int,longint,float] y, [int,longint,float] x){
+    _checked("atan2", arr(y, x), "float");
+    ret _result("atan2", native.atan2(y, x));
+}
+
+func radians([int,longint,float] angle){
+    _checked("radians", arr(angle), "float");
+    ret _result("radians", angle * (PI / 180.0));
+}
+
+func degrees([int,longint,float] angle){
+    _checked("degrees", arr(angle), "float");
+    ret _result("degrees", angle * (180.0 / PI));
+}
+
+// ----- interpolation -----
+
+func _lerp(float a, float b, float t) => a + _intermediate(_intermediate(b - a) * t);
+
+func _inverse_lerp(float a, float b, float value) => _intermediate(value - a) / _intermediate(b - a);
+
+func lerp([int,longint,float] a, [int,longint,float] b, [int,longint,float] t){
+    _checked("lerp", arr(a, b, t), "float");
+    ret _result("lerp", _lerp(a, b, t));
+}
+
+func inverse_lerp([int,longint,float] a, [int,longint,float] b, [int,longint,float] value){
+    _checked("inverse_lerp", arr(a, b, value), "float");
+    ret _result("inverse_lerp", _inverse_lerp(a, b, value));
+}
+
+func remap([int,longint,float] value, [int,longint,float] in_low, [int,longint,float] in_high, [int,longint,float] out_low, [int,longint,float] out_high){
+    _checked("remap", arr(value, in_low, in_high, out_low, out_high), "float");
+    ret _result("remap", _lerp(out_low, out_high, _inverse_lerp(in_low, in_high, value)));
+}
+
+func step([int,longint,float] edge, [int,longint,float] x){
+    _checked("step", arr(edge, x), "float");
     if (x < edge){ ret 0.0; }
     ret 1.0;
 }
 
-func radians(float angle) => angle * (PI / 180.0);
+// ----- classification (accepts NaN and infinity) -----
 
-func degrees(float angle) => angle * (180.0 / PI);
+func is_nan([int,longint,float] x){ _kind("is_nan", arr(x), "float"); ret x != x; }
+func is_inf([int,longint,float] x){ _kind("is_inf", arr(x), "float"); ret x == _INF or x == -_INF; }
+func is_finite([int,longint,float] x){ _kind("is_finite", arr(x), "float"); ret _is_finite(x); }

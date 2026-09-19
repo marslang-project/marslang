@@ -22,17 +22,11 @@ pub fn resolve(program: &mut Program) -> Result<(), String> {
             }
             Item::Stmt(s) => resolver.stmt(s)?,
             Item::Import(import) => {
-                if import.module == "std.math" {
-                    let alias = import.alias.as_ref().expect("prepared std import");
-                    let binding = resolver.bind(alias, true, None, None)?;
-                    import.alias = Some(binding.name);
-                    continue;
+                let alias = import.alias.as_ref().expect("the package loader sets import aliases");
+                if resolver.scopes[0].contains_key(alias) {
+                    return Err(format!("import alias '{alias}' is already declared"));
                 }
-                if let Some(alias) = &import.alias {
-                    if alias == "*" { return Err("wildcard imports are not implemented yet".into()); }
-                    if resolver.scopes[0].contains_key(alias) { return Err(format!("duplicate import alias '{alias}'")); }
-                    resolver.scopes[0].insert(alias.clone(), Binding { name: alias.clone(), fixed: true, ty: None, hot: None });
-                }
+                import.alias = Some(resolver.bind(alias, true, None, None)?.name);
             }
             _ => {}
         }
@@ -47,22 +41,29 @@ pub fn resolve(program: &mut Program) -> Result<(), String> {
     Ok(())
 }
 
-fn call(name: &str, args: Vec<Expr>) -> Expr {
-    Expr::Call { callee: Box::new(Expr::Ident(format!("__mars.{name}"))), args }
-}
 fn typed(value: Expr, ty: &Option<String>) -> Expr {
-    if let Some(ty) = ty {
-        let value = if ty == "longint" { long_literal(value) } else { value };
-        call("typed", vec![value, Expr::String(format!("\"{}\"", ty.replace(' ', "")))])
-    } else { value }
-}
-fn long_literal(value: Expr) -> Expr {
-    match value {
-        Expr::Number(n) if n.chars().all(|c| c.is_ascii_digit()) => Expr::Raw(format!("{n}n")),
-        Expr::Unary { op, value } if op == "-" => Expr::Unary { op, value: Box::new(long_literal(*value)) },
-        other => other,
+    match ty {
+        Some(ty) => Expr::Typed { value: Box::new(value), ty: ty.replace(char::is_whitespace, "") },
+        None => value,
     }
 }
+
+/// Lower numeric literal text to its runtime kind, following the numeric contract:
+/// decimal integers up to 2^53-1 are `int`, larger ones `longint`, and literals with
+/// a fraction or exponent are `float`. Out-of-range longints stay as text and raise
+/// `longint overflow` when evaluated.
+fn number(text: &str, negative: bool) -> Option<Expr> {
+    if text.chars().all(|c| c.is_ascii_digit()) {
+        let magnitude: i128 = text.parse().ok()?;
+        let value = if negative { -magnitude } else { magnitude };
+        if magnitude <= MAX_SAFE { return Some(Expr::Int(value as i64)); }
+        return i64::try_from(value).ok().map(Expr::Long);
+    }
+    let value: f64 = text.parse().ok()?;
+    Some(Expr::Float(if negative { -value } else { value }))
+}
+
+pub(crate) const MAX_SAFE: i128 = 9_007_199_254_740_991;
 
 impl Resolver {
     fn find(&self, name: &str) -> Option<Binding> {
@@ -77,6 +78,7 @@ impl Resolver {
     fn function(&mut self, f: &mut FuncDecl) -> Result<(), String> {
         self.scopes.push(HashMap::new());
         for param in &mut f.params {
+            param.ty.retain(|c| !c.is_whitespace());
             param.name = self.bind(&param.name, false, Some(param.ty.clone()), None)?.name;
         }
         match &mut f.body {
@@ -108,7 +110,7 @@ impl Resolver {
                 let binding = self.bind(&v.name, v.is_fixed || v.temp == TempKind::Hot, v.ty.clone(), hot)?;
                 v.name = binding.name;
                 v.value = typed(v.value.clone(), &v.ty);
-                if v.is_fixed { v.value = call("freeze", vec![v.value.clone()]); }
+                if v.is_fixed { v.value = Expr::Freeze(Box::new(v.value.clone())); }
             }
             Stmt::Assign { target, value } => {
                 self.expr(value)?;
@@ -151,6 +153,15 @@ impl Resolver {
     }
     fn expr(&self, e: &mut Expr) -> Result<(), String> {
         match e {
+            Expr::Number(text) => { if let Some(lowered) = number(text, false) { *e = lowered; } }
+            Expr::Unary { op, value } if op == "-" && matches!(value.as_ref(), Expr::Number(t) if t.chars().all(|c| c.is_ascii_digit())) => {
+                // A negated large literal is one longint literal, so -2^63 stays representable.
+                let Expr::Number(text) = value.as_ref() else { unreachable!() };
+                if text.parse::<i128>().map(|v| v > MAX_SAFE).unwrap_or(true) {
+                    if let Some(lowered) = number(text, true) { *e = lowered; return Ok(()); }
+                }
+                self.expr(value)?;
+            }
             Expr::Ident(name) => {
                 if let Some(binding) = self.find(name) {
                     *e = binding.hot.unwrap_or(Expr::Ident(binding.name));
@@ -158,9 +169,7 @@ impl Resolver {
                     return Err(format!("unknown name '{name}'"));
                 }
             }
-            Expr::Unary { value, .. } => {
-                self.expr(value)?;
-            }
+            Expr::Unary { value, .. } | Expr::Freeze(value) | Expr::Typed { value, .. } => self.expr(value)?,
             Expr::Binary { left, right, .. } => {
                 self.expr(left)?; self.expr(right)?;
             }
@@ -173,10 +182,10 @@ impl Resolver {
 }
 fn constant(e: &Expr) -> bool {
     match e {
-        Expr::Number(_) | Expr::String(_) | Expr::Bool(_) | Expr::Null => true,
-        Expr::Unary { value, .. } => constant(value),
+        Expr::Number(_) | Expr::Int(_) | Expr::Long(_) | Expr::Float(_)
+        | Expr::String(_) | Expr::Bool(_) | Expr::Null => true,
+        Expr::Unary { value, .. } | Expr::Typed { value, .. } => constant(value),
         Expr::Binary { left, right, .. } => constant(left) && constant(right),
-        Expr::Call { callee, args } if matches!(callee.as_ref(), Expr::Ident(n) if n == "__mars.typed") => args.iter().all(constant),
         _ => false,
     }
 }

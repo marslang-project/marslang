@@ -1,81 +1,142 @@
 pub mod ast;
-pub mod eval;
 mod expression;
-mod resolve;
-mod stdlib;
+mod interp;
 pub mod lexer;
+mod package;
 pub mod parser;
+mod resolve;
+pub mod value;
+
+pub use interp::InputSource;
+pub use value::{ErrorKind, RuntimeError};
 
 pub const VERSION: &str = concat!("rs-", env!("CARGO_PKG_VERSION"));
 
-pub fn compile_source_to_js(source: &str) -> Result<String, String> {
+/// Interpreter threads get a large stack so deep Marslang recursion reaches
+/// `interp::MAX_CALL_DEPTH` (a catchable RangeError) instead of overflowing.
+const INTERPRETER_STACK: usize = 512 * 1024 * 1024;
+
+/// A parsed and resolved program with the packages it imports, ready to run.
+pub struct Compiled {
+    program: ast::Program,
+    packages: Vec<package::LoadedPackage>,
+}
+
+impl std::fmt::Debug for Compiled {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let names: Vec<&str> = self.packages.iter().map(|p| p.name.as_str()).collect();
+        write!(f, "Compiled {{ {} items, packages: {names:?} }}", self.program.items.len())
+    }
+}
+
+/// Parse and resolve a program, loading the packages it imports. Package files
+/// (`takepkg a.b;`) are found relative to the current directory. Syntax errors,
+/// unknown names, and fixed-binding reassignment are reported here.
+pub fn compile(source: &str) -> Result<Compiled, String> {
+    compile_in(source, std::path::Path::new("."))
+}
+
+/// Compile a source file; package files are found relative to its directory.
+pub fn compile_file(path: &std::path::Path) -> Result<Compiled, String> {
+    let source = std::fs::read_to_string(path)
+        .map_err(|e| format!("failed to read source file {}: {e}", path.display()))?;
+    compile_in(&source, path.parent().unwrap_or(std::path::Path::new(".")))
+}
+
+fn compile_in(source: &str, base: &std::path::Path) -> Result<Compiled, String> {
     let mut program = parser::parse_program(source)?;
-    let libraries = stdlib::prepare(&mut program)?;
+    let mut loader = package::Loader::new(base);
+    loader.load_imports(&mut program, None)?;
     resolve::resolve(&mut program)?;
-    Ok(eval::compile_with_libraries(&program, &libraries))
+    Ok(Compiled { program, packages: loader.packages })
+}
+
+/// Run a compiled program with the process's stdin/stdout.
+pub fn run(compiled: Compiled) -> Result<(), RuntimeError> {
+    on_interpreter_thread(move || {
+        let stdout = std::io::stdout();
+        let mut out = std::io::BufWriter::new(stdout.lock());
+        let result = interp::Interp::new(&mut out, InputSource::Stdin).run(&compiled.program, &compiled.packages);
+        use std::io::Write;
+        let _ = out.flush();
+        result
+    })
+}
+
+/// Run a compiled program with the given standard input, capturing its output.
+/// Output written before a runtime error is kept.
+pub fn run_captured(compiled: Compiled, input: &str) -> (String, Result<(), RuntimeError>) {
+    let input = input.to_string();
+    on_interpreter_thread(move || {
+        let mut out = Vec::new();
+        let result = interp::Interp::new(&mut out, InputSource::Text(input)).run(&compiled.program, &compiled.packages);
+        (String::from_utf8_lossy(&out).into_owned(), result)
+    })
+}
+
+fn on_interpreter_thread<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> T {
+    std::thread::Builder::new()
+        .name("marslang".into())
+        .stack_size(INTERPRETER_STACK)
+        .spawn(work)
+        .expect("failed to start interpreter thread")
+        .join()
+        .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn output(source: &str) -> String {
+        let (out, result) = run_captured(compile(source).expect("compile failed"), "");
+        result.expect("runtime error");
+        out
+    }
+
     #[test]
     fn comparison_expression_stmt_is_not_assignment() {
-        let src = "func m{\n out(1 == 1);\n}";
-        let js = compile_source_to_js(src).expect("compile failed");
-        assert!(js.contains("__mars.out(__mars.bin(\"==\", 1, 1));"));
-        assert!(!js.contains("out(1 = = 1)"), "{js}");
+        assert_eq!(output("func m{\n out(1 == 1);\n}"), "true\n");
     }
 
     #[test]
-    fn family_call_uses_new() {
-        let src = "family Circle{\n    func init(){\n    }\n}\nfunc m{\n    c = Circle(5);\n}";
-        let js = compile_source_to_js(src).expect("compile failed");
-        assert!(js.contains("new Circle(5)"), "{js}");
+    fn family_call_constructs_instance() {
+        let src = "family Circle{\n    func init(int r){\n    me.r = r;\n    }\n}\nfunc m{\n    c = Circle(5);\n    out(c.r);\n}";
+        assert_eq!(output(src), "5\n");
     }
 
     #[test]
-    fn builtin_names_can_be_shadowed() {
-        let src = "func f(int a) => a;";
-        let js = compile_source_to_js(src).expect("compile failed");
-        assert!(js.contains("return __v1_a;"));
-        assert!(!js.contains("return __mars.a;"), "{js}");
+    fn builtin_names_can_be_shadowed_by_parameters() {
+        assert_eq!(output("func f(int out) => out + 1;\nfunc m{ slout(f(2)); }"), "3");
     }
 
     #[test]
     fn bare_assignment_is_treated_as_declaration() {
-        let src = "func m{
-    x = 1;
-    c = 5;
-}";
-        let js = compile_source_to_js(src).expect("compile failed");
-        assert!(js.contains("let __v1_x = 1;"));
-        assert!(js.contains("let __v2_c = 5;"));
+        assert_eq!(output("func m{\n    x = 1;\n    c = 5;\n    out(x + c);\n}"), "6\n");
     }
 
     #[test]
-    fn member_assignment_stays_assignment() {
-        let src = "func m{
-    me.r = 1;
-}";
-        let js = compile_source_to_js(src).expect("compile failed");
-        assert!(js.contains("__mars.setfield(this, \"r\", 1);"));
-        assert!(!js.contains("let me.r"), "{js}");
+    fn member_assignment_outside_a_method_needs_me() {
+        let (_, result) = run_captured(compile("func m{\n    me.r = 1;\n}").unwrap(), "");
+        assert!(result.unwrap_err().message.contains("me"));
     }
+
     #[test]
     fn parses_if_and_repeat_blocks() {
-        let src =
-            "func m{\n    if (true) {\n        out(1);\n    }\n    repeat 2 {\n        out(2);\n    }\n}";
-        let js = compile_source_to_js(src).expect("compile failed");
-        assert!(js.contains("if (__mars.truth(true)) {"));
-        assert!(js.contains("__mars.repeat(2)"));
-        assert!(!js.contains("if (true) {;"), "{js}");
+        let src = "func m{\n    if (true) {\n        out(1);\n    }\n    repeat 2 {\n        out(2);\n    }\n}";
+        assert_eq!(output(src), "1\n2\n2\n");
     }
 
     #[test]
     fn parses_nested_call_arguments_with_balanced_commas() {
-        let src = "func m{\n    out(a(1,2), 3);\n}";
-        let js = compile_source_to_js(src).expect("compile failed");
-        assert!(js.contains("__mars.out(__mars.a(1, 2), 3);"), "{js}");
+        assert_eq!(output("func m{\n    out(arr(1,2), 3);\n}"), "[1, 2] 3\n");
+    }
+
+    #[test]
+    fn deep_recursion_raises_a_range_error() {
+        let (_, result) = run_captured(compile("func f(int n) => f(n + 1);\nfunc m{ f(0); }").unwrap(), "");
+        let error = result.unwrap_err();
+        assert_eq!(error.kind, ErrorKind::RangeError);
+        assert!(error.message.contains("call depth"), "{error}");
     }
 }

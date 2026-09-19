@@ -11,8 +11,8 @@ contain multiple Unicode code points. Chinese `中`, Japanese `あ`, Arabic `ع�
 `é`, `🇨🇳`, `👍🏽`, and `👨‍👩‍👧‍👦` each count as one.
 
 Length, iteration, reversal, and slicing all use this unit. They do not normalize
-the text. Segmentation uses Node's `Intl.Segmenter`; Unicode segmentation data
-depends on the host's Unicode/ICU version.
+the text. Segmentation uses the Rust `unicode-segmentation` crate (Unicode
+extended grapheme cluster rules); its Unicode version follows the crate version.
 
 ## Methods
 
@@ -75,5 +75,5 @@ func m{
 }
 ```
 
-Only the string APIs listed here are supported language contracts. JavaScript
-methods that happen to be reachable are not a stable Marslang API.
+Only the string APIs listed here are supported language contracts. Calling any
+other method on a string raises `TypeError`.

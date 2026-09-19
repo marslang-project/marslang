@@ -8,23 +8,20 @@
 
 ## Development direction
 
-Read `docs/PROJECT_REVIEW.md` for the review and staged roadmap. Continue the Rust-to-JavaScript bootstrap compiler, stabilize the core with execution tests, and then work toward a compiler written in Marslang. Proposed language syntax in the roadmap is not implemented syntax.
+Read `docs/PROJECT_REVIEW.md` for the review and staged roadmap. Decision 2026-09-19: the JavaScript backend is deleted; Marslang is an interpreted language run by the Rust tree-walking interpreter (`src/interp.rs`). Stabilize the core with execution tests, then work toward tooling written in Marslang. Proposed language syntax in the roadmap is not implemented syntax. Do not reintroduce a JavaScript/Node dependency.
 
 ## Validation
 
-Windows Cargo and Node can operate on this checkout without the old WSL UNC working-directory issue. From WSL, the available Windows tools are:
+Only Rust is required; Node is no longer used. From Windows:
 
 ```bash
-/mnt/c/Users/Kevin/.cargo/bin/cargo.exe test
-/mnt/c/Users/Kevin/.cargo/bin/cargo.exe run -- compile hello.mars -o hello.js
-'/mnt/c/Program Files/nodejs/node.exe' hello.js
+cargo test
+cargo run -- hello.mars
 ```
 
-The bundled example is covered by a Node execution test and prints `3` and `78.53975`. Run the full Rust suite, including `tests/execution.rs`; generated-text assertions alone do not establish correctness. Set `MARSLANG_NODE` to the Node executable if it is not on PATH. Use a separate target directory if switching between Windows and WSL-native Rust toolchains.
+From WSL, use the Windows toolchain (`/mnt/c/Users/Kevin/.cargo/bin/cargo.exe test`) or the
+WSL-native one with a separate target directory
+(`/home/kevib/.cargo/bin/cargo test --target-dir target/wsl`).
 
-WSL-native Rust/Cargo are also installed at `/home/kevib/.cargo/bin/`. The full
-suite has passed with WSL Rust and Windows Node using a separate target directory:
-
-```bash
-MARSLANG_NODE='/mnt/c/Program Files/nodejs/node.exe' /home/kevib/.cargo/bin/cargo test --target-dir target/wsl
-```
+The bundled example prints `3` and `78.53975`. `tests/execution.rs` runs each program in the
+interpreter and asserts its output or runtime error; run the full suite, not only unit tests.

@@ -1,20 +1,18 @@
 # marslang
 
-Marslang is a Rust implementation of the **marslang rs-0.5.0** compiler.
+Marslang is an interpreted language. This repository is its Rust implementation (**marslang rs-0.6.0**): it parses and checks a `.mars` program, then runs it directly. No JavaScript or Node is involved.
 
-See the [rs-0.5.0 release notes](docs/releases/rs-0.5.0.md) for the initial math package, dynamic numeric tracking, and validation.
+See the [rs-0.6.0 release notes](docs/releases/rs-0.6.0.md) for the Rust interpreter, the package system, and the Marslang-written standard library.
 
-The development direction is to stabilize the Rust-to-JavaScript compiler before self-hosting. Discussion documents under `docs/` stay local; `docs/api/` and `docs/releases/` are available to Git.
+The development direction is to stabilize the Rust interpreter before self-hosting. Discussion documents under `docs/` stay local; `docs/api/` and `docs/releases/` are available to Git.
 
 Read the [language and API reference](docs/api/README.md) for current syntax and built-in APIs.
 
-Run `cargo test` for current coverage, including Node execution tests. All existing regression cases are enabled. Node must be on PATH, or set `MARSLANG_NODE` to its executable path.
+Run `cargo test` for current coverage. The execution tests run each program in the interpreter and assert its output or runtime error. Only Rust is required.
 
-This release adds dynamically tracked numeric types and a Marslang-written
-[`std.math`](docs/api/std-math.md). The math API is an initial design and will expand.
-The working tree now expands it to 42 functions and six constants, with explicit
-float inputs, checked domains, half-to-even rounding, and `float("inf")` conversion
-instead of an infinity keyword.
+This release replaces the JavaScript backend with a Rust interpreter, adds `takepkg`
+packages, and rewrites [`std.math`](docs/api/std-math.md) (42 functions and six
+constants) in Marslang on top of native float primitives.
 Decorators, deque, further standard
 libraries, complete module handling, and async remain pending. Maps, deep copies,
 and loop control are implemented. `:=` is excluded.
@@ -25,7 +23,9 @@ It includes:
 - a lexer (`src/lexer.rs`)
 - AST definitions (`src/ast.rs`)
 - a handwritten parser (`src/parser.rs`); `src/grammar.pest` is an unused reference grammar
-- a compiler/transpiler to JavaScript (`src/eval.rs`)
+- a name resolver (`src/resolve.rs`)
+- a tree-walking interpreter (`src/interp.rs`), runtime values (`src/value.rs`), and the package loader (`src/package.rs`)
+- the standard library: Marslang packages in `std/*.mars` and native Rust packages in `std/rs/*.rs`, registered at build time by `build.rs`
 - CLI executable named `marslang` (`src/main.rs`)
 
 ## Build
@@ -34,19 +34,17 @@ It includes:
 cargo build
 ```
 
-## Compile a `.mars` file
+## Run a `.mars` file
 
 ```bash
 cargo run -- hello.mars
 # or
-cargo run -- compile hello.mars -o hello.js
+cargo run -- run hello.mars
 ```
 
-Then run the generated JavaScript:
-
-```bash
-node hello.js
-```
+`marslang check file.mars` parses and resolves a program without running it.
+Syntax errors, unknown names, and fixed-binding reassignment are reported before
+anything runs. Runtime errors print `error: <Kind>: <message>` and exit with status 1.
 
 ## Current release coverage
 
@@ -58,7 +56,7 @@ Implemented:
 - `family` definitions with optional inheritance and `init` -> constructor mapping
 - `ret`, assignment, function calls, member access
 - `if/elif/else`, `repeat`, `while`, two- and three-part `for`, `break`, and `continue`
-- `takepkg module;` and `takepkg module = alias;`
+- `takepkg` packages (similar to Python's): bundled standard packages (`takepkg std.math;`), package directories with `init.mars`, module files (`takepkg shapes.circle;`), relative imports (`takepkg .sibling;`, `takepkg ..parent;`), and optional aliases
 - built-in `arr`, `set`, `pair`, `map`/`dict`; legacy `a`/`s`/`p` remain compatibility spellings
 - array operations, collection `.len()`/`.is_empty()`/`.has()`, insertion-ordered map keys and snapshot iteration
 - `out`, `slout`, `in`, and `inln`
@@ -66,7 +64,7 @@ Implemented:
 
 Still intentionally limited in this initial release:
 - no full static type checker yet
-- no dedicated bytecode/native backend yet (current backend is JS)
+- no bytecode or native backend yet (programs run in a tree-walking interpreter)
 - no complete `match`, `run/handle/then`, hot functions, type aliases, or tagged-variant syntax yet
 - the statement parser still uses normalized source fragments; the standalone lexer is not yet the single compilation frontend
 
@@ -85,7 +83,7 @@ Maps use `.set(key,value)`, `.get(key)` (null when absent), `.has(key)`, `.len()
 Loop iterables are snapshotted; mutations do not change the current iteration list.
 
 String `.len()` and iteration count Unicode grapheme clusters: `é`, `中`, and
-`👨‍👩‍👧‍👦` each count as one character. This requires Node with `Intl.Segmenter`.
+`👨‍👩‍👧‍👦` each count as one character.
 String `.reverse()` returns a new string with those characters in reverse order;
 the original string is unchanged.
 String and array `.slice(start,end)` and `.lenslice(start,length)` support an
@@ -128,7 +126,17 @@ A starter marslang stdlib is included at `stdlib.mars`.
 cargo run -- repl
 ```
 
-The REPL keeps a stateful source buffer and re-runs it after each line. Use `:show`, `:reset`, and `:exit`.
+The REPL keeps a source buffer and re-runs it after each line, showing only the output the new line produced. Lines that fail to compile or raise a runtime error are discarded. Use `:show`, `:reset`, and `:exit`.
+
+## Packages
+
+`takepkg` loads standard packages (`std.*`, built into `marslang`) and package files
+next to the main program; see [Packages](docs/api/language.md#packages).
+
+Planned (not implemented yet): a per-user package directory, such as
+`C:\Users\<user>\marslang_pkgs` on Windows, where an installer will put third-party
+packages so any program can `takepkg` them. The installer and the search order between
+that directory and the program's own directory are future work.
 
 ## Building a Windows `.exe`
 
