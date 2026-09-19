@@ -1,5 +1,6 @@
 pub mod ast;
 mod expression;
+mod gc;
 mod interp;
 pub mod lexer;
 mod package;
@@ -54,12 +55,14 @@ fn compile_in(source: &str, base: &std::path::Path) -> Result<Compiled, String> 
 /// Run a compiled program with the process's stdin/stdout.
 pub fn run(compiled: Compiled) -> Result<(), RuntimeError> {
     on_interpreter_thread(move || {
+        use std::io::{IsTerminal, Write};
         let stdout = std::io::stdout();
+        // A terminal sees each `out` immediately; piped output is buffered.
+        let interactive = stdout.is_terminal();
         let mut out = std::io::BufWriter::new(stdout.lock());
-        let result = interp::Interp::new(&mut out, InputSource::Stdin).run(&compiled.program, &compiled.packages);
-        use std::io::Write;
-        let _ = out.flush();
-        result
+        let result = interp::Interp::new(&mut out, InputSource::Stdin, interactive).run(&compiled.program, &compiled.packages);
+        let flushed = out.flush().map_err(|e| RuntimeError { kind: ErrorKind::Error, message: format!("failed to write output: {e}") });
+        result.and(flushed)
     })
 }
 
@@ -69,7 +72,7 @@ pub fn run_captured(compiled: Compiled, input: &str) -> (String, Result<(), Runt
     let input = input.to_string();
     on_interpreter_thread(move || {
         let mut out = Vec::new();
-        let result = interp::Interp::new(&mut out, InputSource::Text(input)).run(&compiled.program, &compiled.packages);
+        let result = interp::Interp::new(&mut out, InputSource::Text(input), false).run(&compiled.program, &compiled.packages);
         (String::from_utf8_lossy(&out).into_owned(), result)
     })
 }
@@ -130,6 +133,31 @@ mod tests {
     #[test]
     fn parses_nested_call_arguments_with_balanced_commas() {
         assert_eq!(output("func m{\n    out(arr(1,2), 3);\n}"), "[1, 2] 3\n");
+    }
+
+    /// Records writes, marking each flush with `|`.
+    struct FlushLog(String);
+    impl std::io::Write for FlushLog {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.push_str(&String::from_utf8_lossy(bytes));
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> { self.0.push('|'); Ok(()) }
+    }
+
+    fn flush_log(source: &str, interactive: bool) -> String {
+        let compiled = compile(source).unwrap();
+        let mut log = FlushLog(String::new());
+        interp::Interp::new(&mut log, InputSource::Text("hello".into()), interactive)
+            .run(&compiled.program, &compiled.packages).unwrap();
+        log.0
+    }
+
+    #[test]
+    fn prompts_are_flushed_before_reading_input() {
+        let program = "func m{ slout(\"name? \"); out(in()); out(\"a\"); line = inln(); }";
+        assert_eq!(flush_log(program, false), "name? |hello\na\n|");
+        assert_eq!(flush_log(program, true), "name? ||hello\n|a\n||");
     }
 
     #[test]

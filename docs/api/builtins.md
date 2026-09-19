@@ -13,6 +13,11 @@ Input is synchronous. `inln()` buffers standard input; mixing
 `in()` and `inln()` is not a supported streaming input model. Container display
 format is not a stable serialization format.
 
+Pending output is flushed before `in()` and `inln()` read, so a prompt is visible
+while the program waits. When standard output is a terminal, each `out` and `slout`
+is shown immediately; when it is redirected, output is buffered until input is read
+or the program ends.
+
 ## Conversions and copying
 
 | Call | Behavior |

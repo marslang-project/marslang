@@ -2,9 +2,7 @@ fn executes(source: &str, expected: &str) {
     let compiled = marslang::compile(source).expect("Marslang compilation failed");
     let (stdout, result) = marslang::run_captured(compiled, "");
     if let Err(error) = result {
-        panic!("runtime error: {error}
-output so far:
-{stdout}");
+        panic!("runtime error: {error}\noutput so far:\n{stdout}");
     }
     assert_eq!(stdout, expected);
 }
@@ -739,4 +737,58 @@ fn takepkg_packages_init_files_and_relative_imports() {
     std::fs::write(dir.join("main.mars"), "takepkg app.helpers;\nfunc m{}").unwrap();
     let error = marslang::compile_file(&dir.join("main.mars")).unwrap_err();
     assert!(error.contains("beyond the top-level package 'app'"), "{error}");
+}
+
+#[test]
+fn collection_keeps_reachable_cycles_and_temporaries_intact() {
+    // 30,000 garbage cycles force several collections while live cycles are held
+    // by a global, a local, a parameter, and an unfinished call's argument list.
+    executes(r#"
+        kept = arr();
+        family Node{ func init(){ me.self_ref = me; me.cb = me.get; } func get => 1; }
+        func churn(int n){ total = 0; repeat n { g = arr(); g.add(g); node = Node(); total = total + node.cb(); } ret total; }
+        func cyc(){ c = arr(); c.add(c); ret c; }
+        func hold(array c) => churn(15000) + c.len();
+        func m{
+            kept.add(kept);
+            local = cyc();
+            out(churn(15000));
+            both = pair(cyc(), churn(15000));
+            out(both.first.iget(0) == both.first);
+            out(hold(cyc()));
+            out(kept.iget(0) == kept, local.iget(0) == local, kept.len());
+        }"#, "15000\ntrue\n15001\ntrue true 1\n");
+}
+
+#[test]
+fn family_annotations_accept_descendants_and_compare_declarations() {
+    executes("family Parent{ func init(int x){ me.x=x; } }\nfamily Child(Parent){}\nfamily Grandchild(Child){}\nfunc read(Parent p) => p.x;\nfunc m{ out(read(Child(7))); out(read(Grandchild(8))); items (array[Parent]) = arr(Child(1)); out(items.len()); }", "7\n8\n1\n");
+    runtime_error("family Parent{}\nfamily Other{}\nfunc read(Parent p) => 1;\nfunc m{ read(Other()); }", "expected Parent");
+    runtime_error("func read(Missing p) => 1;\nfunc m{ read(1); }", "unknown type Missing");
+
+    let dir = package_dir("family-identity", &[
+        ("left.mars", "family Box{ func init(int x){ me.x=x; } }\nfunc read(Box b) => b.x;"),
+        ("right.mars", "family Box{ func init(int x){ me.x=x; } }"),
+        ("main.mars", "takepkg left;\ntakepkg right;\nfunc take(right.Box b) => b.x;\nfunc m{ out(left.read(left.Box(4))); out(take(right.Box(5))); left.read(right.Box(9)); }"),
+    ]);
+    let (out, result) = run_file(&dir.join("main.mars"));
+    assert_eq!(out, "4\n5\n");
+    assert!(result.unwrap_err().to_string().contains("expected Box"));
+}
+
+#[test]
+fn failed_union_alternatives_leave_values_unchanged() {
+    executes(r#"func choose([pair[array[longint],int],pair[array[int],string]] value) => value;
+        func m{
+            a=arr(1); value=pair(a,"ok"); out(choose(value).second);
+            // The first alternative would have made the element a longint.
+            a.add(2); out(a.iget(0) == 1, a.len());
+            b (array[int]) = a; b.add(3); out(b.len());
+        }"#, "ok\ntrue 2\n3\n");
+    runtime_error("func choose([pair[array[longint],int],pair[array[int],string]] value) => value;\nfunc m{ a=arr(1); choose(pair(a,\"ok\")); a.add(\"x\"); }", "expected int");
+}
+
+#[test]
+fn member_call_target_is_chosen_before_arguments() {
+    executes("family Holder{ func init{ me.f=first; } }\nfunc first(int x) => 1;\nfunc second(int x) => 2;\nfunc swap(Holder h){ h.f=second; ret 0; }\nfunc m{ h=Holder(); out(h.f(swap(h))); out(h.f(0)); }", "1\n2\n");
 }

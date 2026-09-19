@@ -96,6 +96,12 @@ Use `counts (map[string,int]) = map();` for key/value restrictions.
 Updating an existing key does not move it. Removing and reinserting a key puts it
 at the end. Iteration yields keys, not key/value pairs.
 
+## Memory
+
+Containers and family instances are freed when nothing refers to them, including
+structures that refer to themselves (an array containing itself, or instances that
+point at each other). A cycle collector runs while the program executes.
+
 ## Iteration and fixed values
 
 `for (item,collection){...}` works for arrays, sets, and maps. Each loop snapshots

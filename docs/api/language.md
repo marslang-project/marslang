@@ -84,6 +84,11 @@ use `=> expression;`.
 
 `family Child(Parent){...}` declares inheritance. `init` is the constructor, and
 `me` refers to the current instance. Call a family name to create an instance.
+
+A family name used as a type, such as `func area(Shape s)` or `array[Shape]`,
+accepts instances of that family and of every family that inherits from it. The name
+refers to the family declared in the same file; use `alias.Family` for a family from
+an imported package. Families with the same name in different packages are different types.
 Only slicing accepts a named `reverse=` argument; other calls are positional.
 
 ## Control flow

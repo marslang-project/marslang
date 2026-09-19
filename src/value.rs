@@ -161,8 +161,9 @@ impl Key {
 #[derive(Default)]
 pub struct Meta {
     pub frozen: Cell<bool>,
-    /// Each entry is one applied collection annotation's type arguments.
-    pub restrictions: RefCell<Vec<Rc<[String]>>>,
+    /// Each entry is one applied collection annotation's type arguments, with
+    /// the unit (program or package) whose names they refer to.
+    pub restrictions: RefCell<Vec<(Rc<[String]>, usize)>>,
 }
 
 impl Meta {
@@ -171,21 +172,42 @@ impl Meta {
     }
 }
 
-#[derive(Default)]
 pub struct Array { pub items: RefCell<Vec<Value>>, pub meta: Meta }
-#[derive(Default)]
 pub struct Set { pub items: RefCell<IndexMap<Key, Value>>, pub meta: Meta }
-#[derive(Default)]
 pub struct Map { pub items: RefCell<IndexMap<Key, (Value, Value)>>, pub meta: Meta }
 pub struct Pair { pub first: RefCell<Value>, pub second: RefCell<Value>, pub meta: Meta }
 pub struct Instance { pub family: Rc<Family>, pub fields: RefCell<IndexMap<Rc<str>, Value>>, pub meta: Meta }
 
+/// Constructors for values that can hold other values. They register the new
+/// object with the cycle collector (`crate::gc`), so always create them here.
 impl Value {
-    pub fn array(items: Vec<Value>) -> Value {
-        Value::Array(Rc::new(Array { items: RefCell::new(items), meta: Meta::default() }))
+    fn tracked(self) -> Value {
+        crate::gc::track(&self);
+        self
     }
-    pub fn pair(first: Value, second: Value) -> Value {
-        Value::Pair(Rc::new(Pair { first: RefCell::new(first), second: RefCell::new(second), meta: Meta::default() }))
+    pub fn array(items: Vec<Value>) -> Value { Value::new_array(items, Meta::default()) }
+    pub fn new_array(items: Vec<Value>, meta: Meta) -> Value {
+        Value::Array(Rc::new(Array { items: RefCell::new(items), meta })).tracked()
+    }
+    pub fn new_set(items: IndexMap<Key, Value>, meta: Meta) -> Value {
+        Value::Set(Rc::new(Set { items: RefCell::new(items), meta })).tracked()
+    }
+    pub fn new_map(items: IndexMap<Key, (Value, Value)>, meta: Meta) -> Value {
+        Value::Map(Rc::new(Map { items: RefCell::new(items), meta })).tracked()
+    }
+    pub fn pair(first: Value, second: Value) -> Value { Value::new_pair(first, second, Meta::default()) }
+    pub fn new_pair(first: Value, second: Value, meta: Meta) -> Value {
+        Value::Pair(Rc::new(Pair { first: RefCell::new(first), second: RefCell::new(second), meta })).tracked()
+    }
+    pub fn new_instance(family: Rc<Family>, meta: Meta) -> Value {
+        Value::Instance(Rc::new(Instance { family, fields: RefCell::new(IndexMap::new()), meta })).tracked()
+    }
+    /// A method bound to its receiver.
+    pub fn method(receiver: Value, function: Rc<Function>) -> Value {
+        Value::Func(Rc::new(Callable::Method(receiver, function))).tracked()
+    }
+    pub fn package(name: String, members: IndexMap<String, Value>) -> Value {
+        Value::Package(Rc::new(Package { name, members })).tracked()
     }
 }
 
@@ -249,7 +271,7 @@ impl NativePackage {
         self
     }
 
-    pub fn build(self) -> Value { Value::Package(Rc::new(Package { name: self.name, members: self.members })) }
+    pub fn build(self) -> Value { Value::package(self.name, self.members) }
 }
 
 /// `**` for floats: like `powf`, except that a NaN exponent and `(±1) ** ±inf`

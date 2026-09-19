@@ -18,11 +18,18 @@ pub const MAX_CALL_DEPTH: usize = 10_000;
 
 enum Flow { Next, Break, Continue, Return(Value) }
 
+enum MethodTarget { Method(Rc<Function>), Value(Value) }
+
+/// A container restriction from a matched annotation, applied after matching.
+struct Restriction { target: Value, args: Rc<[String]>, unit: usize }
+
 /// Globals and declarations of one source unit (the program or a bundled package).
 struct Unit {
     /// Package name, or `None` for the program itself.
     name: Option<String>,
     globals: RefCell<HashMap<String, Value>>,
+    /// Imported packages by their source alias, for `alias.Family` annotations.
+    imports: RefCell<HashMap<String, Value>>,
     functions: HashMap<String, Rc<Function>>,
     families: HashMap<String, Rc<Family>>,
 }
@@ -54,6 +61,8 @@ impl Input {
 pub struct Interp<'o> {
     units: Vec<Unit>,
     out: &'o mut dyn Write,
+    /// Flush after every `out`/`slout` (when output is a terminal).
+    interactive: bool,
     input: Input,
     depth: usize,
     /// Loaded packages by key.
@@ -63,14 +72,23 @@ pub struct Interp<'o> {
 type Exec = RResult<Flow>;
 
 impl<'o> Interp<'o> {
-    pub fn new(out: &'o mut dyn Write, input: InputSource) -> Self {
-        Interp { units: Vec::new(), out, input: Input { source: input, lines: None, line: 0 },
+    pub fn new(out: &'o mut dyn Write, input: InputSource, interactive: bool) -> Self {
+        Interp { units: Vec::new(), out, interactive, input: Input { source: input, lines: None, line: 0 },
             depth: 0, packages: HashMap::new() }
     }
 
     /// Run a resolved program: load its packages (each after its own imports),
     /// execute top-level statements in order, then call `m` when it is declared.
+    /// Afterwards every value the run created is released, including cycles.
     pub(crate) fn run(&mut self, program: &Program, packages: &[LoadedPackage]) -> RResult<()> {
+        let result = self.run_program(program, packages);
+        self.units.clear();
+        self.packages.clear();
+        crate::gc::collect();
+        result
+    }
+
+    fn run_program(&mut self, program: &Program, packages: &[LoadedPackage]) -> RResult<()> {
         for package in packages {
             let value = match &package.source {
                 Source::Native(package) => package(),
@@ -97,7 +115,7 @@ impl<'o> Interp<'o> {
             };
             members.insert(name.clone(), value);
         }
-        Ok(Value::Package(Rc::new(Package { name: package.name.clone(), members })))
+        Ok(Value::package(package.name.clone(), members))
     }
 
     fn load_unit(&mut self, program: &Program, name: Option<String>) -> RResult<usize> {
@@ -113,7 +131,7 @@ impl<'o> Interp<'o> {
         }
         let mut families = HashMap::new();
         for name in decls.keys() { build_family(name, &decls, &mut families, index, &mut Vec::new())?; }
-        self.units.push(Unit { name, globals: RefCell::new(HashMap::new()), functions, families });
+        self.units.push(Unit { name, globals: RefCell::new(HashMap::new()), imports: RefCell::new(HashMap::new()), functions, families });
         Ok(index)
     }
 
@@ -124,7 +142,9 @@ impl<'o> Interp<'o> {
                 Item::Import(import) => {
                     let package = import.key.as_ref().and_then(|key| self.packages.get(key)).cloned()
                         .ok_or_else(|| RuntimeError { kind: ErrorKind::Error, message: format!("package '{}' is not loaded", import.module) })?;
-                    self.units[unit].globals.borrow_mut().insert(import.alias.clone().unwrap_or_default(), package);
+                    let alias = import.alias.clone().unwrap_or_default();
+                    self.units[unit].imports.borrow_mut().insert(display_name(&alias).to_string(), package.clone());
+                    self.units[unit].globals.borrow_mut().insert(alias, package);
                 }
                 Item::Var(v) => { let value = self.eval(&v.value, &mut env)?; self.declare(&mut env, &v.name, value); }
                 Item::Stmt(stmt) => match self.exec(stmt, &mut env)? {
@@ -181,6 +201,8 @@ impl<'o> Interp<'o> {
     }
 
     fn exec(&mut self, stmt: &Stmt, env: &mut Env) -> Exec {
+        // Statement boundaries are safe points: no container is borrowed here.
+        if crate::gc::due() { crate::gc::collect(); }
         match stmt {
             Stmt::Var(v) => {
                 let value = self.eval(&v.value, env)?;
@@ -268,7 +290,7 @@ impl<'o> Interp<'o> {
             Expr::Ident(name) => self.lookup(name, env)?,
             Expr::Typed { value, ty } => {
                 let value = self.eval(value, env)?;
-                self.typed(value, ty)?
+                self.typed(value, ty, env.unit)?
             }
             Expr::Freeze(value) => {
                 let value = self.eval(value, env)?;
@@ -307,11 +329,22 @@ impl<'o> Interp<'o> {
             Expr::Member { object, field } => {
                 let object = self.eval(object, env)?;
                 if field == "copy" && args.is_empty() { return Ok(deep_copy(&object, &mut HashMap::new())); }
+                // Select the target before evaluating arguments, so their side
+                // effects cannot replace it. Built-in string and collection
+                // methods are fixed by the receiver's type.
+                let target = self.method_target(&object, field)?;
                 let args = self.eval_args(args, env)?;
-                if let Value::Str(text) = &object {
-                    if let Some(result) = string_method(text, field, &args)? { return Ok(result); }
+                match target {
+                    Some(MethodTarget::Method(method)) => self.call_function(&method, Some(object), args),
+                    Some(MethodTarget::Value(function)) => self.call_value(&function, args),
+                    None => match &object {
+                        Value::Str(text) => Ok(string_method(text, field, &args)?.expect("string methods always resolve")),
+                        Value::Array(array) => self.array_method(&object, array, field, args),
+                        Value::Set(set) => self.set_method(&object, set, field, args),
+                        Value::Map(map) => self.map_method(&object, map, field, args),
+                        _ => unreachable!("method_target resolves every other receiver"),
+                    },
                 }
-                self.call_method(object, field, args)
             }
             Expr::Ident(name) => {
                 let function = self.lookup(name, env)?;
@@ -356,7 +389,7 @@ impl<'o> Interp<'o> {
         if self.depth >= MAX_CALL_DEPTH { return range_err("maximum call depth exceeded"); }
         let mut locals = HashMap::with_capacity(decl.params.len());
         for (param, arg) in decl.params.iter().zip(args) {
-            locals.insert(param.name.clone(), self.typed(arg, &param.ty)?);
+            locals.insert(param.name.clone(), self.typed(arg, &param.ty, function.package)?);
         }
         let mut env = Env { unit: function.package, locals: Some(locals), me };
         self.depth += 1;
@@ -372,8 +405,7 @@ impl<'o> Interp<'o> {
     }
 
     fn construct(&mut self, family: &Rc<Family>, args: Vec<Value>) -> RResult<Value> {
-        let instance = Value::Instance(Rc::new(Instance {
-            family: family.clone(), fields: RefCell::new(IndexMap::new()), meta: Meta::default() }));
+        let instance = Value::new_instance(family.clone(), Meta::default());
         match family.method("init") {
             Some(init) => { self.call_function(&init, Some(instance.clone()), args)?; }
             None if !args.is_empty() => return type_err(format!("{} has no init and takes no arguments", family.name)),
@@ -382,25 +414,22 @@ impl<'o> Interp<'o> {
         Ok(instance)
     }
 
-    fn call_method(&mut self, object: Value, name: &str, args: Vec<Value>) -> RResult<Value> {
-        match &object {
+    /// What `object.name(...)` calls. `None` means a built-in string or
+    /// collection method, dispatched after the arguments are evaluated.
+    fn method_target(&self, object: &Value, name: &str) -> RResult<Option<MethodTarget>> {
+        Ok(Some(match object {
             Value::Instance(instance) => {
-                let field = instance.fields.borrow().get(name).cloned();
-                if let Some(field) = field { return self.call_value(&field, args); }
+                // A field holding a function takes precedence over a method.
+                if let Some(field) = instance.fields.borrow().get(name) { return Ok(Some(MethodTarget::Value(field.clone()))); }
                 match instance.family.method(name) {
-                    Some(method) => self.call_function(&method, Some(object.clone()), args),
-                    None => type_err(format!("{} has no method '{name}'", instance.family.name)),
+                    Some(method) => MethodTarget::Method(method),
+                    None => return type_err(format!("{} has no method '{name}'", instance.family.name)),
                 }
             }
-            Value::Array(array) => self.array_method(&object, array, name, args),
-            Value::Set(set) => self.set_method(&object, set, name, args),
-            Value::Map(map) => self.map_method(&object, map, name, args),
-            Value::Package(_) | Value::Pair(_) => {
-                let member = self.get_member(&object, name)?;
-                self.call_value(&member, args)
-            }
-            other => type_err(format!("{} has no method '{name}'", other.type_name())),
-        }
+            Value::Package(_) | Value::Pair(_) => MethodTarget::Value(self.get_member(object, name)?),
+            Value::Str(_) | Value::Array(_) | Value::Set(_) | Value::Map(_) => return Ok(None),
+            other => return type_err(format!("{} has no method '{name}'", other.type_name())),
+        }))
     }
 
     fn get_member(&self, object: &Value, field: &str) -> RResult<Value> {
@@ -408,7 +437,7 @@ impl<'o> Interp<'o> {
             Value::Instance(instance) => {
                 if let Some(value) = instance.fields.borrow().get(field) { return Ok(value.clone()); }
                 match instance.family.method(field) {
-                    Some(method) => Ok(Value::Func(Rc::new(Callable::Method(object.clone(), method)))),
+                    Some(method) => Ok(Value::method(object.clone(), method)),
                     None => type_err(format!("{} has no field '{field}'", instance.family.name)),
                 }
             }
@@ -449,7 +478,13 @@ impl<'o> Interp<'o> {
     // ----- builtins -----
 
     fn write(&mut self, text: &str) -> RResult<()> {
-        self.out.write_all(text.as_bytes()).or_else(|e| err(ErrorKind::Error, format!("failed to write output: {e}")))
+        self.out.write_all(text.as_bytes()).or_else(|e| err(ErrorKind::Error, format!("failed to write output: {e}")))?;
+        if self.interactive { self.flush()?; }
+        Ok(())
+    }
+
+    fn flush(&mut self) -> RResult<()> {
+        self.out.flush().or_else(|e| err(ErrorKind::Error, format!("failed to write output: {e}")))
     }
 
     fn call_builtin(&mut self, builtin: Builtin, args: Vec<Value>) -> RResult<Value> {
@@ -469,9 +504,15 @@ impl<'o> Interp<'o> {
                 self.write(&text)?;
                 Ok(Value::Null)
             }
-            Builtin::In => { arity(0)?; Ok(Value::str(&self.input.read_all())) }
+            Builtin::In => {
+                arity(0)?;
+                // Show any prompt before blocking on input.
+                self.flush()?;
+                Ok(Value::str(&self.input.read_all()))
+            }
             Builtin::Inln => {
                 arity(0)?;
+                self.flush()?;
                 if self.input.lines.is_none() {
                     let text = self.input.read_all();
                     self.input.lines = Some(text.split('\n').map(|l| l.strip_suffix('\r').unwrap_or(l).to_string()).collect());
@@ -482,23 +523,23 @@ impl<'o> Interp<'o> {
             }
             Builtin::Arr => Ok(Value::array(args)),
             Builtin::Set => {
-                let set = Rc::new(Set::default());
-                for item in args { set.items.borrow_mut().entry(Key::of(&item)).or_insert(item); }
-                Ok(Value::Set(set))
+                let mut items = IndexMap::new();
+                for item in args { items.entry(Key::of(&item)).or_insert(item); }
+                Ok(Value::new_set(items, Meta::default()))
             }
             Builtin::Pair => {
                 arity(2)?;
                 let mut args = args.into_iter();
                 Ok(Value::pair(args.next().unwrap(), args.next().unwrap()))
             }
-            Builtin::Map => { arity(0)?; Ok(Value::Map(Rc::new(Map::default()))) }
+            Builtin::Map => { arity(0)?; Ok(Value::new_map(IndexMap::new(), Meta::default())) }
             Builtin::Int => {
                 arity(1)?;
                 let number = to_number(&args[0]);
                 let value = if number.is_finite() && number.fract() == 0.0 { Value::Int(number as i64) } else { Value::Float(number) };
                 // Conversion requires an exact integer: 2.5 is rejected, not truncated.
                 if let Value::Float(_) = value { return type_err("expected int"); }
-                self.typed(value, "int")
+                self.typed(value, "int", 0)
             }
             Builtin::Long => {
                 arity(1)?;
@@ -506,7 +547,7 @@ impl<'o> Interp<'o> {
                     Value::Str(text) => parse_bigint(text)?,
                     other => other.clone(),
                 };
-                self.typed(value, "longint")
+                self.typed(value, "longint", 0)
             }
             Builtin::Float => { arity(1)?; Ok(Value::Float(to_float(&args[0]))) }
             Builtin::String => { arity(1)?; Ok(Value::str(&to_display_string(&args[0]))) }
@@ -520,7 +561,7 @@ impl<'o> Interp<'o> {
         match name {
             "slice" | "lenslice" => {
                 let items = slice_items(&array.items.borrow(), &args, name == "lenslice")?;
-                return Ok(Value::Array(Rc::new(Array { items: RefCell::new(items), meta: array.meta.inherit() })));
+                return Ok(Value::new_array(items, array.meta.inherit()));
             }
             "len" => { arity(0)?; return Ok(Value::Int(array.items.borrow().len() as i64)); }
             "is_empty" => { arity(0)?; return Ok(Value::Bool(array.items.borrow().is_empty())); }
@@ -659,20 +700,37 @@ impl<'o> Interp<'o> {
     /// Apply every element restriction recorded on a container to a new value.
     fn check(&mut self, meta: &Meta, mut value: Value, part: usize) -> RResult<Value> {
         let restrictions = meta.restrictions.borrow().clone();
-        for args in restrictions.iter() { value = self.typed(value, &args[part])?; }
+        for (args, unit) in restrictions.iter() { value = self.typed(value, &args[part], *unit)?; }
         Ok(value)
     }
 
-    /// Check or convert a value against a (whitespace-free) type annotation.
-    pub fn typed(&mut self, value: Value, ty: &str) -> RResult<Value> {
+    /// Check or convert a value against a (whitespace-free) type annotation
+    /// written in `unit`. A collection annotation changes its container (it adds
+    /// a restriction and converts the elements); those changes are applied only
+    /// once the whole annotation, including every nested part, has matched.
+    pub fn typed(&mut self, value: Value, ty: &str, unit: usize) -> RResult<Value> {
+        let mut pending = Vec::new();
+        let value = self.plan_type(value, ty, unit, &mut pending)?;
+        for restriction in pending { self.restrict(restriction)?; }
+        Ok(value)
+    }
+
+    /// Check `value` against `ty` without changing any container: scalars are
+    /// returned converted, and container restrictions to apply go to `pending`.
+    fn plan_type(&mut self, value: Value, ty: &str, unit: usize, pending: &mut Vec<Restriction>) -> RResult<Value> {
         if let Some(inner) = ty.strip_prefix('[').and_then(|t| t.strip_suffix(']')) {
             let options = split_types(inner);
             // Prefer the actual numeric kind before trying compatible conversions.
             if let Some(kind) = value.num_kind() {
-                if options.iter().any(|o| o == kind.name()) { return self.typed(value, kind.name()); }
+                if options.iter().any(|o| o == kind.name()) { return self.plan_type(value, kind.name(), unit, pending); }
             }
+            // A failed alternative leaves no changes behind for the next one.
             for option in &options {
-                if let Ok(result) = self.typed(value.clone(), option) { return Ok(result); }
+                let mut attempt = Vec::new();
+                if let Ok(result) = self.plan_type(value.clone(), option, unit, &mut attempt) {
+                    pending.append(&mut attempt);
+                    return Ok(result);
+                }
             }
             return type_err(format!("value does not match {ty}"));
         }
@@ -695,19 +753,15 @@ impl<'o> Interp<'o> {
                 _ => type_err("expected float"),
             },
             "string" => match value { Value::Str(_) => Ok(value), _ => type_err("expected string") },
-            _ => {
-                if let Some((kind, args)) = collection_type(ty) {
-                    return self.typed_collection(value, ty, kind, args);
-                }
-                match &value {
-                    Value::Instance(instance) if instance.family.name == ty => Ok(value),
-                    _ => type_err(format!("unknown or mismatched type {ty}")),
-                }
-            }
+            _ => match collection_type(ty) {
+                Some((kind, args)) => self.plan_collection(value, ty, kind, args, unit, pending),
+                None => self.instance_of(value, ty, unit),
+            },
         }
     }
 
-    fn typed_collection(&mut self, value: Value, ty: &str, kind: &str, args: Option<&str>) -> RResult<Value> {
+    fn plan_collection(&mut self, value: Value, ty: &str, kind: &str, args: Option<&str>, unit: usize,
+                       pending: &mut Vec<Restriction>) -> RResult<Value> {
         let matches = matches!((&value, kind), (Value::Array(_), "array") | (Value::Set(_), "set")
             | (Value::Pair(_), "pair") | (Value::Map(_), "map"));
         if !matches { return type_err(format!("expected {kind}")); }
@@ -718,7 +772,6 @@ impl<'o> Interp<'o> {
         }
         let meta = value.meta().unwrap();
         let frozen = meta.frozen.get();
-        // Validate every element first; converting a fixed container's numeric kind is a mutation.
         let parts: Vec<(Value, usize)> = match &value {
             Value::Array(a) => a.items.borrow().iter().map(|v| (v.clone(), 0)).collect(),
             Value::Set(s) => s.items.borrow().values().map(|v| (v.clone(), 0)).collect(),
@@ -727,41 +780,82 @@ impl<'o> Interp<'o> {
             _ => unreachable!(),
         };
         for (item, part) in parts {
-            let converted = self.typed(item.clone(), &args[part])?;
+            let converted = self.plan_type(item.clone(), &args[part], unit, pending)?;
+            // Converting a fixed container's numeric kind would be a mutation.
             if frozen && converted.num_kind() != item.num_kind() { mutable(meta)?; }
         }
-        meta.restrictions.borrow_mut().push(args);
-        match &value {
+        pending.push(Restriction { target: value.clone(), args, unit });
+        Ok(value)
+    }
+
+    /// Record a planned restriction and convert the container's elements to it.
+    fn restrict(&mut self, restriction: Restriction) -> RResult<()> {
+        let Restriction { target, args, unit } = restriction;
+        let meta = target.meta().unwrap();
+        meta.restrictions.borrow_mut().push((args, unit));
+        match &target {
             Value::Array(a) => {
                 let items = a.items.borrow().clone();
-                let items = items.into_iter().map(|v| self.check(meta, v, 0)).collect::<RResult<Vec<_>>>()?;
+                let items = items.into_iter().map(|v| self.convert(meta, v, 0)).collect::<RResult<Vec<_>>>()?;
                 *a.items.borrow_mut() = items;
             }
             Value::Set(s) => {
                 let items: Vec<Value> = s.items.borrow().values().cloned().collect();
                 let mut rebuilt = IndexMap::new();
-                for v in items { let v = self.check(meta, v, 0)?; rebuilt.entry(Key::of(&v)).or_insert(v); }
+                for v in items { let v = self.convert(meta, v, 0)?; rebuilt.entry(Key::of(&v)).or_insert(v); }
                 *s.items.borrow_mut() = rebuilt;
             }
             Value::Map(m) => {
                 let entries: Vec<(Value, Value)> = m.items.borrow().values().cloned().collect();
                 let mut rebuilt = IndexMap::new();
                 for (k, v) in entries {
-                    let k = self.check(meta, k, 0)?;
-                    let v = self.check(meta, v, 1)?;
+                    let k = self.convert(meta, k, 0)?;
+                    let v = self.convert(meta, v, 1)?;
                     rebuilt.insert(Key::of(&k), (k, v));
                 }
                 *m.items.borrow_mut() = rebuilt;
             }
             Value::Pair(p) => {
-                let first = self.check(meta, p.first.borrow().clone(), 0)?;
-                let second = self.check(meta, p.second.borrow().clone(), 1)?;
+                let first = self.convert(meta, p.first.borrow().clone(), 0)?;
+                let second = self.convert(meta, p.second.borrow().clone(), 1)?;
                 if first.num_kind() != p.first.borrow().num_kind() { mutable(meta)?; *p.first.borrow_mut() = first; }
                 if second.num_kind() != p.second.borrow().num_kind() { mutable(meta)?; *p.second.borrow_mut() = second; }
             }
             _ => unreachable!(),
         }
+        Ok(())
+    }
+
+    /// Convert an element through all of a container's restrictions. Nested
+    /// containers already received their own restrictions from the same plan.
+    fn convert(&mut self, meta: &Meta, mut value: Value, part: usize) -> RResult<Value> {
+        let restrictions = meta.restrictions.borrow().clone();
+        for (args, unit) in restrictions.iter() { value = self.plan_type(value, &args[part], *unit, &mut Vec::new())?; }
         Ok(value)
+    }
+
+    /// A family annotation: the family declared in `unit` (or `alias.Family` from
+    /// a package it imports), matching that family or any family inheriting from it.
+    fn instance_of(&self, value: Value, ty: &str, unit: usize) -> RResult<Value> {
+        let family = match ty.split_once('.') {
+            Some((alias, name)) => match self.units[unit].imports.borrow().get(alias) {
+                Some(Value::Package(package)) => match package.members.get(name) {
+                    Some(Value::Func(f)) => match f.as_ref() { Callable::Family(family) => Some(family.clone()), _ => None },
+                    _ => None,
+                },
+                _ => None,
+            },
+            None => self.units[unit].families.get(ty).cloned(),
+        };
+        let Some(family) = family else { return type_err(format!("unknown type {ty}")) };
+        if let Value::Instance(instance) = &value {
+            let mut current = Some(instance.family.clone());
+            while let Some(candidate) = current {
+                if Rc::ptr_eq(&candidate, &family) { return Ok(value); }
+                current = candidate.parent.clone();
+            }
+        }
+        type_err(format!("expected {ty}"))
     }
 
     // ----- arithmetic -----
@@ -1088,51 +1182,51 @@ fn deep_copy(value: &Value, seen: &mut HashMap<usize, Value>) -> Value {
     let id = value.object_id().unwrap();
     if let Some(copy) = seen.get(&id) { return copy.clone(); }
     let meta = value.meta().unwrap().inherit();
-    match value {
-        Value::Array(a) => {
-            let copy = Rc::new(Array { items: RefCell::new(Vec::new()), meta });
-            seen.insert(id, Value::Array(copy.clone()));
-            let items: Vec<Value> = a.items.borrow().iter().map(|v| deep_copy(v, seen)).collect();
-            *copy.items.borrow_mut() = items;
-            Value::Array(copy)
+    let copy = match value {
+        Value::Array(_) => Value::new_array(Vec::new(), meta),
+        Value::Set(_) => Value::new_set(IndexMap::new(), meta),
+        Value::Map(_) => Value::new_map(IndexMap::new(), meta),
+        Value::Pair(_) => Value::new_pair(Value::Null, Value::Null, meta),
+        Value::Instance(o) => Value::new_instance(o.family.clone(), meta),
+        _ => return value.clone(),
+    };
+    // Register the copy before its contents, so cycles and shared parts map to it.
+    seen.insert(id, copy.clone());
+    match (value, &copy) {
+        (Value::Array(a), Value::Array(c)) => {
+            let items: Vec<Value> = a.items.borrow().clone();
+            let items = items.iter().map(|v| deep_copy(v, seen)).collect();
+            *c.items.borrow_mut() = items;
         }
-        Value::Set(s) => {
-            let copy = Rc::new(Set { items: RefCell::new(IndexMap::new()), meta });
-            seen.insert(id, Value::Set(copy.clone()));
-            let items: Vec<Value> = s.items.borrow().values().map(|v| deep_copy(v, seen)).collect();
-            for v in items { copy.items.borrow_mut().entry(Key::of(&v)).or_insert(v); }
-            Value::Set(copy)
+        (Value::Set(s), Value::Set(c)) => {
+            let items: Vec<Value> = s.items.borrow().values().cloned().collect();
+            for v in items {
+                let v = deep_copy(&v, seen);
+                c.items.borrow_mut().entry(Key::of(&v)).or_insert(v);
+            }
         }
-        Value::Map(m) => {
-            let copy = Rc::new(Map { items: RefCell::new(IndexMap::new()), meta });
-            seen.insert(id, Value::Map(copy.clone()));
+        (Value::Map(m), Value::Map(c)) => {
             let entries: Vec<(Value, Value)> = m.items.borrow().values().cloned().collect();
             for (k, v) in entries {
                 let (k, v) = (deep_copy(&k, seen), deep_copy(&v, seen));
-                copy.items.borrow_mut().insert(Key::of(&k), (k, v));
+                c.items.borrow_mut().insert(Key::of(&k), (k, v));
             }
-            Value::Map(copy)
         }
-        Value::Pair(p) => {
-            let copy = Rc::new(Pair { first: RefCell::new(Value::Null), second: RefCell::new(Value::Null), meta });
-            seen.insert(id, Value::Pair(copy.clone()));
+        (Value::Pair(p), Value::Pair(c)) => {
             let (first, second) = (p.first.borrow().clone(), p.second.borrow().clone());
-            *copy.first.borrow_mut() = deep_copy(&first, seen);
-            *copy.second.borrow_mut() = deep_copy(&second, seen);
-            Value::Pair(copy)
+            *c.first.borrow_mut() = deep_copy(&first, seen);
+            *c.second.borrow_mut() = deep_copy(&second, seen);
         }
-        Value::Instance(o) => {
-            let copy = Rc::new(Instance { family: o.family.clone(), fields: RefCell::new(IndexMap::new()), meta });
-            seen.insert(id, Value::Instance(copy.clone()));
+        (Value::Instance(o), Value::Instance(c)) => {
             let fields: Vec<(Rc<str>, Value)> = o.fields.borrow().iter().map(|(k, v)| (k.clone(), v.clone())).collect();
             for (k, v) in fields {
                 let v = deep_copy(&v, seen);
-                copy.fields.borrow_mut().insert(k, v);
+                c.fields.borrow_mut().insert(k, v);
             }
-            Value::Instance(copy)
         }
-        _ => value.clone(),
+        _ => unreachable!("copy has the same kind as the original"),
     }
+    copy
 }
 
 fn split_types(text: &str) -> Vec<String> {
