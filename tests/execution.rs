@@ -525,3 +525,131 @@ fn fixed_numeric_containers_keep_their_value_kinds() {
         runtime_error(&format!("func m{{fixed a={value};b ({ty})=a;}}"), "cannot mutate fixed");
     }
 }
+
+#[test]
+fn math_constants_are_float_values_and_read_only() {
+    executes(r#"takepkg std.math;func m{
+        out(math.PI);out(math.E);out(math.TAU);out(math.SQRT2);out(math.LN2);out(math.LN10);
+        out(math.min(math.PI,4.0));out(math.TAU==math.PI*2.0);
+    }"#, "3.141592653589793\n2.718281828459045\n6.283185307179586\n1.4142135623730951\n0.6931471805599453\n2.302585092994046\n3.141592653589793\ntrue\n");
+    runtime_error("takepkg std.math;func m{math.PI=3.0;}","TypeError:");
+}
+
+#[test]
+fn float_infinity_conversion_and_classification_without_a_keyword() {
+    executes(r#"takepkg std.math;func m{
+        inf=7;out(inf);
+        for(x,arr(float("inf"),float("-inf"),float(" +INF "),float("Infinity"))){
+            out(math.is_inf(x));out(math.is_finite(x));out(math.is_nan(x));
+        }
+        n=float("nan");out(math.is_nan(n));out(math.is_inf(n));out(math.is_finite(n));
+        out(math.is_finite(1.0));out(math.is_finite(-0.0));
+        out(float("-inf")<0.0);out(float("inf")>0.0);
+    }"#, "7\ntrue\nfalse\nfalse\ntrue\nfalse\nfalse\ntrue\nfalse\nfalse\ntrue\nfalse\nfalse\ntrue\nfalse\nfalse\ntrue\ntrue\ntrue\ntrue\n");
+    assert!(marslang::compile_source_to_js("func m{out(inf);}").unwrap_err().contains("unknown name"));
+    runtime_error("takepkg std.math;func m{out(math.is_finite(1));}","requires float");
+}
+
+#[test]
+fn math_sign_helpers_and_signed_zero_contract() {
+    executes(r#"takepkg std.math;func m{
+        out(math.sign(-3));out(math.sign(0));out(math.sign(2.0));out(math.sign(longint(-5)));
+        out(math.sign(-0.0));out(math.signbit(-0.0));out(math.signbit(0.0));
+        out(math.signbit(math.copysign(1.0,-0.0)));out(math.copysign(-2,3));
+        out(math.copysign(-2147483648,-1));out(math.copysign(longint(-9223372036854775808),longint(-1)));
+        out(math.signbit(math.abs(-0.0)));
+        out(math.signbit(math.min(-0.0,0.0)));out(math.signbit(math.min(0.0,-0.0)));
+        out(math.signbit(math.max(-0.0,0.0)));out(math.signbit(math.max(0.0,-0.0)));
+        out(math.signbit(math.clamp(-0.0,-1.0,1.0)));
+    }"#, "-1\n0\n1\n-1\n0\ntrue\nfalse\ntrue\n2\n-2147483648\n-9223372036854775808\nfalse\ntrue\ntrue\nfalse\nfalse\ntrue\n");
+    runtime_error("takepkg std.math;func m{out(math.copysign(-2147483648,1));}","int overflow");
+    runtime_error("takepkg std.math;func m{out(math.copysign(longint(-9223372036854775808),longint(1)));}","longint overflow");
+}
+
+#[test]
+fn math_interpolation_extrapolation_and_angles() {
+    executes(r#"takepkg std.math;func m{
+        out(math.lerp(0.0,10.0,0.25));out(math.lerp(0.0,10.0,2.0));
+        out(math.inverse_lerp(0.0,10.0,2.5));out(math.inverse_lerp(10.0,0.0,2.5));
+        out(math.remap(5.0,0.0,10.0,0.0,100.0));out(math.remap(20.0,0.0,10.0,0.0,100.0));
+        out(math.step(2.0,1.0));out(math.step(2.0,2.0));out(math.step(2.0,3.0));
+        out(math.abs(math.radians(180.0)-math.PI)<1e-14);
+        out(math.abs(math.degrees(math.PI)-180.0)<1e-12);
+    }"#, "2.5\n20\n0.25\n0.75\n50\n200\n0\n1\n1\ntrue\ntrue\n");
+    runtime_error("takepkg std.math;func m{out(math.inverse_lerp(1.0,1.0,2.0));}","division by zero");
+    runtime_error("takepkg std.math;func m{out(math.remap(2.0,1.0,1.0,0.0,10.0));}","division by zero");
+    runtime_error("takepkg std.math;func m{out(math.inverse_lerp(-1e308,1e308,0.0));}","non-finite intermediate");
+}
+
+#[test]
+fn math_rounding_uses_half_even_and_retains_negative_zero() {
+    executes(r#"takepkg std.math;func m{
+        for(x,arr(2.5,3.5,-2.5,-3.5,2.49,2.51,4503599627370496.0)){out(math.round(x));}
+        out(math.floor(-1.2));out(math.ceil(-1.2));out(math.trunc(-1.2));
+        out(math.signbit(math.round(-0.5)));out(math.signbit(math.round(-0.1)));
+        out(math.signbit(math.trunc(-0.1)));out(math.signbit(math.ceil(-0.1)));
+        out(math.min(math.round(2.5),3.0));
+    }"#, "2\n4\n-2\n-4\n2\n3\n4503599627370496\n-2\n-1\n-1\ntrue\ntrue\ntrue\ntrue\n2\n");
+}
+
+#[test]
+fn math_powers_roots_and_stable_hypot() {
+    executes(r#"takepkg std.math;func m{
+        out(math.sqrt(9.0));out(math.cbrt(-8.0));out(math.hypot(3.0,4.0));
+        out(math.pow(2,10));out(math.pow(-2,31));out(math.pow(longint(-2),longint(63)));
+        out(math.pow(longint(1),longint(9223372036854775807)));out(math.pow(0,0));
+        out(math.pow(2.0,-2.0));out(math.min(math.pow(2.0,3.0),10.0));
+        out(math.abs(math.hypot(1e308,1e308)/1e308-math.SQRT2)<1e-14);
+        out(math.abs(math.hypot(1e-300,1e-300)/1e-300-math.SQRT2)<1e-14);
+    }"#, "3\n-2\n5\n1024\n-2147483648\n-9223372036854775808\n1\n1\n0.25\n8\ntrue\ntrue\n");
+    for expression in ["math.pow(2,31)","math.pow(longint(2),longint(63))", "math.pow(2,2147483647)"] {
+        runtime_error(&format!("takepkg std.math;func m{{out({expression});}}"),"overflow");
+    }
+    runtime_error("takepkg std.math;func m{out(math.pow(2,-1));}","nonnegative");
+}
+
+#[test]
+fn math_logs_exponentials_and_trig() {
+    executes(r#"takepkg std.math;func m{
+        out(math.exp(0.0));out(math.exp2(3.0));out(math.ln(1.0));
+        out(math.log2(8.0));out(math.log10(100.0));out(math.log(8.0,2.0));
+        out(math.abs(math.expm1(1e-16)-1e-16)<1e-30);
+        out(math.abs(math.log1p(1e-16)-1e-16)<1e-30);
+        out(math.sin(0.0));out(math.cos(0.0));out(math.tan(0.0));
+        out(math.asin(0.0));out(math.acos(1.0));out(math.atan(0.0));
+        out(math.abs(math.atan2(1.0,0.0)-math.PI/2.0)<1e-14);
+        out(math.abs(math.atan2(-1.0,-1.0)+math.PI*0.75)<1e-14);
+        out(math.sinh(0.0));out(math.cosh(0.0));out(math.tanh(0.0));
+    }"#, "1\n8\n0\n3\n2\n3\ntrue\ntrue\n0\n1\n0\n0\n0\n0\ntrue\ntrue\n0\n1\n0\n");
+}
+
+#[test]
+fn math_domains_nonfinite_inputs_and_results_raise_errors() {
+    for expression in ["math.sqrt(-1.0)","math.ln(0.0)","math.ln(-1.0)",
+        "math.log2(0.0)","math.log10(-1.0)","math.log1p(-1.0)","math.log1p(-2.0)",
+        "math.asin(2.0)","math.acos(-2.0)","math.log(1.0,1.0)","math.log(0.0,2.0)",
+        "math.log(2.0,-1.0)","math.pow(-1.0,0.5)","math.pow(0.0,-1.0)",
+        "math.exp(1000.0)","math.exp2(1024.0)","math.cosh(1000.0)",
+        "math.hypot(1.7e308,1.7e308)","math.degrees(1e308)",
+        "math.min(float(\"nan\"),1.0)","math.max(1.0,float(\"nan\"))",
+        "math.clamp(1.0,0.0,float(\"nan\"))", "math.sign(float(\"inf\"))",
+        "math.floor(float(\"inf\"))", "math.sin(float(\"-inf\"))"] {
+        runtime_error(&format!("takepkg std.math;func m{{out({expression});}}"),"RangeError:");
+    }
+}
+
+#[test]
+fn expanded_math_checks_float_types_arity_and_first_class_calls() {
+    for (name,arity) in [("floor",1),("ceil",1),("round",1),("trunc",1),("sqrt",1),("cbrt",1),
+        ("hypot",2),("exp",1),("exp2",1),("ln",1),("log2",1),("log10",1),("log",2),
+        ("expm1",1),("log1p",1),("sin",1),("cos",1),("tan",1),("asin",1),("acos",1),
+        ("atan",1),("atan2",2),("sinh",1),("cosh",1),("tanh",1),("radians",1),("degrees",1),
+        ("lerp",3),("inverse_lerp",3),("remap",5),("step",2),("is_nan",1),("is_inf",1),("is_finite",1)] {
+        let args=vec!["1";arity].join(",");
+        runtime_error(&format!("takepkg std.math;func m{{math.{name}({args});}}"),"requires float");
+        runtime_error(&format!("takepkg std.math;func m{{math.{name}();}}"),"expects");
+    }
+    executes("takepkg std.math = calc;func m{f=calc.sqrt;out(f(4.0));g=calc.round;out(g(2.5));}","2\n2\n");
+    runtime_error("takepkg std.math;func m{out(math.pow(2.0,2));}","matching numeric types");
+    runtime_error("takepkg std.math;func m{out(math.copysign(2,2.0));}","matching numeric types");
+}

@@ -29,6 +29,13 @@ pub(crate) fn prepare(program: &mut Program) -> Result<String, String> {
     if !math { return Ok(String::new()); }
     let mut module = crate::parser::parse_program(include_str!("../std/math.mars"))
         .map_err(|e| format!("std.math: {e}"))?;
+    let constant_names: Vec<_> = module.items.iter().enumerate().filter_map(|(index,item)| {
+        if let Item::Var(v) = item { Some((index,v.name.clone())) } else { None }
+    }).collect();
     crate::resolve::resolve(&mut module).map_err(|e| format!("std.math: {e}"))?;
-    Ok(crate::eval::compile_math_module(&module))
+    let constants: Vec<_> = constant_names.into_iter().map(|(index,export)| {
+        let Item::Var(v) = &module.items[index] else { unreachable!("library constant remains a declaration") };
+        (export,v.name.clone())
+    }).collect();
+    Ok(crate::eval::compile_math_module(&module, &constants))
 }

@@ -1,7 +1,7 @@
 # Marslang language and API reference
 
-This reference describes the Rust-to-JavaScript release `rs-0.5.0`,
-including dynamic numeric type tracking and the first bundled `std.math` package.
+This reference describes the Rust-to-JavaScript working tree after `rs-0.5.0`,
+including dynamic numeric type tracking and the expanded `std.math` package.
 The source extension is `.mars`; earlier releases used `.mrs`.
 Use the matching source checkout for the filenames documented here.
 These API documents and release notes are eligible for Git tracking. Discussion
@@ -13,7 +13,7 @@ notes elsewhere under `docs/` remain local.
 - [Strings and slicing](strings.md): Unicode characters, reversal, and strict bounds.
 - [Collections](collections.md): arrays, sets, pairs, maps, and copying.
 - [Built-ins and errors](builtins.md): input/output, conversions, and runtime errors.
-- [std.math](std-math.md): min, max, abs, and clamp, implemented in Marslang.
+- [std.math](std-math.md): 42 math functions and six constants, with Marslang algorithms and host numeric primitives.
 
 ## Compile and run
 

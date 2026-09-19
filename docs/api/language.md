@@ -101,6 +101,9 @@ grouped using `also`, for example `for ((i=0 also j=0),i<3,(i++ also j++)){...}`
 False values are `false`, `null`, and numeric zero. Empty strings and containers
 are truthy. `fasle` is an accepted alias of `false`.
 
+`inf` is not a keyword. Use `float("inf")`, `float("-inf")`, or `float("nan")`
+for non-finite float values; see [math classification](std-math.md#infinity-nan-and-classification).
+
 ## Operators
 
 Arithmetic: `+`, `-`, `*`, `/`, `%`, `**`; unary `+` and `-`.

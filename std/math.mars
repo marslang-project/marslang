@@ -1,5 +1,12 @@
 // Bundled std.math algorithms. The host boundary checks arity, matching numeric
 // kinds, reversed clamp bounds, and overflow; algorithms remain Marslang code.
+fixed PI (float) = 3.141592653589793;
+fixed E (float) = 2.718281828459045;
+fixed TAU (float) = 6.283185307179586;
+fixed SQRT2 (float) = 1.4142135623730951;
+fixed LN2 (float) = 0.6931471805599453;
+fixed LN10 (float) = 2.302585092994046;
+
 func min([int,longint,float] a, [int,longint,float] b){
     if (a < b){ ret a; }
     ret b;
@@ -12,7 +19,9 @@ func max([int,longint,float] a, [int,longint,float] b){
 
 func abs([int,longint,float] value){
     // Produce zero of the same numeric kind without an implicit conversion.
-    if (value < value - value){ ret -value; }
+    zero = value - value;
+    if (value == zero){ ret zero; }
+    if (value < zero){ ret -value; }
     ret value;
 }
 
@@ -21,3 +30,27 @@ func clamp([int,longint,float] value, [int,longint,float] low, [int,longint,floa
     if (value > high){ ret high; }
     ret value;
 }
+
+func sign([int,longint,float] value){
+    zero = value - value;
+    if (value < zero){ ret -1; }
+    if (value > zero){ ret 1; }
+    ret 0;
+}
+
+func lerp(float a, float b, float t) => a + (b - a) * t;
+
+func inverse_lerp(float a, float b, float value) => (value - a) / (b - a);
+
+func remap(float value, float in_low, float in_high, float out_low, float out_high){
+    ret lerp(out_low, out_high, inverse_lerp(in_low, in_high, value));
+}
+
+func step(float edge, float x){
+    if (x < edge){ ret 0.0; }
+    ret 1.0;
+}
+
+func radians(float angle) => angle * (PI / 180.0);
+
+func degrees(float angle) => angle * (180.0 / PI);

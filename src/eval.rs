@@ -20,16 +20,26 @@ pub(crate) fn compile_with_libraries(program: &Program, libraries: &str) -> Stri
     emitter.emit_program(program, libraries)
 }
 
-pub(crate) fn compile_math_module(program: &Program) -> String {
+pub(crate) fn compile_math_module(program: &Program, constants: &[(String,String)]) -> String {
     let mut emitter = Emitter::new(HashSet::new());
     for item in &program.items {
         if let Item::Func(f) = item { emitter.declare(&f.name); }
     }
     let mut out = String::from("__mars.stdmath = (() => {\n");
     for item in &program.items { emitter.emit_item(item, 1, &mut out); }
-    out.push_str("return Object.freeze({\n");
-    for (name, arity) in [("min",2),("max",2),("abs",1),("clamp",3)] {
-        out.push_str(&format!("{name}: __mars.mathFunction({name:?}, {name}, {arity}),\n"));
+    out.push_str("return Object.freeze({\n...__mars.nativeMath(),\n");
+    for (export,binding) in constants {
+        out.push_str(&format!("{export}: {binding},\n"));
+    }
+    for (name, arity, input, result) in [
+        ("min",2,"same","same"),("max",2,"same","same"),
+        ("abs",1,"same","same"),("clamp",3,"same","same"),
+        ("sign",1,"same","int"),("lerp",3,"float","float"),
+        ("inverse_lerp",3,"float","float"),("remap",5,"float","float"),
+        ("step",2,"float","float"),("radians",1,"float","float"),
+        ("degrees",1,"float","float"),
+    ] {
+        out.push_str(&format!("{name}: __mars.mathFunction({name:?}, {name}, {arity}, {input:?}, {result:?}),\n"));
     }
     out.push_str("});\n})();\n");
     out

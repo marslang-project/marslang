@@ -12,6 +12,9 @@ Run `cargo test` for current coverage, including Node execution tests. All exist
 
 This release adds dynamically tracked numeric types and a Marslang-written
 [`std.math`](docs/api/std-math.md). The math API is an initial design and will expand.
+The working tree now expands it to 42 functions and six constants, with explicit
+float inputs, checked domains, half-to-even rounding, and `float("inf")` conversion
+instead of an infinity keyword.
 Decorators, deque, further standard
 libraries, complete module handling, and async remain pending. Maps, deep copies,
 and loop control are implemented. `:=` is excluded.

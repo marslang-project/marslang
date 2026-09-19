@@ -11,9 +11,17 @@ const __mars = (() => {
   }
   const isFloat = v => v !== null && typeof v === 'object' && floats.has(v);
   const raw = v => isFloat(v) ? floats.get(v) : v;
-  const float = v => new FloatValue(Number(raw(v)));
+  const float = v => {
+    v=raw(v);
+    if(typeof v === 'string') {
+      const text=v.trim().toLowerCase();
+      if(/^[+\-]?inf(?:inity)?$/.test(text)) v=text[0]==='-' ? -Infinity : Infinity;
+    }
+    return new FloatValue(Number(v));
+  };
   const numberKind = v => isFloat(v) ? 'float' : typeof v === 'bigint' ? 'longint' : typeof v === 'number' ? 'int' : null;
   const equal = (a,b) => raw(a) === raw(b);
+  let mathDepth = 0;
   let segmenter;
   function graphemes(value) {
     if (typeof Intl.Segmenter !== 'function') throw Error('Marslang Unicode strings require Intl.Segmenter support in Node');
@@ -216,10 +224,97 @@ const __mars = (() => {
     if (typeof a !== typeof b) throw TypeError('mixed longint/float arithmetic');
     if ((op === '/' || op === '%') && (b === 0 || b === 0n)) throw RangeError('division by zero');
     const result = op === '+' ? a+b : op === '-' ? a-b : op === '*' ? a*b : op === '/' ? a/b : op === '%' ? a%b : a**b;
+    if(mathDepth>0 && typeof result==='number' && !Number.isFinite(result)) throw RangeError('std.math non-finite intermediate result');
     if (typeof result === 'bigint') typed(result,'longint');
     if (!floating && typeof result === 'number' && Number.isSafeInteger(a) && Number.isSafeInteger(b) && Number.isInteger(result) && !Number.isSafeInteger(result)) throw RangeError('unsafe integer arithmetic; use longint');
     if (!floating && typeof result === 'number' && Number.isInteger(result)) typed(result,'int');
     return typeof result === 'number' && (floating || !Number.isInteger(result)) ? float(result) : result;
+  }
+  function mathFunction(name,fn,arity,input='same',output='same',allowNonFinite=false) {
+    return (...args) => {
+      if(args.length !== arity) throw TypeError('std.math.'+name+' expects '+arity+' arguments');
+      const kind=numberKind(args[0]);
+      if(!kind || args.some(v => numberKind(v)!==kind)) throw TypeError('std.math.'+name+' requires matching numeric types');
+      if(input==='float' && kind!=='float') throw TypeError('std.math.'+name+' requires float arguments');
+      args=args.map(v => typed(v,kind));
+      if(!allowNonFinite && kind==='float' && args.some(v => !Number.isFinite(raw(v)))) throw RangeError('std.math requires finite float values');
+      if(name==='clamp' && raw(args[1])>raw(args[2])) throw RangeError('std.math.clamp lower bound exceeds upper bound');
+      if(name==='abs' && ((kind==='int' && args[0]===-2147483648) || (kind==='longint' && args[0]===-9223372036854775808n))) throw RangeError(kind+' overflow');
+      let result;
+      mathDepth++;
+      try { result=fn(...args); } finally { mathDepth--; }
+      // Define float zero ties independently of argument order.
+      if(kind==='float' && (name==='min' || name==='max') && args.every(v => raw(v)===0)) {
+        result=float(name==='min' ? Math.min(...args.map(raw)) : Math.max(...args.map(raw)));
+      }
+      if(output==='bool') {
+        if(typeof result!=='boolean') throw TypeError('invalid math predicate result');
+        return result;
+      }
+      const resultKind=output==='same' ? kind : output;
+      result=typed(result,resultKind);
+      if(resultKind==='float' && !Number.isFinite(raw(result))) throw RangeError('std.math.'+name+' domain error or non-finite result');
+      return result;
+    };
+  }
+  function negativeSign(value) { return value < 0 || Object.is(value,-0); }
+  function copySign(x,y) {
+    const kind=numberKind(x), a=raw(x), b=raw(y);
+    if(kind==='float') return float(negativeSign(b) ? -Math.abs(a) : Math.abs(a));
+    const magnitude=BigInt(a)<0n ? -BigInt(a) : BigInt(a);
+    const result=b<0 ? -magnitude : magnitude;
+    return typed(kind==='int' ? Number(result) : result,kind);
+  }
+  function integerPower(base,exponent,kind) {
+    let power=BigInt(exponent), factor=BigInt(base), result=1n;
+    if(power<0n) throw RangeError('std.math.pow integer exponent must be nonnegative');
+    const magnitudeLimit=kind==='int' ? 2147483648n : 9223372036854775808n;
+    const bounded = value => {
+      if(value < -magnitudeLimit || value > magnitudeLimit) throw RangeError(kind+' overflow');
+      return value;
+    };
+    // Bound each intermediate: even a huge exponent cannot allocate a huge bigint.
+    while(power>0n) {
+      if(power%2n===1n) result=bounded(result*factor);
+      power/=2n;
+      if(power>0n) factor=bounded(factor*factor);
+    }
+    return typed(kind==='int' ? Number(result) : result,kind);
+  }
+  function roundEven(value) {
+    if(value===0 || Math.abs(value)>=4503599627370496) return value;
+    const lower=Math.floor(value), fraction=value-lower;
+    const rounded=fraction<0.5 ? lower : fraction>0.5 ? lower+1 : lower%2===0 ? lower : lower+1;
+    return rounded===0 && negativeSign(value) ? -0 : rounded;
+  }
+  function nativeMath() {
+    const exports={};
+    const floatFunction=(name,arity,fn) => {
+      exports[name]=mathFunction(name,(...args)=>float(fn(...args.map(raw))),arity,'float','float');
+    };
+    for(const name of ['floor','ceil','trunc','sqrt','cbrt','exp','expm1','log2','log10','log1p',
+        'sin','cos','tan','asin','acos','atan','sinh','cosh','tanh']) {
+      floatFunction(name,1,Math[name]);
+    }
+    floatFunction('round',1,roundEven);
+    floatFunction('exp2',1,x=>2**x);
+    floatFunction('ln',1,Math.log);
+    floatFunction('log',2,(x,base)=>{
+      if(x<=0 || base<=0 || base===1) throw RangeError('std.math.log invalid domain');
+      return Math.log(x)/Math.log(base);
+    });
+    floatFunction('hypot',2,Math.hypot);
+    floatFunction('atan2',2,Math.atan2);
+    exports.signbit=mathFunction('signbit',x=>negativeSign(raw(x)),1,'same','bool');
+    exports.copysign=mathFunction('copysign',copySign,2);
+    exports.pow=mathFunction('pow',(base,exponent)=>numberKind(base)==='float'
+      ? float(Math.pow(raw(base),raw(exponent))) : integerPower(base,exponent,numberKind(base)),2);
+    for(const [name,predicate] of [
+      ['is_nan',Number.isNaN],
+      ['is_inf',x=>x===Infinity || x===-Infinity],
+      ['is_finite',Number.isFinite],
+    ]) exports[name]=mathFunction(name,x=>predicate(raw(x)),1,'float','bool',true);
+    return exports;
   }
   return {
     typed, freeze, copy, setfield, truth, bin,
@@ -263,15 +358,6 @@ const __mars = (() => {
     map: () => new MMap(), dict: () => new MMap(),
     int: v => typed(Number(v),'int'), longint: v => typed(typeof v === 'string' ? BigInt(v) : v,'longint'),
     float, string: v => String(v),
-    mathFunction: (name,fn,arity) => (...args) => {
-      if(args.length !== arity) throw TypeError('std.math.'+name+' expects '+arity+' arguments');
-      const kind=numberKind(args[0]);
-      if(!kind || args.some(v => numberKind(v)!==kind)) throw TypeError('std.math.'+name+' requires matching numeric types');
-      args=args.map(v => typed(v,kind));
-      if(kind==='float' && args.some(v => !Number.isFinite(raw(v)))) throw RangeError('std.math requires finite float values');
-      if(name==='clamp' && raw(args[1])>raw(args[2])) throw RangeError('std.math.clamp lower bound exceeds upper bound');
-      if(name==='abs' && ((kind==='int' && args[0]===-2147483648) || (kind==='longint' && args[0]===-9223372036854775808n))) throw RangeError(kind+' overflow');
-      return typed(fn(...args),kind);
-    },
+    mathFunction, nativeMath,
   };
 })();

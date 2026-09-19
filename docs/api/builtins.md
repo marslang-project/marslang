@@ -19,13 +19,18 @@ format is not a stable serialization format.
 | --- | --- |
 | `int(value)` | Convert to a number, then require an integer within signed 32-bit bounds |
 | `longint(value)` | Require an exact signed 64-bit integer; decimal integer strings are accepted |
-| `float(value)` | Convert using the bootstrap backend's numeric conversion |
+| `float(value)` | Convert to float, including `"inf"`, `"-inf"`, and `"nan"` strings |
 | `string(value)` | Convert using the bootstrap backend's string conversion |
 | `value.copy()` | Deep-copy containers/objects; immutable scalar values are returned as values |
 
 Prefer decimal strings for converting very large numbers to `longint`, so they
 cannot be rounded before conversion. Full conversion semantics, including all
 invalid-string cases, are not yet a portable language contract.
+
+There is no `inf` keyword. Use `float("inf")` or `float("-inf")` to construct
+infinity. Infinity spellings accept either case, surrounding whitespace, and
+`inf`/`infinity` with an optional sign. [std.math](std-math.md) provides float
+classification helpers; its arithmetic functions require finite inputs/results.
 
 Constructors `arr`, `set`, `pair`, `map`, and `dict` are documented in
 [Collections](collections.md).

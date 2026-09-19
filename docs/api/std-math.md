@@ -4,6 +4,8 @@ Introduced in `rs-0.5.0`. This is an initial, provisional package design, not th
 complete math library. More functions and numeric facilities will be added;
 APIs may be refined as the language develops.
 
+The working tree after rs-0.5.0 expands this to **42 functions and six constants**.
+
 ```mars
 takepkg std.math;
 
@@ -18,7 +20,14 @@ func m{
 
 Output: `3`, `7`, `5`, `10`, `1`, each on its own line.
 
-## Functions
+## Constants
+
+Added in the working tree after rs-0.5.0: `math.PI`, `math.E`, `math.TAU`,
+`math.SQRT2`, `math.LN2`, and `math.LN10`. These are read-only float values, accessed
+without parentheses. They use the backend's binary64 precision. `TAU` is twice PI;
+`LN2` and `LN10` are natural logarithms. INF and NAN constants are not provided yet.
+
+## Original functions
 
 | Function | Result |
 | --- | --- |
@@ -27,7 +36,7 @@ Output: `3`, `7`, `5`, `10`, `1`, each on its own line.
 | `abs(value)` | Absolute value |
 | `clamp(value,low,high)` | Value constrained to the inclusive interval `[low,high]` |
 
-Each function accepts `int`, `longint`, or finite `float` values and returns the
+Each function above accepts `int`, `longint`, or finite `float` values and returns the
 same numeric type. Multi-argument calls require matching types. The exact argument
 counts shown above are required. Wrong argument types/counts raise `TypeError`.
 
@@ -38,8 +47,120 @@ and family fields, even when a float has an integral value.
 
 `clamp` raises `RangeError` when `low > high`. Integer arguments/results must fit
 their signed 32-bit or 64-bit range. `abs(-2147483648)` and the corresponding
-minimum `longint` raise overflow errors. Non-finite floats raise `RangeError`;
-infinity/NaN behavior for this package is deferred.
+minimum `longint` raise overflow errors. Non-finite floats, including NaN in any
+argument of min/max/clamp, raise `RangeError`. Float zero ties are order-independent:
+min chooses negative zero if either argument is negative zero, and max chooses
+positive zero if either is positive zero. Abs returns positive zero. Clamp keeps
+the input's zero sign when no bound replacement is needed.
+
+## Shared rules for the expansion
+
+Float-only functions reject integer arguments: use `float(value)` explicitly.
+All arguments must be finite except for the three classification helpers. Invalid
+domains, zero divisors, integer overflow, and non-finite results raise `RangeError`.
+Non-finite arithmetic intermediates in the Marslang algorithms also raise errors.
+Floating-point underflow to a finite subnormal or zero is allowed.
+
+The signatures below specify exact argument counts. Wrong counts, wrong types,
+or mixed numeric kinds raise `TypeError`. Angles for trig functions are in radians.
+
+## Sign helpers
+
+| Function | Input and result |
+| --- | --- |
+| `sign(x)` | Any finite numeric kind; returns int `-1`, `0`, or `1`; both zero signs return `0` |
+| `signbit(x)` | Any finite numeric kind; returns boolean, true for negative values including float `-0.0` |
+| `copysign(x,y)` | Matching numeric kinds; returns magnitude of x with y's sign, preserving the kind |
+
+Integers have no negative zero. `copysign(INT_MIN,negative)` is valid, while
+requesting a positive result that cannot fit raises overflow. Float copysign
+uses y's zero sign and retains a zero magnitude when x is zero.
+
+## Interpolation and angles
+
+All arguments and results in this section are floats.
+
+| Function | Definition |
+| --- | --- |
+| `lerp(a,b,t)` | `a + (b-a)*t`; allows extrapolation outside t in `[0,1]` |
+| `inverse_lerp(a,b,value)` | `(value-a)/(b-a)`; a equal to b raises an error |
+| `remap(value,in_low,in_high,out_low,out_high)` | Interpolate between output bounds using the input fraction; equal input bounds raise an error |
+| `step(edge,x)` | `0.0` when x is below edge, otherwise `1.0` |
+| `radians(degrees)` / `degrees(radians)` | Convert angles |
+
+Inverse interpolation and remapping allow reversed intervals and extrapolation;
+they do not clamp. Their direct formulas can overflow on extreme finite inputs,
+in which case they raise an error rather than silently return a non-finite result.
+
+## Rounding
+
+All four functions accept one float and return a float, even for integral results.
+
+| Function | Behavior |
+| --- | --- |
+| `floor(x)` | Round toward negative infinity |
+| `ceil(x)` | Round toward positive infinity |
+| `trunc(x)` | Discard the fractional part, toward zero |
+| `round(x)` | Nearest integer, with exact half ties going to the even integer |
+
+Examples: `round(2.5)` is `2.0`, `round(3.5)` is `4.0`, and `round(-2.5)` is `-2.0`.
+Negative inputs that round to zero keep negative zero; inspect it using `signbit`.
+
+## Powers and roots
+
+| Function | Types and behavior |
+| --- | --- |
+| `sqrt(x)` | Float to float; negative x raises an error |
+| `cbrt(x)` | Float to float; negative inputs are supported |
+| `hypot(a,b)` | Two floats to float; stable Euclidean magnitude using the host primitive |
+| `pow(base,exponent)` | Matching numeric kinds; preserves the kind |
+
+Integer pow requires a nonnegative exponent and computes exact integer powers
+with checked, bounded intermediates. Large exponents cannot create arbitrarily
+large temporary integers. Float pow permits negative exponents and rejects
+undefined real-valued results or overflow. Zero to the zero power returns one of
+the input kind. A negative base with a fractional float exponent raises an error.
+
+## Exponentials and logarithms
+
+All arguments/results are floats. These use host numeric primitives.
+
+| Function | Behavior/domain |
+| --- | --- |
+| `exp(x)` / `exp2(x)` | e to the x / 2 to the x |
+| `ln(x)` / `log2(x)` / `log10(x)` | Natural / base-2 / base-10 logarithm; x must be positive |
+| `log(x,base)` | Arbitrary-base logarithm; x and base positive, base unequal to one |
+| `expm1(x)` | Accurate exp(x) minus one for small x |
+| `log1p(x)` | Accurate ln(1+x) for small x; x must exceed -1 |
+
+## Trigonometry
+
+All inputs/results are floats; angles use radians.
+
+| Functions | Behavior/domain |
+| --- | --- |
+| `sin(x)`, `cos(x)`, `tan(x)` | Standard trigonometric functions |
+| `asin(x)`, `acos(x)` | Inverse sine/cosine; x in `[-1,1]` |
+| `atan(x)` | Inverse tangent |
+| `atan2(y,x)` | Quadrant-aware angle; note y comes first; signed-zero behavior follows the host primitive |
+| `sinh(x)`, `cosh(x)`, `tanh(x)` | Hyperbolic functions |
+
+## Infinity, NaN, and classification
+
+There is **no `inf` keyword**. Construct float values using `float("inf")`,
+`float("-inf")`, or `float("nan")`. Infinity spellings are case-insensitive,
+accept surrounding whitespace, and support `inf`/`infinity` with an optional sign.
+There are no `math.INF` or `math.NAN` constants.
+
+| Function | Result |
+| --- | --- |
+| `is_nan(x)` | Whether float x is NaN |
+| `is_inf(x)` | Whether float x is positive or negative infinity |
+| `is_finite(x)` | Whether float x is neither infinity nor NaN |
+
+These three functions require float inputs and return booleans. They are the
+exception to the package's finite-input rule. Constructing infinity is supported;
+passing it to arithmetic functions such as `math.sin` still raises an error.
 
 ## Importing and passing functions
 
@@ -61,9 +182,13 @@ wildcard imports, and other standard packages remain pending.
 
 ## Implementation
 
-The algorithms live in [std/math.mars](../../std/math.mars). Rust compiles that
-source using the same parser/resolver/emitter as user code. The Node runtime checks
-the numeric contract at the package boundary. The package shares the program's
-runtime; it does not load a second copy of the collection or numeric machinery.
+The basic algorithms live in [std/math.mars](../../std/math.mars). Rust compiles
+that source using the same parser/resolver/emitter as user code. Rounding, roots,
+transcendentals, sign-bit operations, and checked integer pow use host helpers in
+the Node runtime. The runtime also checks the numeric contract at the package
+boundary. All exports share the program's runtime.
 
-Decimal, fraction, and additional mathematics APIs remain future work.
+Integer helpers (gcd/lcm and division helpers), combinatorics, approximate equality,
+adjacent-float operations, decimal/fraction, and the optional convenience functions
+from the expansion proposal remain future work. Package boundaries for statistics,
+random generation, complex numbers, and linear algebra remain unchanged.
