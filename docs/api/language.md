@@ -34,7 +34,8 @@ Place `fixed` before `hot` or `cold` when combining modifiers. The keyword is
 fixed status. `.copy()` creates a mutable deep copy of a container.
 
 Supported runtime types include `int` (signed 32-bit), `longint` (signed 64-bit),
-`float`, `string`, `array`, `set`, `pair`, and `map`/`dict`. Collection restrictions
+`float`, `string`, `array`, `set`, `pair`, and `map`/`dict`. `any` accepts every
+value, for parameters that work with anything, such as `func push(any item)`. Collection restrictions
 use forms such as `array[int]`, `pair[string,int]`, and `map[string,int]`.
 This is runtime checking, not a complete static type system.
 
@@ -111,6 +112,52 @@ are truthy. `fasle` is an accepted alias of `false`.
 `inf` is not a keyword. Use `float("inf")`, `float("-inf")`, or `float("nan")`
 for non-finite float values; see [math classification](std-math.md#infinity-nan-and-classification).
 
+## Error handling
+
+```mars
+family ParseError(Error){}
+
+func parse(string text){
+    if (text == ""){ err(ParseError, "empty input"); }
+    ret text;
+}
+
+func m{
+    run{
+        parse("");
+    } handle(ParseError e){
+        out(e.message);            // empty input
+    } handle(TypeError, RangeError){
+        out("a built-in error");
+    } then{
+        out("always runs");
+    }
+}
+```
+
+Errors are families. `Error` is the base family, and `TypeError`, `RangeError`,
+`OutOfBoundsError`, and `SyntaxError` inherit from it. Declare your own with
+`family Name(Error){}` or inherit from a built-in kind. Every error has a `message`
+field and prints as `Name: message`.
+
+| Form | Meaning |
+| --- | --- |
+| `err(Family, message)` | Raise a new error of that family |
+| `err(e)` | Raise a caught error again |
+| `handle(Type e){...}` | Catch `Type` or any family inheriting from it, bound to `e` |
+| `handle([Type1, Type2] e){...}` | Catch any listed family, bound to `e` |
+| `handle(Type1, Type2){...}` | Catch any listed family without a name |
+| `then{...}` | Optional cleanup |
+| `lasterr()` | The most recently handled error, or `null` |
+
+`run` needs at least one `handle` or a `then`. Handlers are checked top to bottom
+and the first match runs; unmatched errors continue outward. `then` always runs
+last: after the body, after a handler, while an unhandled error propagates, and when
+the block exits early with `ret`, `break`, or `continue`. An error, `ret`, `break`,
+or `continue` inside `then` replaces the pending outcome. Errors raised by the
+interpreter itself, such as division by zero, are caught the same way. Use
+`alias.Family` to name an error family from a package.
+
 ## Operators
 
 Arithmetic: `+`, `-`, `*`, `/`, `%`, `**`; unary `+` and `-`.
@@ -159,5 +206,5 @@ cannot express (platform float functions, raising a named error, reading a value
 kind) come from native packages written in Rust under `std/rs/`, imported as
 `takepkg rs.NAME;`. Only standard packages may import `rs.*` packages.
 
-Decorators, async, `match`, and `run/handle/then` are pending. `:=` and native bitwise
+Decorators, async, and `match` are pending. `:=` and native bitwise
 operators are excluded. Proposed syntax is not an implemented API.

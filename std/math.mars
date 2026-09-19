@@ -28,6 +28,9 @@ func _kind(string name, array args, string input){
     if (input == "float" and kind != "float"){
         core.raise("TypeError", "std.math." + name + " requires float arguments");
     }
+    if (input == "integer" and kind == "float"){
+        core.raise("TypeError", "std.math." + name + " requires int or longint arguments");
+    }
     ret kind;
 }
 
@@ -279,3 +282,93 @@ func step([int,longint,float] edge, [int,longint,float] x){
 func is_nan([int,longint,float] x){ _kind("is_nan", arr(x), "float"); ret x != x; }
 func is_inf([int,longint,float] x){ _kind("is_inf", arr(x), "float"); ret x == _INF or x == -_INF; }
 func is_finite([int,longint,float] x){ _kind("is_finite", arr(x), "float"); ret _is_finite(x); }
+
+// ----- integers (int or longint; results keep the arguments' kind) -----
+
+func _gcd([int,longint] a, [int,longint] b){
+    a = _abs(a);
+    b = _abs(b);
+    while (b != 0){
+        rest = a % b;
+        a = b;
+        b = rest;
+    }
+    ret a;
+}
+
+// Greatest common divisor, never negative; gcd(0, 0) is 0.
+func gcd([int,longint,float] a, [int,longint,float] b){
+    _kind("gcd", arr(a, b), "integer");
+    ret _gcd(a, b);
+}
+
+// Least common multiple, never negative; 0 when either argument is 0.
+func lcm([int,longint,float] a, [int,longint,float] b){
+    _kind("lcm", arr(a, b), "integer");
+    if (a == 0 or b == 0){ ret a - a; }
+    ret _abs(a / _gcd(a, b) * b);
+}
+
+func is_even([int,longint,float] n){ _kind("is_even", arr(n), "integer"); ret n % 2 == 0; }
+func is_odd([int,longint,float] n){ _kind("is_odd", arr(n), "integer"); ret n % 2 != 0; }
+
+// Quotient rounded toward negative infinity.
+func div_floor([int,longint,float] a, [int,longint,float] b){
+    _kind("div_floor", arr(a, b), "integer");
+    if (b == 0){ core.raise("RangeError", "division by zero"); }
+    rest = a % b;
+    quotient = (a - rest) / b;
+    if (rest != 0 and (rest < 0) != (b < 0)){ ret quotient - 1; }
+    ret quotient;
+}
+
+// Quotient rounded toward positive infinity.
+func div_ceil([int,longint,float] a, [int,longint,float] b){
+    _kind("div_ceil", arr(a, b), "integer");
+    if (b == 0){ core.raise("RangeError", "division by zero"); }
+    rest = a % b;
+    quotient = (a - rest) / b;
+    if (rest != 0 and (rest < 0) == (b < 0)){ ret quotient + 1; }
+    ret quotient;
+}
+
+func _nonnegative(string name, [int,longint] n){
+    if (n < 0){ core.raise("RangeError", "std.math." + name + " requires nonnegative arguments"); }
+}
+
+// n! in n's kind; overflow raises the kind's overflow error.
+func factorial([int,longint,float] n){
+    _kind("factorial", arr(n), "integer");
+    _nonnegative("factorial", n);
+    result = n - n + 1;
+    for (i=2, i<=n, i++){ result = result * i; }
+    ret result;
+}
+
+// Ways to choose k of n items where order matters; 0 when k > n.
+func perm([int,longint,float] n, [int,longint,float] k){
+    _kind("perm", arr(n, k), "integer");
+    _nonnegative("perm", n);
+    _nonnegative("perm", k);
+    result = n - n + 1;
+    if (k > n){ ret result - 1; }
+    for (i=0, i<k, i++){ result = result * (n - i); }
+    ret result;
+}
+
+// Ways to choose k of n items ignoring order; 0 when k > n. Each step divides
+// out common factors first, so intermediates stay as small as the result allows.
+func comb([int,longint,float] n, [int,longint,float] k){
+    _kind("comb", arr(n, k), "integer");
+    _nonnegative("comb", n);
+    _nonnegative("comb", k);
+    result = n - n + 1;
+    if (k > n){ ret result - 1; }
+    if (k > n - k){ k = n - k; }
+    for (i=0, i<k, i++){
+        divisor = i + 1;
+        common = _gcd(result, divisor);
+        result = result / common * ((n - i) / (divisor / common));
+    }
+    ret result;
+}

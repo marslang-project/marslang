@@ -792,3 +792,193 @@ fn failed_union_alternatives_leave_values_unchanged() {
 fn member_call_target_is_chosen_before_arguments() {
     executes("family Holder{ func init{ me.f=first; } }\nfunc first(int x) => 1;\nfunc second(int x) => 2;\nfunc swap(Holder h){ h.f=second; ret 0; }\nfunc m{ h=Holder(); out(h.f(swap(h))); out(h.f(0)); }", "1\n2\n");
 }
+
+#[test]
+fn run_handle_catches_builtin_and_custom_errors() {
+    executes(r#"
+        family ParseError(Error){}
+        family BadArgument(TypeError){}
+        func parse(string text){
+            if (text == ""){ err(ParseError, "empty input"); }
+            ret text;
+        }
+        func m{
+            run{ x = 1 / 0; } handle(RangeError e){ out(e.message); }
+            run{ parse(""); } handle(ParseError e){ out(e.message); out(e); }
+            run{ int("x"); } handle(Error e){ out(e); }
+            run{ err(BadArgument, "custom kind"); } handle(TypeError e){ out(e); }
+            run{ arr(1).iget(5); } handle(TypeError, RangeError){ out("no name"); }
+            run{ "x" + 1; } handle([RangeError, TypeError] e){ out(e.message); }
+        }"#,
+        "division by zero\nempty input\nParseError: empty input\nTypeError: expected int\nBadArgument: custom kind\nno name\narithmetic requires numbers\n");
+}
+
+#[test]
+fn first_matching_handler_wins_and_unmatched_errors_propagate() {
+    executes(r#"
+        family ParseError(Error){}
+        func inner{
+            run{ err(ParseError, "deep"); } handle(RangeError){ out("wrong handler"); }
+        }
+        func m{
+            run{ err(ParseError, "first"); } handle(ParseError){ out("specific"); } handle(Error){ out("general"); }
+            run{ inner(); } handle(ParseError e){ out("outer caught " + e.message); }
+            run{
+                run{ err(ParseError, "again"); } handle(Error e){ err(e); }
+            } handle(ParseError e){ out("rethrown " + e.message); }
+        }"#, "specific\nouter caught deep\nrethrown again\n");
+    runtime_error("family ParseError(Error){}\nfunc m{ run{ err(ParseError, \"lost\"); } handle(RangeError){} }", "ParseError: lost");
+}
+
+#[test]
+fn then_always_runs() {
+    executes(r#"
+        func early(){
+            run{ ret "returned"; } then{ out("then after ret"); }
+        }
+        func m{
+            run{ out("body"); } then{ out("then after body"); }
+            run{ err(Error, "x"); } handle(Error){ out("handled"); } then{ out("then after handle"); }
+            out(early());
+            for(i=0,i<3,i++){
+                run{ if(i==1){ break; } } then{ out("then " + string(i)); }
+            }
+            run{
+                run{ err(RangeError, "passes through"); } then{ out("then while propagating"); }
+            } handle(RangeError e){ out(e.message); }
+        }"#,
+        "body\nthen after body\nhandled\nthen after handle\nthen after ret\nreturned\nthen 0\nthen 1\nthen while propagating\npasses through\n");
+    runtime_error("func m{ run{ err(Error, \"first\"); } then{ err(RangeError, \"from then\"); } }", "RangeError: from then");
+}
+
+#[test]
+fn lasterr_returns_the_most_recently_handled_error() {
+    executes(r#"func m{
+        out(lasterr());
+        run{ err(Error, "one"); } handle(Error){ out(lasterr().message); }
+        run{ 1 / 0; } handle(RangeError){}
+        out(lasterr());
+    }"#, "null\none\nRangeError: division by zero\n");
+}
+
+#[test]
+fn err_and_handle_reject_non_error_families() {
+    runtime_error("family Plain{}\nfunc m{ err(Plain, \"x\"); }", "Plain is not an error family");
+    runtime_error("func m{ err(\"just text\"); }", "err expects an error family");
+    runtime_error("family Plain{}\nfunc m{ run{ err(Error, \"x\"); } handle(Plain){} }", "Plain is not an error family");
+    runtime_error("func m{ run{ err(Error, \"x\"); } handle(Missing){} }", "unknown error type Missing");
+    for source in ["func m{ run{ out(1); } }", "func m{ run{} handle([Error]){} }", "func m{ run{} handle(){} }"] {
+        assert!(marslang::compile(source).is_err(), "accepted {source}");
+    }
+}
+
+#[test]
+fn packages_raise_errors_that_callers_can_handle() {
+    let dir = package_dir("package-errors-handle", &[
+        ("shapes.mars", "family ShapeError(Error){}\nfunc area(float r){ if (r < 0.0){ err(ShapeError, \"negative radius\"); } ret r * r; }"),
+        ("main.mars", "takepkg shapes;\nfunc m{ run{ shapes.area(-1.0); } handle(shapes.ShapeError e){ out(e); } }"),
+    ]);
+    let (out, result) = run_file(&dir.join("main.mars"));
+    result.expect("runtime error");
+    assert_eq!(out, "ShapeError: negative radius\n");
+}
+
+#[test]
+fn std_containers_stack_queue_deque_and_priority_queue() {
+    executes(r#"takepkg std.containers;
+        func m{
+            s = containers.stack();
+            s.push(1).push(2).push(3);
+            out(s.pop(), s.peek(), s.len(), s.items());
+            q = containers.queue();
+            repeat 20 { q.push("x"); }
+            q.push("last");
+            repeat 20 { q.pop(); }
+            out(q.pop(), q.pop(), q.is_empty());
+            d = containers.deque();
+            for (i=0, i<10, i++){ d.push_back(i); d.push_front(-i); }
+            out(d.pop_front(), d.pop_back(), d.peek_front(), d.peek_back(), d.len());
+            out(d.items().slice(0, 3));
+            pq = containers.priority_queue();
+            pq.push("low", 5).push("urgent", 1).push("first normal", 3).push("second normal", 3).push("mid", 2.5);
+            order = arr();
+            while (not pq.is_empty()){ order.add(pq.pop()); }
+            out(order);
+            out(pq.pop(), pq.peek());
+        }"#,
+        "3 2 2 [1, 2]\nlast null true\n-9 9 -8 8 18\n[-8, -7, -6]\n[\"urgent\", \"mid\", \"first normal\", \"second normal\", \"low\"]\nnull null\n");
+    runtime_error("takepkg std.containers;\nfunc m{ fixed s = containers.stack(); s.push(1); }", "cannot mutate fixed value");
+}
+
+#[test]
+fn std_math_integer_helpers_keep_integer_kinds() {
+    executes(r#"takepkg std.math;
+        func m{
+            out(math.gcd(12, 18), math.gcd(-12, 18), math.gcd(0, 0), math.gcd(longint(12), longint(8)));
+            out(math.lcm(4, 6), math.lcm(-4, 6), math.lcm(0, 5));
+            out(math.is_even(4), math.is_odd(-3), math.is_even(longint(7)));
+            out(math.div_floor(7, 2), math.div_floor(-7, 2), math.div_floor(7, -2), math.div_floor(-8, 2));
+            out(math.div_ceil(7, 2), math.div_ceil(-7, 2), math.div_ceil(8, 2));
+            out(math.factorial(0), math.factorial(12), math.factorial(longint(20)));
+            out(math.perm(5, 2), math.perm(3, 5), math.comb(5, 2), math.comb(52, 5), math.comb(3, 5));
+            out(math.comb(longint(66), longint(33)));
+            out(math.max(math.gcd(12, 18), 1));
+        }"#,
+        "6 6 0 4\n12 12 0\ntrue true false\n3 -4 -4 -4\n4 -3 4\n1 479001600 2432902008176640000\n20 0 10 2598960 0\n7219428434016265740\n6\n");
+    runtime_error("takepkg std.math;\nfunc m{ math.factorial(13); }", "int overflow");
+    runtime_error("takepkg std.math;\nfunc m{ math.factorial(-1); }", "requires nonnegative");
+    runtime_error("takepkg std.math;\nfunc m{ math.gcd(1.0, 2.0); }", "requires int or longint");
+    runtime_error("takepkg std.math;\nfunc m{ math.gcd(1, longint(2)); }", "matching numeric types");
+    runtime_error("takepkg std.math;\nfunc m{ math.div_floor(1, 0); }", "division by zero");
+}
+
+#[test]
+fn any_annotation_accepts_every_value() {
+    executes("family Box{}\nfunc show(any value) => value;\nfunc m{ out(show(1), show(\"s\"), show(null), show(arr(1)), show(Box())); items (array[any]) = arr(1, \"a\"); out(items); }",
+        "1 s null [1] Box {}\n[1, \"a\"]\n");
+}
+
+#[test]
+fn std_types_inspects_values() {
+    executes(r#"takepkg std.types;
+        family Shape{}
+        family Circle(Shape){}
+        func m{
+            out(types.kind(1), types.kind(longint(1)), types.kind(1.5), types.kind("s"), types.kind(null), types.kind(arr()), types.kind(Circle()));
+            out(types.family_name(Circle()), types.family_name(3));
+            out(types.is_instance(Circle(), Shape), types.is_instance(Shape(), Circle), types.is_instance(1, Shape));
+            out(types.is_number(2.5), types.is_number("2"));
+        }"#,
+        "int longint float string null array instance\nCircle null\ntrue false false\ntrue false\n");
+}
+
+#[test]
+fn std_strings_search_split_and_pad_by_character() {
+    executes(r#"takepkg std.strings;
+        func m{
+            out(strings.split("a,b,,c", ","), strings.split_whitespace("  one  two\tthree "), strings.lines("x\r\ny"));
+            out(strings.join(arr("a", "b", "c"), "-"), strings.trim("  hi  "), strings.trim_start("  hi"), strings.trim_end("hi  "));
+            out(strings.starts_with("marslang", "mars"), strings.ends_with("marslang", "lang"), strings.contains("marslang", "sl"));
+            out(strings.find("中é👨‍👩‍👧‍👦x", "x"), strings.find("abc", "z"), strings.rfind("abcabc", "b"));
+            out(strings.replace("a-b-c", "-", "+"), strings.upper("straße"), strings.lower("ÉCOLE"));
+            out(strings.repeated("ab", 3), strings.pad_start("7", 3, "0"), strings.pad_end("中", 3, "."), strings.pad_start("long", 2, " "));
+            s = "x"; out(string(5) + s);
+        }"#,
+        "[\"a\", \"b\", \"\", \"c\"] [\"one\", \"two\", \"three\"] [\"x\", \"y\"]\na-b-c hi hi hi\ntrue true true\n3 -1 4\na+b+c STRASSE école\nababab 007 中.. long\n5x\n");
+    runtime_error("takepkg std.strings;\nfunc m{ strings.split(\"a\", \"\"); }", "separator must not be empty");
+    runtime_error("takepkg std.strings;\nfunc m{ strings.join(arr(1), \",\"); }", "array of strings");
+    runtime_error("takepkg std.strings;\nfunc m{ strings.pad_start(\"a\", 3, \"ab\"); }", "one character");
+}
+
+#[test]
+fn std_time_clocks_and_sleep() {
+    executes(r#"takepkg std.time;
+        func m{
+            start = time.monotonic();
+            time.sleep(0.02);
+            elapsed = time.monotonic() - start;
+            out(elapsed >= 0.02, elapsed < 5.0, time.now() > 1700000000.0);
+            time.sleep(0);
+        }"#, "true true true\n");
+    runtime_error("takepkg std.time;\nfunc m{ time.sleep(-1); }", "nonnegative");
+}

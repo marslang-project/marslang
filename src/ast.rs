@@ -95,6 +95,21 @@ pub enum Stmt {
     },
     Break,
     Continue,
+    /// `run{...} handle(...){...} ... then{...}`
+    Run {
+        body: Vec<Stmt>,
+        handlers: Vec<Handler>,
+        then_block: Option<Vec<Stmt>>,
+    },
+}
+
+/// One `handle(...)` block: the error family names it catches and, for the
+/// `handle(Type e)` / `handle([T1, T2] e)` forms, the name bound to the error.
+#[derive(Debug, Clone)]
+pub struct Handler {
+    pub types: Vec<String>,
+    pub name: Option<String>,
+    pub body: Vec<Stmt>,
 }
 
 #[derive(Debug, Clone)]

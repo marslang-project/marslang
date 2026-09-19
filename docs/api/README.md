@@ -1,6 +1,6 @@
 # Marslang language and API reference
 
-This reference describes the Rust interpreter as of `rs-0.6.0`,
+This reference describes the Rust interpreter as of `rs-0.7.0`,
 including dynamic numeric type tracking and the expanded `std.math` package.
 The source extension is `.mars`; earlier releases used `.mrs`.
 Use the matching source checkout for the filenames documented here.
@@ -13,7 +13,11 @@ notes elsewhere under `docs/` remain local.
 - [Strings and slicing](strings.md): Unicode characters, reversal, and strict bounds.
 - [Collections](collections.md): arrays, sets, pairs, maps, and copying.
 - [Built-ins and errors](builtins.md): input/output, conversions, and runtime errors.
-- [std.math](std-math.md): 42 math functions and six constants, written in Marslang on native float primitives.
+- [std.math](std-math.md): 51 math functions and six constants, written in Marslang on native float primitives.
+- [std.containers](std-containers.md): stack, queue, deque, and priority queue.
+- [std.strings](std-strings.md): splitting, searching, trimming, case, and padding.
+- [std.types](std-types.md): a value's kind, family checks.
+- [std.time](std-time.md): clocks and sleeping.
 
 ## Run
 
@@ -41,7 +45,7 @@ and check their output. The example above is also an execution test.
 
 Programs run in a Rust tree-walking interpreter. The language is not self-hosted yet.
 Complete filesystem modules/exports, additional standard-library packages, decorators, deque,
-`match`, `run/handle/then`, and async remain unimplemented. General named arguments
+`match` and async remain unimplemented. General named arguments
 are deferred; only slicing accepts `reverse=`. Proposed packages are not APIs.
 
 The `lex` command uses a separate lexer from the parser. The REPL reruns its

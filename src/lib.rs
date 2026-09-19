@@ -61,7 +61,7 @@ pub fn run(compiled: Compiled) -> Result<(), RuntimeError> {
         let interactive = stdout.is_terminal();
         let mut out = std::io::BufWriter::new(stdout.lock());
         let result = interp::Interp::new(&mut out, InputSource::Stdin, interactive).run(&compiled.program, &compiled.packages);
-        let flushed = out.flush().map_err(|e| RuntimeError { kind: ErrorKind::Error, message: format!("failed to write output: {e}") });
+        let flushed = out.flush().map_err(|e| RuntimeError::new(ErrorKind::Error, format!("failed to write output: {e}")));
         result.and(flushed)
     })
 }

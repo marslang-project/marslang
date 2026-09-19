@@ -1,8 +1,8 @@
 # marslang
 
-Marslang is an interpreted language. This repository is its Rust implementation (**marslang rs-0.6.0**): it parses and checks a `.mars` program, then runs it directly. No JavaScript or Node is involved.
+Marslang is an interpreted language. This repository is its Rust implementation (**marslang rs-0.7.0**): it parses and checks a `.mars` program, then runs it directly. No JavaScript or Node is involved.
 
-See the [rs-0.6.0 release notes](docs/releases/rs-0.6.0.md) for the Rust interpreter, the package system, and the Marslang-written standard library.
+See the [rs-0.7.0 release notes](docs/releases/rs-0.7.0.md) for error handling, cycle collection, and new standard packages, and the [rs-0.6.0 release notes](docs/releases/rs-0.6.0.md) for the Rust interpreter and package system.
 
 The development direction is to stabilize the Rust interpreter before self-hosting. Discussion documents under `docs/` stay local; `docs/api/` and `docs/releases/` are available to Git.
 
@@ -10,10 +10,11 @@ Read the [language and API reference](docs/api/README.md) for current syntax and
 
 Run `cargo test` for current coverage. The execution tests run each program in the interpreter and assert its output or runtime error. Only Rust is required.
 
-This release replaces the JavaScript backend with a Rust interpreter, adds `takepkg`
-packages, and rewrites [`std.math`](docs/api/std-math.md) (42 functions and six
-constants) in Marslang on top of native float primitives.
-Decorators, deque, further standard
+This release adds error handling (`err`, `run{} handle(...){} then{}`), a cycle
+collector so self-referencing data is freed, the `any` type, and the standard
+packages `std.containers`, `std.strings`, `std.types`, and `std.time`, plus integer
+helpers in [`std.math`](docs/api/std-math.md).
+Decorators, further standard
 libraries, complete module handling, and async remain pending. Maps, deep copies,
 and loop control are implemented. `:=` is excluded.
 
@@ -65,7 +66,7 @@ Implemented:
 Still intentionally limited in this initial release:
 - no full static type checker yet
 - no bytecode or native backend yet (programs run in a tree-walking interpreter)
-- no complete `match`, `run/handle/then`, hot functions, type aliases, or tagged-variant syntax yet
+- no complete `match`, hot functions, type aliases, or tagged-variant syntax yet
 - the statement parser still uses normalized source fragments; the standalone lexer is not yet the single compilation frontend
 
 ```mars

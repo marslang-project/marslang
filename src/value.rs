@@ -218,6 +218,9 @@ pub struct Family {
     pub name: String,
     pub parent: Option<Rc<Family>>,
     pub methods: HashMap<String, Rc<Function>>,
+    /// For `Error` and every family inheriting from it: the nearest built-in
+    /// error kind. `None` for families that are not errors.
+    pub error_kind: Option<ErrorKind>,
 }
 
 impl Family {
@@ -228,7 +231,7 @@ impl Family {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Builtin {
-    Out, Slout, In, Inln, Arr, Set, Pair, Map, Int, Long, Float, String,
+    Out, Slout, In, Inln, Arr, Set, Pair, Map, Int, Long, Float, String, Err, LastErr,
 }
 
 impl Builtin {
@@ -238,6 +241,7 @@ impl Builtin {
             "arr" | "a" => Builtin::Arr, "set" | "s" => Builtin::Set, "pair" | "p" => Builtin::Pair,
             "map" | "dict" => Builtin::Map, "int" => Builtin::Int, "longint" => Builtin::Long,
             "float" => Builtin::Float, "string" => Builtin::String,
+            "err" => Builtin::Err, "lasterr" => Builtin::LastErr,
             _ => return None,
         })
     }
@@ -307,12 +311,42 @@ pub struct Package { pub name: String, pub members: IndexMap<String, Value> }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ErrorKind { Error, TypeError, RangeError, OutOfBoundsError, SyntaxError }
 
-#[derive(Clone, Debug)]
-pub struct RuntimeError { pub kind: ErrorKind, pub message: String }
+impl ErrorKind {
+    pub const ALL: [ErrorKind; 5] = [ErrorKind::Error, ErrorKind::TypeError, ErrorKind::RangeError,
+        ErrorKind::OutOfBoundsError, ErrorKind::SyntaxError];
+    pub fn name(self) -> &'static str {
+        match self {
+            ErrorKind::Error => "Error", ErrorKind::TypeError => "TypeError", ErrorKind::RangeError => "RangeError",
+            ErrorKind::OutOfBoundsError => "OutOfBoundsError", ErrorKind::SyntaxError => "SyntaxError",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct RuntimeError {
+    /// The built-in kind; for a user error family, the kind it inherits from.
+    pub kind: ErrorKind,
+    pub message: String,
+    /// Name of the user error family raised with `err`, such as `ParseError`.
+    pub family: Option<String>,
+    /// Identifies the error value raised by `err` while it propagates (0 otherwise).
+    pub(crate) serial: u64,
+}
+
+impl RuntimeError {
+    pub fn new(kind: ErrorKind, message: impl Into<String>) -> Self {
+        RuntimeError { kind, message: message.into(), ..Default::default() }
+    }
+}
+
+impl Default for ErrorKind {
+    fn default() -> Self { ErrorKind::Error }
+}
 
 impl fmt::Display for RuntimeError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:?}: {}", self.kind, self.message)
+        let name = self.family.as_deref().unwrap_or(self.kind.name());
+        write!(f, "{name}: {}", self.message)
     }
 }
 
@@ -321,7 +355,7 @@ impl std::error::Error for RuntimeError {}
 pub type RResult<T> = Result<T, RuntimeError>;
 
 pub fn err<T>(kind: ErrorKind, message: impl Into<String>) -> RResult<T> {
-    Err(RuntimeError { kind, message: message.into() })
+    Err(RuntimeError { kind, message: message.into(), ..Default::default() })
 }
 pub fn type_err<T>(message: impl Into<String>) -> RResult<T> { err(ErrorKind::TypeError, message) }
 pub fn range_err<T>(message: impl Into<String>) -> RResult<T> { err(ErrorKind::RangeError, message) }
@@ -425,6 +459,11 @@ fn write_value(value: &Value, out: &mut String, seen: &mut Vec<usize>, nested: b
             let (first, second) = (p.first.borrow().clone(), p.second.borrow().clone());
             list(vec![first, second], out, seen);
             out.push(')');
+        }
+        Value::Instance(o) if o.family.error_kind.is_some() => {
+            // Errors print as `Name: message`.
+            let message = o.fields.borrow().get("message").map(to_display_string).unwrap_or_default();
+            let _ = write!(out, "{}: {message}", o.family.name);
         }
         Value::Instance(o) => {
             out.push_str(&o.family.name);

@@ -42,6 +42,10 @@ Constructors `arr`, `set`, `pair`, `map`, and `dict` are documented in
 
 ## Runtime errors
 
+Errors are families. `Error` is the base family; the built-in kinds below inherit
+from it. See [error handling](language.md#error-handling) for `err`, `lasterr`, and
+`run{} handle(...){} then{}`.
+
 | Error | Current examples |
 | --- | --- |
 | `OutOfBoundsError` | Negative slice positions/lengths, invalid ranges, oversized slices |
@@ -49,13 +53,11 @@ Constructors `arr`, `set`, `pair`, `map`, and `dict` are documented in
 | `RangeError` | Integer overflow, division by zero, invalid array element indices |
 | `Error` | Mutation through a fixed alias and other runtime contract violations |
 
-`OutOfBoundsError` is the runtime error name, not just text inside a generic error.
-Errors currently terminate execution with `error: <Kind>: <message>` on standard error
-and exit status 1. `SyntaxError` is raised for invalid `longint(...)` strings.
+`SyntaxError` is raised for invalid `longint(...)` strings. An error that no
+`handle` block catches ends the program with `error: <Family>: <message>` on standard
+error and exit status 1.
 Calls nested deeper than 10,000 levels raise `RangeError: maximum call depth exceeded`.
 Calling a function, method, or built-in with the wrong number of arguments raises `TypeError`.
-Marslang `run/handle/then` and user-defined error raising are not implemented yet;
-these names are not currently callable Marslang error constructors.
 
 Undefined variables, invalid syntax, and fixed-binding reassignment can fail
 during compilation. Full source-location diagnostics remain pending.

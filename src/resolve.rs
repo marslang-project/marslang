@@ -147,6 +147,16 @@ impl Resolver {
                 }
                 self.block(body)?; self.scopes.pop();
             }
+            Stmt::Run { body, handlers, then_block } => {
+                self.block(body)?;
+                for handler in handlers {
+                    self.scopes.push(HashMap::new());
+                    if let Some(name) = &mut handler.name { *name = self.bind(name, false, None, None)?.name; }
+                    for s in &mut handler.body { self.stmt(s)?; }
+                    self.scopes.pop();
+                }
+                if let Some(body) = then_block { self.block(body)?; }
+            }
             _ => {}
         }
         Ok(())
@@ -165,7 +175,8 @@ impl Resolver {
             Expr::Ident(name) => {
                 if let Some(binding) = self.find(name) {
                     *e = binding.hot.unwrap_or(Expr::Ident(binding.name));
-                } else if !matches!(name.as_str(), "me" | "out" | "slout" | "in" | "inln" | "arr" | "set" | "pair" | "map" | "dict" | "a" | "s" | "p" | "int" | "longint" | "float" | "string") {
+                } else if !matches!(name.as_str(), "me" | "out" | "slout" | "in" | "inln" | "arr" | "set" | "pair" | "map" | "dict" | "a" | "s" | "p" | "int" | "longint" | "float" | "string"
+                    | "err" | "lasterr" | "Error" | "TypeError" | "RangeError" | "OutOfBoundsError" | "SyntaxError") {
                     return Err(format!("unknown name '{name}'"));
                 }
             }

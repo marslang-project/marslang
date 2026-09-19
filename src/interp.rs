@@ -67,6 +67,14 @@ pub struct Interp<'o> {
     depth: usize,
     /// Loaded packages by key.
     packages: HashMap<String, Value>,
+    /// Built-in error families by name: `Error` and the kinds inheriting from it.
+    error_families: HashMap<&'static str, Rc<Family>>,
+    /// The error value raised by `err` that is currently propagating, with the
+    /// serial number its `RuntimeError` carries.
+    raised: Option<(u64, Value)>,
+    next_serial: u64,
+    /// The most recently handled error, returned by `lasterr()`.
+    last_error: Option<Value>,
 }
 
 type Exec = RResult<Flow>;
@@ -74,7 +82,8 @@ type Exec = RResult<Flow>;
 impl<'o> Interp<'o> {
     pub fn new(out: &'o mut dyn Write, input: InputSource, interactive: bool) -> Self {
         Interp { units: Vec::new(), out, interactive, input: Input { source: input, lines: None, line: 0 },
-            depth: 0, packages: HashMap::new() }
+            depth: 0, packages: HashMap::new(), error_families: error_families(), raised: None, next_serial: 0,
+            last_error: None }
     }
 
     /// Run a resolved program: load its packages (each after its own imports),
@@ -84,6 +93,8 @@ impl<'o> Interp<'o> {
         let result = self.run_program(program, packages);
         self.units.clear();
         self.packages.clear();
+        self.raised = None;
+        self.last_error = None;
         crate::gc::collect();
         result
     }
@@ -130,7 +141,7 @@ impl<'o> Interp<'o> {
             }
         }
         let mut families = HashMap::new();
-        for name in decls.keys() { build_family(name, &decls, &mut families, index, &mut Vec::new())?; }
+        for name in decls.keys() { build_family(name, &decls, &mut families, &self.error_families, index, &mut Vec::new())?; }
         self.units.push(Unit { name, globals: RefCell::new(HashMap::new()), imports: RefCell::new(HashMap::new()), functions, families });
         Ok(index)
     }
@@ -141,7 +152,7 @@ impl<'o> Interp<'o> {
             match item {
                 Item::Import(import) => {
                     let package = import.key.as_ref().and_then(|key| self.packages.get(key)).cloned()
-                        .ok_or_else(|| RuntimeError { kind: ErrorKind::Error, message: format!("package '{}' is not loaded", import.module) })?;
+                        .ok_or_else(|| RuntimeError::new(ErrorKind::Error, format!("package '{}' is not loaded", import.module)))?;
                     let alias = import.alias.clone().unwrap_or_default();
                     self.units[unit].imports.borrow_mut().insert(display_name(&alias).to_string(), package.clone());
                     self.units[unit].globals.borrow_mut().insert(alias, package);
@@ -162,13 +173,14 @@ impl<'o> Interp<'o> {
     fn lookup(&self, name: &str, env: &Env) -> RResult<Value> {
         if let Some(value) = env.locals.as_ref().and_then(|locals| locals.get(name)) { return Ok(value.clone()); }
         if name == "me" {
-            return env.me.clone().ok_or_else(|| RuntimeError {
-                kind: ErrorKind::Error, message: "'me' is only available inside family methods".into() });
+            return env.me.clone().ok_or_else(|| RuntimeError::new(ErrorKind::Error, "'me' is only available inside family methods"));
         }
         let unit = &self.units[env.unit];
         if let Some(value) = unit.globals.borrow().get(name) { return Ok(value.clone()); }
         if let Some(function) = unit.functions.get(name) { return Ok(Value::Func(Rc::new(Callable::Func(function.clone())))); }
-        if let Some(family) = unit.families.get(name) { return Ok(Value::Func(Rc::new(Callable::Family(family.clone())))); }
+        if let Some(family) = unit.families.get(name).or_else(|| self.error_families.get(name)) {
+            return Ok(Value::Func(Rc::new(Callable::Family(family.clone()))));
+        }
         if let Some(builtin) = Builtin::lookup(name) { return Ok(Value::Func(Rc::new(Callable::Builtin(builtin)))); }
         err(ErrorKind::Error, format!("'{}' is used before it is initialized", display_name(name)))
     }
@@ -272,8 +284,96 @@ impl<'o> Interp<'o> {
                     for s in step { self.exec(s, env)?; }
                 }
             }
+            Stmt::Run { body, handlers, then_block } => return self.exec_run(body, handlers, then_block.as_deref(), env),
         }
         Ok(Flow::Next)
+    }
+
+    /// `run{} handle(...){} ... then{}`: the first handler whose error family
+    /// matches runs; `then` always runs last, even while an error propagates or
+    /// the block exits early. An error, `ret`, `break`, or `continue` inside
+    /// `then` replaces the pending outcome.
+    fn exec_run(&mut self, body: &[Stmt], handlers: &[Handler], then_block: Option<&[Stmt]>, env: &mut Env) -> Exec {
+        let mut outcome = self.exec_block(body, env);
+        if let Err(error) = outcome {
+            let value = self.error_value(&error);
+            outcome = match self.find_handler(handlers, &value, env.unit) {
+                Ok(Some(handler)) => {
+                    self.last_error = Some(value.clone());
+                    if let Some(name) = &handler.name { self.declare(env, name, value); }
+                    self.exec_block(&handler.body, env)
+                }
+                Ok(None) => Err(self.propagate(error, value)),
+                Err(problem) => Err(problem),
+            };
+        }
+        if let Some(block) = then_block {
+            let in_flight = self.raised.take();
+            match self.exec_block(block, env)? {
+                Flow::Next => self.raised = in_flight,
+                flow => return Ok(flow),
+            }
+        }
+        outcome
+    }
+
+    /// The error value for a caught error: the one `err` raised, or a new
+    /// instance of the built-in family for an interpreter error.
+    fn error_value(&mut self, error: &RuntimeError) -> Value {
+        if let Some((serial, _)) = &self.raised {
+            if error.serial != 0 && *serial == error.serial { return self.raised.take().unwrap().1; }
+        }
+        let value = Value::new_instance(self.error_families[error.kind.name()].clone(), Meta::default());
+        if let Value::Instance(o) = &value { o.fields.borrow_mut().insert(Rc::from("message"), Value::str(&error.message)); }
+        value
+    }
+
+    /// Keep an unhandled error's value attached while it continues outward.
+    fn propagate(&mut self, mut error: RuntimeError, value: Value) -> RuntimeError {
+        self.next_serial += 1;
+        error.serial = self.next_serial;
+        self.raised = Some((error.serial, value));
+        error
+    }
+
+    fn find_handler<'h>(&self, handlers: &'h [Handler], value: &Value, unit: usize) -> RResult<Option<&'h Handler>> {
+        let Value::Instance(instance) = value else { return Ok(None) };
+        for handler in handlers {
+            for ty in &handler.types {
+                let family = match self.family_named(ty, unit) {
+                    Some(family) if family.error_kind.is_some() => family,
+                    Some(_) => return type_err(format!("{ty} is not an error family; error families inherit from Error")),
+                    None => return type_err(format!("unknown error type {ty}")),
+                };
+                if descends(&instance.family, &family) { return Ok(Some(handler)); }
+            }
+        }
+        Ok(None)
+    }
+
+    /// `err(Family, message)` raises a new error; `err(error)` raises a caught one again.
+    fn raise(&mut self, args: Vec<Value>) -> RResult<Value> {
+        let usage = "err expects an error family and a message, such as err(Error, \"message\"), or a caught error";
+        let value = match args.as_slice() {
+            [Value::Func(f)] | [Value::Func(f), _] => match f.as_ref() {
+                Callable::Family(family) if family.error_kind.is_some() => {
+                    let message = args.get(1).map(to_display_string).unwrap_or_default();
+                    let value = Value::new_instance(family.clone(), Meta::default());
+                    if let Value::Instance(o) = &value { o.fields.borrow_mut().insert(Rc::from("message"), Value::str(&message)); }
+                    value
+                }
+                Callable::Family(family) => return type_err(format!("{} is not an error family; error families inherit from Error", family.name)),
+                _ => return type_err(usage),
+            },
+            [Value::Instance(o)] if o.family.error_kind.is_some() => args[0].clone(),
+            _ => return type_err(usage),
+        };
+        let Value::Instance(instance) = &value else { unreachable!() };
+        let kind = instance.family.error_kind.unwrap();
+        let builtin = Rc::ptr_eq(&instance.family, &self.error_families[kind.name()]);
+        let message = instance.fields.borrow().get("message").map(to_display_string).unwrap_or_default();
+        let error = RuntimeError { kind, message, family: (!builtin).then(|| instance.family.name.clone()), serial: 0 };
+        Err(self.propagate(error, value))
     }
 
     // ----- expressions -----
@@ -447,7 +547,7 @@ impl<'o> Interp<'o> {
                 _ => type_err(format!("pair has no field '{field}'")),
             },
             Value::Package(package) => package.members.get(field).cloned()
-                .ok_or_else(|| RuntimeError { kind: ErrorKind::TypeError, message: format!("{} has no member '{field}'", package.name) }),
+                .ok_or_else(|| RuntimeError::new(ErrorKind::TypeError, format!("{} has no member '{field}'", package.name))),
             other => type_err(format!("{} has no field '{field}'", other.type_name())),
         }
     }
@@ -551,6 +651,11 @@ impl<'o> Interp<'o> {
             }
             Builtin::Float => { arity(1)?; Ok(Value::Float(to_float(&args[0]))) }
             Builtin::String => { arity(1)?; Ok(Value::str(&to_display_string(&args[0]))) }
+            Builtin::Err => {
+                if args.is_empty() || args.len() > 2 { return type_err(format!("err() expects 1 or 2 argument(s), got {}", args.len())); }
+                self.raise(args)
+            }
+            Builtin::LastErr => { arity(0)?; Ok(self.last_error.clone().unwrap_or(Value::Null)) }
         }
     }
 
@@ -753,6 +858,7 @@ impl<'o> Interp<'o> {
                 _ => type_err("expected float"),
             },
             "string" => match value { Value::Str(_) => Ok(value), _ => type_err("expected string") },
+            "any" => Ok(value),
             _ => match collection_type(ty) {
                 Some((kind, args)) => self.plan_collection(value, ty, kind, args, unit, pending),
                 None => self.instance_of(value, ty, unit),
@@ -837,7 +943,17 @@ impl<'o> Interp<'o> {
     /// A family annotation: the family declared in `unit` (or `alias.Family` from
     /// a package it imports), matching that family or any family inheriting from it.
     fn instance_of(&self, value: Value, ty: &str, unit: usize) -> RResult<Value> {
-        let family = match ty.split_once('.') {
+        let Some(family) = self.family_named(ty, unit) else { return type_err(format!("unknown type {ty}")) };
+        match &value {
+            Value::Instance(instance) if descends(&instance.family, &family) => Ok(value),
+            _ => type_err(format!("expected {ty}")),
+        }
+    }
+
+    /// The family a type name refers to in `unit`: declared there, a built-in
+    /// error family, or `alias.Family` from an imported package.
+    fn family_named(&self, ty: &str, unit: usize) -> Option<Rc<Family>> {
+        match ty.split_once('.') {
             Some((alias, name)) => match self.units[unit].imports.borrow().get(alias) {
                 Some(Value::Package(package)) => match package.members.get(name) {
                     Some(Value::Func(f)) => match f.as_ref() { Callable::Family(family) => Some(family.clone()), _ => None },
@@ -845,17 +961,8 @@ impl<'o> Interp<'o> {
                 },
                 _ => None,
             },
-            None => self.units[unit].families.get(ty).cloned(),
-        };
-        let Some(family) = family else { return type_err(format!("unknown type {ty}")) };
-        if let Value::Instance(instance) = &value {
-            let mut current = Some(instance.family.clone());
-            while let Some(candidate) = current {
-                if Rc::ptr_eq(&candidate, &family) { return Ok(value); }
-                current = candidate.parent.clone();
-            }
+            None => self.units[unit].families.get(ty).or_else(|| self.error_families.get(ty)).cloned(),
         }
-        type_err(format!("expected {ty}"))
     }
 
     // ----- arithmetic -----
@@ -943,23 +1050,48 @@ impl<'o> Interp<'o> {
 // ----- free helpers -----
 
 fn build_family(name: &str, decls: &HashMap<String, &FamilyDecl>, built: &mut HashMap<String, Rc<Family>>,
-                unit: usize, visiting: &mut Vec<String>) -> RResult<Rc<Family>> {
+                errors: &HashMap<&'static str, Rc<Family>>, unit: usize, visiting: &mut Vec<String>) -> RResult<Rc<Family>> {
     if let Some(family) = built.get(name) { return Ok(family.clone()); }
     if visiting.iter().any(|v| v == name) { return type_err(format!("family '{name}' inherits from itself")); }
     let decl = decls[name];
     visiting.push(name.to_string());
     let parent = match &decl.extends {
-        Some(parent) if decls.contains_key(parent) => Some(build_family(parent, decls, built, unit, visiting)?),
-        Some(parent) => return type_err(format!("family '{name}' extends unknown family '{parent}'")),
+        Some(parent) if decls.contains_key(parent) => Some(build_family(parent, decls, built, errors, unit, visiting)?),
+        Some(parent) => match errors.get(parent.as_str()) {
+            Some(error) => Some(error.clone()),
+            None => return type_err(format!("family '{name}' extends unknown family '{parent}'")),
+        },
         None => None,
     };
     visiting.pop();
     let methods = decl.methods.iter()
         .map(|m| (m.name.clone(), Rc::new(Function { decl: m.clone(), package: unit })))
         .collect();
-    let family = Rc::new(Family { name: name.to_string(), parent, methods });
+    let error_kind = parent.as_ref().and_then(|p| p.error_kind);
+    let family = Rc::new(Family { name: name.to_string(), parent, methods, error_kind });
     built.insert(name.to_string(), family.clone());
     Ok(family)
+}
+
+/// `Error` and the built-in kinds that inherit from it.
+fn error_families() -> HashMap<&'static str, Rc<Family>> {
+    let base = Rc::new(Family { name: "Error".into(), parent: None, methods: HashMap::new(), error_kind: Some(ErrorKind::Error) });
+    let mut families = HashMap::from([("Error", base.clone())]);
+    for kind in &ErrorKind::ALL[1..] {
+        let family = Family { name: kind.name().into(), parent: Some(base.clone()), methods: HashMap::new(), error_kind: Some(*kind) };
+        families.insert(kind.name(), Rc::new(family));
+    }
+    families
+}
+
+/// Whether `family` is `ancestor` or inherits from it.
+fn descends(family: &Rc<Family>, ancestor: &Rc<Family>) -> bool {
+    let mut current = Some(family.clone());
+    while let Some(candidate) = current {
+        if Rc::ptr_eq(&candidate, ancestor) { return true; }
+        current = candidate.parent.clone();
+    }
+    false
 }
 
 /// Undo resolver renaming (`__v3_count` -> `count`) for diagnostics.
@@ -997,7 +1129,7 @@ fn long_arithmetic(op: &str, x: i128, y: i128) -> RResult<Value> {
             while power > 0 {
                 if power % 2 == 1 {
                     result = result.checked_mul(factor).filter(|v| v.abs() <= 1 << 64)
-                        .ok_or_else(|| RuntimeError { kind: ErrorKind::RangeError, message: "longint overflow".into() })?;
+                        .ok_or_else(|| RuntimeError { kind: ErrorKind::RangeError, message: "longint overflow".into(), ..Default::default() })?;
                 }
                 power /= 2;
                 if power > 0 {

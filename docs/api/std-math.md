@@ -162,6 +162,23 @@ These three functions require float inputs and return booleans. They are the
 exception to the package's finite-input rule. Constructing infinity is supported;
 passing it to arithmetic functions such as `math.sin` still raises an error.
 
+## Integers
+
+These take `int` or `longint` arguments of one matching kind (floats raise
+`TypeError`) and return that kind. Overflow raises the kind's overflow error.
+
+| Function | Result |
+| --- | --- |
+| `gcd(a,b)` | Greatest common divisor, never negative; `gcd(0,0)` is 0 |
+| `lcm(a,b)` | Least common multiple, never negative; 0 when either is 0 |
+| `is_even(n)` / `is_odd(n)` | Boolean |
+| `div_floor(a,b)` / `div_ceil(a,b)` | Quotient rounded toward negative/positive infinity; zero divisor raises `RangeError` |
+| `factorial(n)` | `n!`; negative `n` raises `RangeError` |
+| `perm(n,k)` / `comb(n,k)` | Ordered/unordered selections of `k` from `n`; 0 when `k > n`; negative arguments raise `RangeError` |
+
+`comb` divides out common factors at each step, so it succeeds whenever the
+result fits: `comb(longint(66), longint(33))` is `7219428434016265740`.
+
 ## Importing and passing functions
 
 Use `takepkg std.math = calc;` to call `calc.min(...)`. Without an alias the name is

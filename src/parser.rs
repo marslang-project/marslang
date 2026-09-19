@@ -69,6 +69,11 @@ fn validate_loop_control(body: &[Stmt], depth: usize) -> PResult<()> {
                 for (_, body) in elif_blocks { validate_loop_control(body, depth)?; }
                 if let Some(body) = else_block { validate_loop_control(body, depth)?; }
             }
+            Stmt::Run { body, handlers, then_block } => {
+                validate_loop_control(body, depth)?;
+                for handler in handlers { validate_loop_control(&handler.body, depth)?; }
+                if let Some(body) = then_block { validate_loop_control(body, depth)?; }
+            }
             _ => {}
         }
     }
@@ -352,8 +357,77 @@ fn parse_func_signature(sig: &str) -> PResult<(String, Vec<Param>)> {
     }
 }
 
+/// Whether `line` opens a block introduced by `keyword` alone, such as `run{`.
+fn opens_keyword_block(line: &str, keyword: &str) -> bool {
+    line.strip_prefix(keyword).and_then(|rest| rest.trim_start().strip_suffix('{')).is_some_and(|mid| mid.trim().is_empty())
+}
+
+fn parse_run_stmt(lines: &[String], start: usize) -> PResult<(Stmt, usize)> {
+    let mut i = start + 1;
+    let body = parse_block_stmts(lines, &mut i)?;
+    let mut handlers = Vec::new();
+    let mut then_block = None;
+    while i < lines.len() {
+        let l = lines[i].trim();
+        if l.is_empty() { i += 1; continue; }
+        if (l.starts_with("handle(") || l.starts_with("handle ")) && then_block.is_none() {
+            if !l.ends_with('{') { return Err("handle header must end with '{'".into()); }
+            let after = l.trim_start_matches("handle").trim().trim_end_matches('{').trim();
+            if !after.starts_with('(') || find_matching_paren(after)? != after.len() - 1 {
+                return Err("handle must list error types in parentheses, such as handle(Error e){".into());
+            }
+            let (types, name) = parse_handle_header(&after[1..after.len() - 1])?;
+            i += 1;
+            handlers.push(Handler { types, name, body: parse_block_stmts(lines, &mut i)? });
+            continue;
+        }
+        if opens_keyword_block(l, "then") {
+            i += 1;
+            then_block = Some(parse_block_stmts(lines, &mut i)?);
+            break;
+        }
+        break;
+    }
+    if handlers.is_empty() && then_block.is_none() {
+        return Err("run needs at least one handle or then block".into());
+    }
+    Ok((Stmt::Run { body, handlers, then_block }, i))
+}
+
+/// `handle(Error)`, `handle(TypeError, RangeError)` (no name), `handle(Error e)`,
+/// or `handle([TypeError, RangeError] e)`.
+fn parse_handle_header(header: &str) -> PResult<(Vec<String>, Option<String>)> {
+    let header = header.trim();
+    let type_name = |text: &str| -> PResult<String> {
+        let text = text.trim();
+        if text.split('.').all(is_bare_ident) { Ok(text.to_string()) }
+        else { Err(format!("invalid error type '{text}' in handle")) }
+    };
+    // A trailing name after whitespace, outside brackets, binds the error.
+    if let Some((ty, name)) = header.rsplit_once(char::is_whitespace) {
+        let ty = ty.trim();
+        if is_bare_ident(name) && !ty.is_empty() && split_top_level(ty, ',').len() == 1 {
+            let types = match ty.strip_prefix('[').and_then(|t| t.strip_suffix(']')) {
+                Some(list) => split_top_level(list, ',').iter().map(|t| type_name(t)).collect::<PResult<Vec<_>>>()?,
+                None => vec![type_name(ty)?],
+            };
+            return Ok((types, Some(name.to_string())));
+        }
+    }
+    if header.is_empty() { return Err("handle needs at least one error type".into()); }
+    if header.starts_with('[') {
+        return Err("a bracketed error list needs a name, such as handle([TypeError, RangeError] e)".into());
+    }
+    let types = split_top_level(header, ',').iter().map(|t| type_name(t)).collect::<PResult<Vec<_>>>()?;
+    Ok((types, None))
+}
+
 fn parse_stmt_at(lines: &[String], idx: usize) -> PResult<(Stmt, usize)> {
     let l = lines[idx].trim();
+
+    if opens_keyword_block(l, "run") {
+        return parse_run_stmt(lines, idx);
+    }
 
     if l.starts_with("while ") || l.starts_with("while(") {
         if !l.ends_with('{') { return Err("while must open a block".into()); }

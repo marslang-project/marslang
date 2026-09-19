@@ -1,0 +1,49 @@
+// std.strings: searching, splitting, trimming, case, and padding. Positions and
+// widths count characters (grapheme clusters), like len() and lenslice().
+takepkg rs.core;
+takepkg rs.string = native;
+
+func split(string text, string separator) => native.split(text, separator);
+// Split on runs of whitespace, ignoring leading and trailing whitespace.
+func split_whitespace(string text) => native.split_whitespace(text);
+// Split at line breaks (\n or \r\n).
+func lines(string text) => native.lines(text);
+func join(array items, string separator) => native.join(items, separator);
+
+func trim(string text) => native.trim(text);
+func trim_start(string text) => native.trim_start(text);
+func trim_end(string text) => native.trim_end(text);
+
+func starts_with(string text, string prefix) => native.starts_with(text, prefix);
+func ends_with(string text, string suffix) => native.ends_with(text, suffix);
+func contains(string text, string part) => native.contains(text, part);
+// Character position of the first/last occurrence, or -1.
+func find(string text, string part) => native.find(text, part);
+func rfind(string text, string part) => native.rfind(text, part);
+// Replace every occurrence.
+func replace(string text, string old, string new) => native.replace(text, old, new);
+
+func upper(string text) => native.upper(text);
+func lower(string text) => native.lower(text);
+
+func repeated(string text, int count) => native.repeated(text, count);
+
+func _fill(string fill){
+    if (fill.len() != 1){ core.raise("RangeError", "padding fill must be one character"); }
+}
+
+// Pad on the left to width characters.
+func pad_start(string text, int width, string fill){
+    _fill(fill);
+    missing = width - text.len();
+    if (missing <= 0){ ret text; }
+    ret native.repeated(fill, missing) + text;
+}
+
+// Pad on the right to width characters.
+func pad_end(string text, int width, string fill){
+    _fill(fill);
+    missing = width - text.len();
+    if (missing <= 0){ ret text; }
+    ret text + native.repeated(fill, missing);
+}
