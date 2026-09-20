@@ -1,6 +1,6 @@
 # Marslang language and API reference
 
-This reference describes the Rust interpreter as of `rs-0.8.0`,
+This reference describes the Rust interpreter as of `rs-0.8.1`,
 including dynamic numeric type tracking and the expanded `std.math` package.
 The source extension is `.mars`; earlier releases used `.mrs`.
 Use the matching source checkout for the filenames documented here.

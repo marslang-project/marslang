@@ -1,4 +1,4 @@
-// std.Decorator: decorator markers written above family methods.
+// std.Decorator: the decorator markers written above family methods.
 //
 //     takepkg std.Decorator;
 //     family Account{
@@ -6,10 +6,22 @@
 //         func _audit(){ ... }
 //     }
 //
-// Importing this package makes `@Decorator.NAME` (or `@alias.NAME`) available.
-// The markers are applied by the interpreter, so the package has no members:
-//
-//     @Decorator.private    callable only from methods of the declaring family
-//     @Decorator.subclass   also callable from families inheriting from it
-//
-// @Decorator.static, @Decorator.class, and @Decorator.overload are planned.
+// This file is the list of markers: a name is only accepted as `@Decorator.NAME`
+// if it is exported here, and its value names the marker. The interpreter applies
+// them while compiling, so they are not called at runtime. Markers listed here but
+// not yet applied by the interpreter report "not implemented yet".
+
+// Callable only from methods of the family that declares it.
+fixed private (string) = "private";
+
+// Callable from the declaring family and from families inheriting from it.
+fixed subclass (string) = "subclass";
+
+// Planned: called on the family itself, without an instance.
+fixed static (string) = "static";
+
+// Planned: receives the family rather than an instance.
+fixed class (string) = "class";
+
+// Planned: several functions share a name, chosen by argument types.
+fixed overload (string) = "overload";

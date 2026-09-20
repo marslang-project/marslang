@@ -10,6 +10,13 @@ retains element-type restrictions.
 Construct with `arr(value,...)`; `a(...)` is a compatibility alias.
 Use `values (array[int]) = arr(1,2);` to restrict element types.
 
+A container keeps every restriction applied to it, including through aliases, and
+every element must satisfy all of them as stored. Conflicting restrictions raise
+`TypeError` and leave the container unchanged: after `x (array[int]) = arr(1);`,
+the alias `y (array[float]) = x;` fails, because an element cannot be both an int
+and a float. A failed insertion (`add`, `set`, `modify`, a pair field) likewise
+changes neither the container nor the value being inserted.
+
 ### Inspection
 
 | Method | Result |

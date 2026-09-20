@@ -1099,3 +1099,82 @@ fn decorators_need_the_package_and_a_known_marker() {
     }
     runtime_error("takepkg std.containers;\nfunc m{ containers.deque()._slot(0); }", "_slot is private to deque");
 }
+
+#[test]
+fn bound_private_methods_stay_private_outside_their_family() {
+    let program = |body: &str| format!(r#"takepkg std.Decorator;
+        family Vault{{
+            func init(){{ me.hook = me.secret; }}
+            @Decorator.private
+            func secret() => 42;
+            @Decorator.subclass
+            func shared() => 7;
+            func export() => me.secret;
+            func export_shared() => me.shared;
+            func use_own() => me.hook();
+        }}
+        family Child(Vault){{
+            func call_shared(any f) => f();
+        }}
+        func m{{ {body} }}"#);
+    executes(&program("v = Vault(); out(v.use_own()); out(Child().call_shared(Vault().export_shared()));"), "42\n7\n");
+    for (body, message) in [
+        ("f = Vault().export(); f();", "secret is private to Vault"),
+        ("v = Vault(); v.hook();", "secret is private to Vault"),
+        ("items = arr(Vault().export()); items.iget(0)();", "secret is private to Vault"),
+        ("f = Vault().export_shared(); f();", "shared is only available to Vault"),
+    ] {
+        runtime_error(&program(body), message);
+    }
+}
+
+#[test]
+fn rejected_insertions_leave_the_candidate_unchanged() {
+    executes(r#"takepkg std.types;
+        func m{
+            dst (array[pair[array[longint],any]]) = arr();
+            alias (array[pair[any,string]]) = dst;
+            a = arr(1);
+            run{ dst.add(pair(a, 0)); } handle(Error e){ out(e); }
+            out(dst.len(), types.kind(a.iget(0)));
+            a.add("still unrestricted"); out(a.len());
+            d (map[array[longint],string]) = map();
+            key = arr(1);
+            run{ d.set(key, 5); } handle(Error e){ out(e); }
+            out(d.len(), types.kind(key.iget(0)));
+            key.add("x"); out(key.len());
+            p (pair[array[longint],int]) = pair(arr(), 0);
+            q = arr(1);
+            run{ p.first = q; p.second = "no"; } handle(Error e){ out(e); }
+            out(types.kind(q.iget(0)));
+        }"#, "TypeError: expected string\n0 int\n2\nTypeError: expected string\n0 int\n2\nTypeError: expected int\nlongint\n");
+}
+
+#[test]
+fn nested_unions_retry_choices_that_conflict_later() {
+    executes(r#"takepkg std.types;
+        func later([pair[array[longint],[array[int],array[longint]]]] p) => p;
+        func earlier(pair[[array[int],array[longint]],array[longint]] p) => p;
+        func m{
+            a = arr(1); out(later(pair(a, a)), types.kind(a.iget(0)));
+            b = arr(1); out(earlier(pair(b, b)), types.kind(b.iget(0)));
+            c = arr(1); d = arr(2); out(earlier(pair(c, d)), types.kind(c.iget(0)), types.kind(d.iget(0)));
+        }"#, "pair([1], [1]) longint\npair([1], [1]) longint\npair([1], [2]) int longint\n");
+    runtime_error("func f(pair[array[int],array[longint]] p) => p;\nfunc m{ a = arr(1); f(pair(a, a)); }", "expected int");
+}
+
+#[test]
+fn padding_with_merging_fills_is_rejected() {
+    executes(r#"takepkg std.strings;
+        func m{ out(strings.pad_end("ab", 4, "-"), strings.pad_start("中", 3, "中")); }"#, "ab-- 中中中\n");
+    runtime_error(r#"takepkg std.strings; func m{ strings.pad_end("a", 3, "\u0301"); }"#, "merges with neighbouring characters");
+    runtime_error(r#"takepkg std.strings; func m{ strings.pad_start("", 2, "\u{1F1E6}"); }"#, "merges with neighbouring characters");
+}
+
+#[test]
+fn decorator_package_lists_the_available_markers() {
+    executes("takepkg std.Decorator;\nfunc m{ out(Decorator.private, Decorator.subclass, Decorator.static); }",
+        "private subclass static\n");
+    let error = marslang::compile("takepkg std.Decorator;\nfamily Box{\n @Decorator.secret\n func x() => 1;\n}").unwrap_err();
+    assert!(error.contains("std.Decorator provides: private, subclass, static, class, overload"), "{error}");
+}

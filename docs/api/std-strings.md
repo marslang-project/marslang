@@ -14,9 +14,7 @@ Positions and widths count characters (grapheme clusters), the same unit as
 `len()` and `lenslice()`. Searching, splitting, and replacing match whole characters
 only: a match must start and end at character boundaries, so a position from
 `find` always works with `lenslice`. A combining accent inside a character is not
-found on its own, and `"
-"` is one character, so `split(text, "
-")` does not
+found on its own, and `"\r\n"` is one character, so `split(text, "\n")` does not
 split Windows line endings; use `lines(text)` for those. The package is named `strings` so that it does not hide
 the built-in `string(value)` conversion.
 
@@ -32,7 +30,7 @@ the built-in `string(value)` conversion.
 | `replace(text, old, new)` | Every occurrence replaced; an empty `old` raises `RangeError` |
 | `upper(text)` / `lower(text)` | Unicode case conversion (`straße` becomes `STRASSE`) |
 | `repeated(text, count)` | `text` repeated `count` times |
-| `pad_start(text, width, fill)` / `pad_end(text, width, fill)` | Padded to `width` characters with a one-character `fill` |
+| `pad_start(text, width, fill)` / `pad_end(text, width, fill)` | Padded to `width` characters with a one-character `fill`; a fill that merges with its neighbours (a lone combining accent, a flag letter) raises `RangeError` |
 
 The Marslang API is in [std/strings.mars](../../std/strings.mars); the text
 operations are native (`std/rs/string.rs`).

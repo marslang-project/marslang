@@ -152,6 +152,8 @@ write `@D.private`.
 
 Anything else, including top-level code and free functions, gets a `TypeError`,
 both when calling the method and when taking it as a value (`f = obj._audit;`).
+A method taken as a value inside its family can be stored or passed on, but every
+call is checked against the method running at that moment, so it stays private.
 Methods without a decorator are public. Fields are always public; the `_name`
 convention marks fields meant for internal use. `init` cannot be private.
 

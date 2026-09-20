@@ -21,7 +21,16 @@ enum Flow { Next, Break, Continue, Return(Value) }
 enum MethodTarget { Method(Rc<Function>), Value(Value) }
 
 /// A container restriction from a matched annotation, applied after matching.
+#[derive(Clone)]
 struct Restriction { target: Value, args: Rc<[String]>, unit: usize }
+
+/// Union choices made while planning a type check, for depth-first retries: the
+/// option index chosen at each union reached, in order, and its option count.
+#[derive(Default)]
+struct Choices { forced: Vec<usize>, taken: Vec<(usize, usize)> }
+
+/// Plans retried with different union choices before a type check gives up.
+const MAX_TYPE_ATTEMPTS: usize = 64;
 
 /// The computed result of restricting one container: its new restriction list
 /// and converted contents, written only once the whole plan has succeeded.
@@ -88,6 +97,9 @@ pub struct Interp<'o> {
     next_serial: u64,
     /// The most recently handled error, returned by `lasterr()`.
     last_error: Option<Value>,
+    /// The family whose method is running (`None` in free functions and top-level
+    /// code), for checking private/subclass access when a bound method is called.
+    caller: Option<Rc<Family>>,
 }
 
 type Exec = RResult<Flow>;
@@ -96,7 +108,7 @@ impl<'o> Interp<'o> {
     pub fn new(out: &'o mut dyn Write, input: InputSource, interactive: bool) -> Self {
         Interp { units: Vec::new(), out, interactive, input: Input { source: input, lines: None, line: 0 },
             depth: 0, packages: HashMap::new(), error_families: error_families(), raised: None, next_serial: 0,
-            last_error: None }
+            last_error: None, caller: None }
     }
 
     /// Run a resolved program: load its packages (each after its own imports),
@@ -478,7 +490,12 @@ impl<'o> Interp<'o> {
         };
         match callable.as_ref() {
             Callable::Func(f) => self.call_function(f, None, args),
-            Callable::Method(receiver, f) => self.call_function(f, Some(receiver.clone()), args),
+            Callable::Method(receiver, f) => {
+                // A bound method taken out of its family keeps its restriction:
+                // check against whoever calls it now, not where it was taken.
+                check_access(f, self.caller.as_ref())?;
+                self.call_function(f, Some(receiver.clone()), args)
+            }
             Callable::Family(family) => self.construct(family, args),
             Callable::Builtin(builtin) => self.call_builtin(*builtin, args),
             Callable::Native(function) => {
@@ -513,6 +530,7 @@ impl<'o> Interp<'o> {
             locals.insert(param.name.clone(), self.typed(arg, &param.ty, function.package)?);
         }
         let owner = function.owner.as_ref().and_then(|owner| owner.upgrade());
+        let previous_caller = std::mem::replace(&mut self.caller, owner.clone());
         let mut env = Env { unit: function.package, owner, locals: Some(locals), me };
         self.depth += 1;
         let result = match &decl.body {
@@ -523,6 +541,7 @@ impl<'o> Interp<'o> {
             }),
         };
         self.depth -= 1;
+        self.caller = previous_caller;
         result
     }
 
@@ -801,8 +820,8 @@ impl<'o> Interp<'o> {
             "set" => {
                 arity(2)?;
                 mutable(&map.meta)?;
-                let key = self.check(&map.meta, args[0].clone(), 0)?;
-                let value = self.check(&map.meta, args[1].clone(), 1)?;
+                let mut checked = self.check_parts(&map.meta, vec![(args[0].clone(), 0), (args[1].clone(), 1)])?.into_iter();
+                let (key, value) = (checked.next().unwrap(), checked.next().unwrap());
                 let mut items = map.items.borrow_mut();
                 // Updating an existing key keeps its original key value and position.
                 match items.get_mut(&Key::of(&key)) {
@@ -825,10 +844,18 @@ impl<'o> Interp<'o> {
     // ----- type annotations -----
 
     /// Apply every element restriction recorded on a container to a new value.
-    fn check(&mut self, meta: &Meta, mut value: Value, part: usize) -> RResult<Value> {
+    fn check(&mut self, meta: &Meta, value: Value, part: usize) -> RResult<Value> {
+        Ok(self.check_parts(meta, vec![(value, part)])?.remove(0))
+    }
+
+    /// Check several parts of one insertion (a map key and value) as a single
+    /// operation: if any part fails, nothing is converted or restricted.
+    fn check_parts(&mut self, meta: &Meta, parts: Vec<(Value, usize)>) -> RResult<Vec<Value>> {
         let restrictions = meta.restrictions.borrow().clone();
-        for (args, unit) in restrictions.iter() { value = self.typed(value, &args[part], *unit)?; }
-        Ok(value)
+        let jobs = parts.into_iter()
+            .map(|(value, part)| (value, restrictions.iter().map(|(args, unit)| (args[part].clone(), *unit)).collect()))
+            .collect();
+        self.conform(jobs)
     }
 
     /// Check or convert a value against a (whitespace-free) type annotation
@@ -836,33 +863,80 @@ impl<'o> Interp<'o> {
     /// a restriction and converts the elements); those changes are applied only
     /// once the whole annotation, including every nested part, has matched.
     pub fn typed(&mut self, value: Value, ty: &str, unit: usize) -> RResult<Value> {
-        let mut pending = Vec::new();
-        let value = self.plan_type(value, ty, unit, &mut pending)?;
-        let staged = self.stage(&pending)?;
-        Self::commit(staged);
-        Ok(value)
+        Ok(self.conform(vec![(value, vec![(ty.to_string(), unit)])])?.remove(0))
+    }
+
+    /// Check values against their annotations as one operation. All annotations
+    /// are planned together; if the combined plan cannot be applied, union choices
+    /// are retried depth-first. Container changes are committed only when every
+    /// check succeeds, so a failure leaves all values unchanged.
+    fn conform(&mut self, jobs: Vec<(Value, Vec<(String, usize)>)>) -> RResult<Vec<Value>> {
+        let mut forced = Vec::new();
+        let mut first_error = None;
+        for _ in 0..MAX_TYPE_ATTEMPTS {
+            let mut choices = Choices { forced: std::mem::take(&mut forced), taken: Vec::new() };
+            let mut pending = Vec::new();
+            let outcome = self.plan_jobs(&jobs, &mut pending, &mut choices)
+                .and_then(|values| Ok((values, self.stage(&pending)?)));
+            match outcome {
+                Ok((values, staged)) => {
+                    Self::commit(staged);
+                    return Ok(values);
+                }
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                    // Try the next option at the most recent union that has one.
+                    let Some(k) = choices.taken.iter().rposition(|&(chosen, count)| chosen + 1 < count) else { break };
+                    forced = choices.taken[..k].iter().map(|&(chosen, _)| chosen).collect();
+                    forced.push(choices.taken[k].0 + 1);
+                }
+            }
+        }
+        Err(first_error.expect("at least one attempt ran"))
+    }
+
+    fn plan_jobs(&mut self, jobs: &[(Value, Vec<(String, usize)>)], pending: &mut Vec<Restriction>,
+                 choices: &mut Choices) -> RResult<Vec<Value>> {
+        let mut values = Vec::with_capacity(jobs.len());
+        for (value, types) in jobs {
+            let mut value = value.clone();
+            for (ty, unit) in types { value = self.plan_type(value, ty, *unit, pending, choices)?; }
+            values.push(value);
+        }
+        Ok(values)
     }
 
     /// Check `value` against `ty` without changing any container: scalars are
     /// returned converted, and container restrictions to apply go to `pending`.
-    fn plan_type(&mut self, value: Value, ty: &str, unit: usize, pending: &mut Vec<Restriction>) -> RResult<Value> {
+    fn plan_type(&mut self, value: Value, ty: &str, unit: usize, pending: &mut Vec<Restriction>,
+                 choices: &mut Choices) -> RResult<Value> {
         if let Some(inner) = ty.strip_prefix('[').and_then(|t| t.strip_suffix(']')) {
             let options = split_types(inner);
             // Prefer the actual numeric kind before trying compatible conversions.
             if let Some(kind) = value.num_kind() {
-                if options.iter().any(|o| o == kind.name()) { return self.plan_type(value, kind.name(), unit, pending); }
+                if options.iter().any(|o| o == kind.name()) { return self.plan_type(value, kind.name(), unit, pending, choices); }
             }
             // Plans change nothing, so a failed alternative leaves nothing behind.
-            // An alternative only matches if its whole plan can be applied,
-            // including restrictions that meet on shared (aliased) containers.
-            for option in &options {
+            // An alternative only matches if it can be applied together with what
+            // is already planned (restrictions may meet on shared containers).
+            // The choice is recorded so a later conflict can retry the next option.
+            let point = choices.taken.len();
+            let start = choices.forced.get(point).copied().unwrap_or(0);
+            for (index, option) in options.iter().enumerate().skip(start) {
+                choices.taken.push((index, options.len()));
                 let mut attempt = Vec::new();
-                if let Ok(result) = self.plan_type(value.clone(), option, unit, &mut attempt) {
-                    if self.stage(&attempt).is_ok() {
+                if let Ok(result) = self.plan_type(value.clone(), option, unit, &mut attempt, choices) {
+                    let compatible = attempt.is_empty() || {
+                        let mut combined = pending.clone();
+                        combined.extend(attempt.iter().cloned());
+                        self.stage(&combined).is_ok()
+                    };
+                    if compatible {
                         pending.append(&mut attempt);
                         return Ok(result);
                     }
                 }
+                choices.taken.truncate(point);
             }
             return type_err(format!("value does not match {ty}"));
         }
@@ -887,14 +961,14 @@ impl<'o> Interp<'o> {
             "string" => match value { Value::Str(_) => Ok(value), _ => type_err("expected string") },
             "any" => Ok(value),
             _ => match collection_type(ty) {
-                Some((kind, args)) => self.plan_collection(value, ty, kind, args, unit, pending),
+                Some((kind, args)) => self.plan_collection(value, ty, kind, args, unit, pending, choices),
                 None => self.instance_of(value, ty, unit),
             },
         }
     }
 
     fn plan_collection(&mut self, value: Value, ty: &str, kind: &str, args: Option<&str>, unit: usize,
-                       pending: &mut Vec<Restriction>) -> RResult<Value> {
+                       pending: &mut Vec<Restriction>, choices: &mut Choices) -> RResult<Value> {
         let matches = matches!((&value, kind), (Value::Array(_), "array") | (Value::Set(_), "set")
             | (Value::Pair(_), "pair") | (Value::Map(_), "map"));
         if !matches { return type_err(format!("expected {kind}")); }
@@ -913,7 +987,7 @@ impl<'o> Interp<'o> {
             _ => unreachable!(),
         };
         for (item, part) in parts {
-            let converted = self.plan_type(item.clone(), &args[part], unit, pending)?;
+            let converted = self.plan_type(item.clone(), &args[part], unit, pending, choices)?;
             // Converting a fixed container's numeric kind would be a mutation.
             if frozen && converted.num_kind() != item.num_kind() { mutable(meta)?; }
         }
@@ -945,7 +1019,15 @@ impl<'o> Interp<'o> {
             let convert = |this: &mut Self, value: Value, part: usize| -> RResult<Value> {
                 let mut converted = value.clone();
                 for (args, unit) in &restrictions {
-                    converted = this.plan_type(converted, &args[part], *unit, &mut Vec::new())?;
+                    converted = this.plan_type(converted, &args[part], *unit, &mut Vec::new(), &mut Choices::default())?;
+                }
+                // The result must satisfy every restriction as it is: int and longint
+                // restrictions on one container, for example, cannot both hold.
+                for (args, unit) in &restrictions {
+                    let again = this.plan_type(converted.clone(), &args[part], *unit, &mut Vec::new(), &mut Choices::default())?;
+                    if again.num_kind() != converted.num_kind() {
+                        return type_err(format!("value cannot satisfy both {} and the container's other restrictions", args[part]));
+                    }
                 }
                 if frozen && converted.num_kind() != value.num_kind() { mutable(target.meta().unwrap())?; }
                 Ok(converted)

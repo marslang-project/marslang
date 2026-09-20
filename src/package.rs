@@ -133,6 +133,13 @@ impl Loader {
         Ok(())
     }
 
+    /// Marker names exported by `std.Decorator`, when it is loaded.
+    pub fn markers(&self) -> Vec<String> {
+        self.packages.iter().find(|package| package.key == "std.Decorator")
+            .map(|package| package.exports.iter().map(|(name, _)| name.clone()).collect())
+            .unwrap_or_default()
+    }
+
     fn find(&self, module: &str) -> Result<Found, String> {
         if module == "rs" || module.starts_with("rs.") {
             return native::PACKAGES.iter().find(|(name, _)| *name == module).map(|(_, p)| Found::Native(*p))
@@ -172,7 +179,7 @@ impl Loader {
         // module file belongs to its parent (none for a top-level file).
         let package = if is_init { Some(module) } else { module.rsplit_once('.').map(|(parent, _)| parent) };
         self.load_imports(&mut program, package)?;
-        apply_decorators(&mut program)?;
+        apply_decorators(&mut program, &self.markers())?;
         let constants: Vec<(usize, String)> = program.items.iter().enumerate().filter_map(|(index, item)| match item {
             Item::Var(v) if v.is_fixed || v.temp == TempKind::Hot => Some((index, v.name.clone())),
             _ => None,
@@ -219,7 +226,7 @@ fn is_ident(text: &str) -> bool {
 
 /// Check each family method's decorators and record their effect. A decorator
 /// `@X.name` needs `X` to be the alias of a `takepkg std.Decorator;` in the file.
-pub(crate) fn apply_decorators(program: &mut Program) -> Result<(), String> {
+pub(crate) fn apply_decorators(program: &mut Program, markers: &[String]) -> Result<(), String> {
     let aliases: HashSet<String> = program.items.iter().filter_map(|item| match item {
         Item::Import(import) if import.key.as_deref() == Some("std.Decorator") => import.alias.clone(),
         _ => None,
@@ -232,11 +239,14 @@ pub(crate) fn apply_decorators(program: &mut Program) -> Result<(), String> {
                 if !aliases.contains(alias) {
                     return Err(format!("@{decorator} needs `takepkg std.Decorator;` (or an alias named {alias})"));
                 }
+                // std.Decorator lists the markers; the interpreter applies these.
                 let access = match name {
+                    _ if !markers.iter().any(|marker| marker == name) => {
+                        return Err(format!("unknown decorator @{decorator}; std.Decorator provides: {}", markers.join(", ")));
+                    }
                     "private" => Access::Private,
                     "subclass" => Access::Subclass,
-                    "static" | "class" | "overload" => return Err(format!("@{decorator} is not implemented yet")),
-                    _ => return Err(format!("unknown decorator @{decorator}; available: private, subclass")),
+                    _ => return Err(format!("@{decorator} is not implemented yet")),
                 };
                 if method.access != Access::Public && method.access != access {
                     return Err(format!("{}.{} cannot be both private and subclass", family.name, method.name));
