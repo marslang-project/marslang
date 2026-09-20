@@ -1,8 +1,8 @@
 # marslang
 
-Marslang is an interpreted language. This repository is its Rust implementation (**marslang rs-0.8.1**): it parses and checks a `.mars` program, then runs it directly. No JavaScript or Node is involved.
+Marslang is an interpreted language. This repository is its Rust implementation (**marslang rs-0.9.0**): it parses and checks a `.mars` program, then runs it directly. No JavaScript or Node is involved.
 
-See the [rs-0.8.1 release notes](docs/releases/rs-0.8.1.md) for access and type-check fixes, the [rs-0.8.0 release notes](docs/releases/rs-0.8.0.md) for private methods, the [rs-0.7.0 release notes](docs/releases/rs-0.7.0.md) for error handling and new standard packages, and the [rs-0.6.0 release notes](docs/releases/rs-0.6.0.md) for the Rust interpreter and package system.
+See the [rs-0.9.0 release notes](docs/releases/rs-0.9.0.md) for installation and the user package directory, the [rs-0.8.1 release notes](docs/releases/rs-0.8.1.md) for access and type-check fixes, the [rs-0.8.0 release notes](docs/releases/rs-0.8.0.md) for private methods, the [rs-0.7.0 release notes](docs/releases/rs-0.7.0.md) for error handling and new standard packages, and the [rs-0.6.0 release notes](docs/releases/rs-0.6.0.md) for the Rust interpreter and package system.
 
 The development direction is to stabilize the Rust interpreter before self-hosting. Discussion documents under `docs/` stay local; `docs/api/` and `docs/releases/` are available to Git.
 
@@ -12,9 +12,10 @@ generator lives in [marslang-project/website](https://github.com/marslang-projec
 
 Run `cargo test` for current coverage. The execution tests run each program in the interpreter and assert its output or runtime error. Only Rust is required.
 
-This release adds private methods through `std.Decorator` (`@Decorator.private`,
-`@Decorator.subclass`) and fixes two crash paths and four correctness issues from the
-rs-0.7.0 review. Earlier releases added error handling, cycle collection, and the
+This release installs without a Rust toolchain: `install.ps1` and `install.sh` download
+a released binary, and packages installed in `marslang_pkgs` are importable from every
+program. The previous release added private methods through `std.Decorator`
+(`@Decorator.private`, `@Decorator.subclass`). Earlier releases added error handling, cycle collection, and the
 standard packages `std.containers`, `std.strings`, `std.types`, and `std.time`.
 The remaining decorators, further standard
 libraries, complete module handling, and async remain pending. Maps, deep copies,
@@ -30,6 +31,31 @@ It includes:
 - a tree-walking interpreter (`src/interp.rs`), runtime values (`src/value.rs`), and the package loader (`src/package.rs`)
 - the standard library: Marslang packages in `std/*.mars` and native Rust packages in `std/rs/*.rs`, registered at build time by `build.rs`
 - CLI executable named `marslang` (`src/main.rs`)
+
+## Install
+
+A released build installs into your home directory and needs no Rust toolchain:
+
+```powershell
+irm https://marslang.kevin-z.com/install.ps1 | iex
+```
+
+```bash
+curl -fsSL https://marslang.kevin-z.com/install.sh | sh
+```
+
+Both scripts live in [install/](install/): they download the archive for your
+platform from the release, check it against the release's `SHA256SUMS`, put
+`marslang` in a per-user directory, add it to `PATH`, and create the package
+directory `marslang_pkgs` in your home directory. `--use std,ext` (`-Use` in
+PowerShell) selects package sets; `std` is built into the interpreter and `ext`
+is not published yet. The archives are built for Windows, Linux, and macOS by
+[.github/workflows/release.yml](.github/workflows/release.yml) when an `rs-*`
+tag is pushed.
+
+`marslang pkgs` prints the directory that installed packages are imported from:
+`MARSLANG_PKGS`, or `marslang_pkgs` in your home directory. A program's own
+directory is always searched first.
 
 ## Build
 

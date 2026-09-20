@@ -6,7 +6,10 @@
 //!   compiled into the interpreter. Only standard packages may import them.
 //! - `takepkg a.b;` is an absolute import from the program's root directory (the
 //!   main file's directory): `a/b/init.mars` if `a/b` is a package directory,
-//!   otherwise `a/b.mars`. Parent packages' `init.mars` files run first.
+//!   otherwise `a/b.mars`. Parent packages' `init.mars` files run first. A package
+//!   the program does not carry is looked up next in the user's package directory,
+//!   `$MARSLANG_PKGS` or `marslang_pkgs` in the home directory, where the installer
+//!   puts packages that every program of this user may import.
 //! - `takepkg .b;` / `takepkg ..c.d;` are relative imports: one dot is the current
 //!   package, each further dot goes up one level. The main program and top-level
 //!   files are not in a package, so they cannot use relative imports.
@@ -45,8 +48,9 @@ pub(crate) struct LoadedPackage {
 }
 
 pub(crate) struct Loader {
-    /// Directory that absolute package names are resolved against.
-    root: PathBuf,
+    /// Directories that absolute package names are resolved against, in order:
+    /// the program's own root, then the user's package directory.
+    roots: Vec<PathBuf>,
     /// Loaded packages, each after the packages it imports.
     pub packages: Vec<LoadedPackage>,
     loaded: HashSet<String>,
@@ -58,13 +62,19 @@ pub(crate) struct Loader {
 enum Found {
     Native(fn() -> crate::value::Value),
     Bundled(&'static str),
-    /// A `.mars` file; `true` when it is a directory's `init.mars`.
-    File(PathBuf, bool),
+    /// A `.mars` file, the root it was found under, and `true` when it is a
+    /// directory's `init.mars`.
+    File(PathBuf, PathBuf, bool),
 }
 
 impl Loader {
     pub fn new(root: &Path) -> Self {
-        Loader { root: root.to_path_buf(), packages: Vec::new(), loaded: HashSet::new(), loading: Vec::new() }
+        let mut roots = vec![root.to_path_buf()];
+        match user_packages() {
+            Some(user) if user != roots[0] => roots.push(user),
+            _ => {}
+        }
+        Loader { roots, packages: Vec::new(), loaded: HashSet::new(), loading: Vec::new() }
     }
 
     /// Load every package `program` imports, recursively, and record each
@@ -109,20 +119,22 @@ impl Loader {
             return Err(format!("circular package import: {}", chain.join(" -> ")));
         }
         let found = self.find(module)?;
-        if let Found::File(..) = found {
-            // Importing a.b.c first runs a/init.mars and a/b/init.mars.
-            // A parent that is already loading (its init imports this child) is skipped.
+        if let Found::File(_, root, _) = &found {
+            // Importing a.b.c first runs a/init.mars and a/b/init.mars, from the
+            // same root as the package itself. A parent that is already loading
+            // (its init imports this child) is skipped.
+            let root = root.clone();
             let segments: Vec<&str> = module.split('.').collect();
             for end in 1..segments.len() {
                 let parent = segments[..end].join(".");
-                if !self.loading.contains(&parent) && self.init_file(&parent).is_file() { self.load(&parent)?; }
+                if !self.loading.contains(&parent) && init_file(&root, &parent).is_file() { self.load(&parent)?; }
             }
             if self.loaded.contains(module) { return Ok(()); }
         }
         let (source, exports) = match found {
             Found::Native(native) => (Source::Native(native), Vec::new()),
             Found::Bundled(text) => self.compile_package(module, text, false)?,
-            Found::File(path, is_init) => {
+            Found::File(path, _, is_init) => {
                 let text = fs::read_to_string(&path)
                     .map_err(|e| format!("failed to read package '{module}' at {}: {e}", path.display()))?;
                 self.compile_package(module, &text, is_init)?
@@ -149,20 +161,18 @@ impl Loader {
             return BUNDLED.iter().find(|(name, _)| *name == module).map(|(_, text)| Found::Bundled(text))
                 .ok_or_else(|| format!("standard package '{module}' is not implemented yet"));
         }
-        // A package directory takes precedence over a module file of the same name.
-        let init = self.init_file(module);
-        if init.is_file() { return Ok(Found::File(init, true)); }
-        let mut file = self.root.clone();
-        file.extend(module.split('.'));
-        file.set_extension("mars");
-        if file.is_file() { return Ok(Found::File(file, false)); }
-        Err(format!("package '{module}' not found: looked for {} and {}", init.display(), file.display()))
-    }
-
-    fn init_file(&self, module: &str) -> PathBuf {
-        let mut path = self.root.clone();
-        path.extend(module.split('.'));
-        path.join("init.mars")
+        let mut tried = Vec::new();
+        for root in &self.roots {
+            // A package directory takes precedence over a module file of the same name.
+            let init = init_file(root, module);
+            if init.is_file() { return Ok(Found::File(init, root.clone(), true)); }
+            let mut file = root.clone();
+            file.extend(module.split('.'));
+            file.set_extension("mars");
+            if file.is_file() { return Ok(Found::File(file, root.clone(), false)); }
+            tried.push(format!("{} and {}", init.display(), file.display()));
+        }
+        Err(format!("package '{module}' not found: looked for {}", tried.join(", ")))
     }
 
     fn compile_package(&mut self, module: &str, text: &str, is_init: bool) -> Result<(Source, Vec<(String, Export)>), String> {
@@ -200,6 +210,24 @@ impl Loader {
         exports.retain(|(name, _)| !name.starts_with('_'));
         Ok((program, exports))
     }
+}
+
+fn init_file(root: &Path, module: &str) -> PathBuf {
+    let mut path = root.to_path_buf();
+    path.extend(module.split('.'));
+    path.join("init.mars")
+}
+
+/// The user's package directory: `$MARSLANG_PKGS`, else `marslang_pkgs` in the
+/// home directory. Packages installed there are importable from every program.
+/// The directory does not have to exist; it is reported when an import fails.
+pub fn user_packages() -> Option<PathBuf> {
+    match std::env::var_os("MARSLANG_PKGS") {
+        Some(path) if !path.is_empty() => return Some(PathBuf::from(path)),
+        _ => {}
+    }
+    let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"))?;
+    Some(PathBuf::from(home).join("marslang_pkgs")).filter(|path| path.parent().is_some_and(|p| !p.as_os_str().is_empty()))
 }
 
 /// Turn a relative name (`.b`, `..c.d`) into an absolute one, from the

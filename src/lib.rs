@@ -9,6 +9,7 @@ mod resolve;
 pub mod value;
 
 pub use interp::InputSource;
+pub use package::user_packages;
 pub use value::{ErrorKind, RuntimeError};
 
 pub const VERSION: &str = concat!("rs-", env!("CARGO_PKG_VERSION"));

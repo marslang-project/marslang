@@ -4,3 +4,6 @@
 /docs/*
 !/docs/releases/
 !/docs/api/
+
+# IDE
+.idea/

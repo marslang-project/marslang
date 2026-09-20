@@ -740,6 +740,45 @@ fn takepkg_packages_init_files_and_relative_imports() {
 }
 
 #[test]
+fn takepkg_falls_back_to_the_user_package_directory() {
+    // Packages installed for the user, outside any one program's directory.
+    let user = package_dir("user-packages", &[
+        ("greet.mars", "func hello => \"installed\";"),
+        ("shared.mars", "func who => \"user copy\";"),
+        ("box/init.mars", "fixed NAME (string) = \"box\";"),
+        // A package under the user directory imports its neighbours from there too.
+        ("box/inner.mars", "takepkg greet;
+func who => greet.hello();"),
+    ]);
+    let program = package_dir("user-program", &[
+        ("main.mars", "takepkg greet;
+takepkg box;
+takepkg box.inner;
+takepkg shared;
+            func m{ out(greet.hello()); out(box.NAME); out(inner.who()); out(shared.who()); }"),
+        // The program's own copy of a package name wins over the installed one.
+        ("shared.mars", "func who => \"program copy\";"),
+    ]);
+    std::env::set_var("MARSLANG_PKGS", &user);
+
+    let (out, result) = run_file(&program.join("main.mars"));
+    result.expect("runtime error");
+    assert_eq!(out, "installed
+box
+installed
+program copy
+");
+
+    // A package in neither place reports both directories it looked in.
+    std::fs::write(program.join("main.mars"), "takepkg absent;
+func m{}").unwrap();
+    let error = marslang::compile_file(&program.join("main.mars")).unwrap_err();
+    assert!(error.contains("absent.mars") && error.contains(user.to_string_lossy().as_ref()), "{error}");
+
+    std::env::remove_var("MARSLANG_PKGS");
+}
+
+#[test]
 fn collection_keeps_reachable_cycles_and_temporaries_intact() {
     // 30,000 garbage cycles force several collections while live cycles are held
     // by a global, a local, a parameter, and an unfinished call's argument list.

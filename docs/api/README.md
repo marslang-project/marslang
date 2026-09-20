@@ -1,6 +1,6 @@
 # Marslang language and API reference
 
-This reference describes the Rust interpreter as of `rs-0.8.1`,
+This reference describes the Rust interpreter as of `rs-0.9.0`,
 including dynamic numeric type tracking and the expanded `std.math` package.
 The source extension is `.mars`; earlier releases used `.mrs`.
 Use the matching source checkout for the filenames documented here.
@@ -20,11 +20,28 @@ notes elsewhere under `docs/` remain local.
 - [std.time](std-time.md): clocks and sleeping.
 - [std.Decorator](std-decorator.md): `@Decorator.private` and `@Decorator.subclass` methods.
 
-## Run
+## Install
 
-Install Rust. Run from the repository root:
+Released builds need no Rust toolchain and install into your home directory:
+
+```powershell
+irm https://marslang.kevin-z.com/install.ps1 | iex
+```
 
 ```sh
+curl -fsSL https://marslang.kevin-z.com/install.sh | sh
+```
+
+Both accept `--use std,ext` (`-Use` in PowerShell) for the package sets to
+install; `std` is built into the interpreter, and `ext` is not published yet.
+`marslang pkgs` prints where packages you install are imported from.
+
+## Run
+
+From an installed interpreter, or with Rust from the repository root:
+
+```sh
+marslang docs/api/examples/strings.mars
 cargo run -- docs/api/examples/strings.mars
 ```
 

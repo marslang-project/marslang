@@ -1,0 +1,117 @@
+# Build the interpreter for every supported platform and attach the archives to
+# the release for its tag, so `install.ps1` and `install.sh` have something to
+# download and no one has to install Rust to run Marslang.
+name: release
+
+on:
+  push:
+    tags: ["rs-*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing rs-X.Y.Z tag to build and upload"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu }
+          - { os: ubuntu-latest, target: aarch64-unknown-linux-gnu, linker: gcc-aarch64-linux-gnu }
+          - { os: macos-latest, target: aarch64-apple-darwin }
+          - { os: macos-latest, target: x86_64-apple-darwin }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Install the target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Install the cross linker
+        if: matrix.linker
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.linker }}
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      # The tests run on the host only; a cross-built binary cannot run here.
+      - name: Test
+        if: ${{ !matrix.linker }}
+        run: cargo test --release --locked --target ${{ matrix.target }}
+
+      - name: Package
+        shell: bash
+        run: |
+          set -eu
+          tag="${{ inputs.tag || github.ref_name }}"
+          name="marslang-$tag-${{ matrix.target }}"
+          mkdir -p "staging/$name" dist
+          cp README.md "staging/$name/"
+          if [ "${{ runner.os }}" = Windows ]; then
+            cp "target/${{ matrix.target }}/release/marslang.exe" "staging/$name/"
+            (cd staging && 7z a -tzip "../dist/$name.zip" "$name" >/dev/null)
+          else
+            cp "target/${{ matrix.target }}/release/marslang" "staging/$name/"
+            tar -czf "dist/$name.tar.gz" -C staging "$name"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: dist/*
+
+  release:
+    name: attach to the release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Collect the archives and their checksums
+        shell: bash
+        run: |
+          set -eu
+          mkdir -p dist
+          find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec cp {} dist/ \;
+          (cd dist && sha256sum * > SHA256SUMS)
+          cat dist/SHA256SUMS
+
+      - name: Upload to the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          tag="${{ inputs.tag || github.ref_name }}"
+          notes="docs/releases/$tag.md"
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            # The release page is normally written by hand; create it only if the
+            # tag was pushed without one, using the notes committed for it.
+            if [ -f "$notes" ]; then
+              gh release create "$tag" --title "Marslang $tag" --notes-file "$notes" --latest
+            else
+              gh release create "$tag" --title "Marslang $tag" --generate-notes --latest
+            fi
+          fi
+          gh release upload "$tag" dist/* --clobber

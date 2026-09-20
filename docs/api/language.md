@@ -223,7 +223,9 @@ and are read-only.
 
 Packages work much like Python's. Absolute names resolve from the program's root
 directory (the main file's directory); a directory containing `init.mars` is a
-package, and dotted names map to subdirectories.
+package, and dotted names map to subdirectories. A name the program itself does not
+provide is looked for next in your package directory, so packages you install are
+importable from every program you write.
 
 | Form | Loads |
 | --- | --- |
@@ -239,6 +241,19 @@ and top-level files use absolute names, and going above the top-level package is
 error. Importing `a.b.c` first runs `a/init.mars` and `a/b/init.mars` when
 they exist. A package may import its own modules from `init.mars`. The name `init`
 is reserved for these files, so no module can be named `init`.
+
+### Your package directory
+
+Packages installed for you live in `marslang_pkgs` in your home directory
+(`C:\Users\you\marslang_pkgs`, `/home/you/marslang_pkgs`), or wherever
+`MARSLANG_PKGS` points. `marslang pkgs` prints the directory it will use.
+
+The program's own directory is searched first, so a file beside your program
+always wins over an installed package of the same name, and a program cannot be
+changed by something installed later. Within one package the two never mix: a
+package found in your package directory runs the `init.mars` files of its parents
+from there as well. When an import fails, the error lists every file that was
+looked for, in both places.
 
 Each package is loaded once under its absolute name, however it is written or however
 many files import it; its top-level statements run once, before the importing file's.

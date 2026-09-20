@@ -4,7 +4,7 @@ use std::io::{self, Write};
 use std::path::Path;
 use std::process::ExitCode;
 
-const USAGE: &str = "Usage: marslang <file.mars> | marslang run <file.mars> | marslang check <file.mars> | marslang lex <file.mars> | marslang repl | marslang --version";
+const USAGE: &str = "Usage: marslang <file.mars> | marslang run <file.mars> | marslang check <file.mars> | marslang lex <file.mars> | marslang repl | marslang pkgs | marslang --version";
 
 fn main() -> ExitCode {
     match run() {
@@ -35,6 +35,15 @@ fn run() -> Result<(), String> {
             Ok(())
         }
         Some("lex") => lex_cmd(file(2)?),
+        // Where packages installed for this user are imported from, so an
+        // installation can be checked without running a program.
+        Some("pkgs") => {
+            match marslang::user_packages() {
+                Some(path) => println!("{}", path.display()),
+                None => return Err("no user package directory: set MARSLANG_PKGS".into()),
+            }
+            Ok(())
+        }
         Some("repl") => repl_cmd(),
         Some(path) => run_cmd(Path::new(path)),
     }
