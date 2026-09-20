@@ -7,6 +7,8 @@ See the [rs-0.8.1 release notes](docs/releases/rs-0.8.1.md) for access and type-
 The development direction is to stabilize the Rust interpreter before self-hosting. Discussion documents under `docs/` stay local; `docs/api/` and `docs/releases/` are available to Git.
 
 Read the [language and API reference](docs/api/README.md) for current syntax and built-in APIs.
+The same reference is published at [marslang.kevin-z.com](https://marslang.kevin-z.com); the site
+generator lives in [marslang-project/website](https://github.com/marslang-project/website).
 
 Run `cargo test` for current coverage. The execution tests run each program in the interpreter and assert its output or runtime error. Only Rust is required.
 

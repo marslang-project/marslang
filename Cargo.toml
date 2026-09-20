@@ -2,6 +2,9 @@
 name = "marslang"
 version = "0.8.1"
 edition = "2021"
+description = "The Marslang interpreter."
+homepage = "https://marslang.kevin-z.com"
+repository = "https://github.com/marslang-project/marslang"
 
 [dependencies]
 indexmap = "2.14.2"
