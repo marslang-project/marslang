@@ -18,6 +18,8 @@ pub struct ImportDecl {
     pub alias: Option<String>,
     /// Identity of the loaded package, filled in by the package loader.
     pub key: Option<String>,
+    /// Source line of the `takepkg`, so the loader can say where a bad import is.
+    pub line: usize,
 }
 
 #[derive(Debug, Clone)]

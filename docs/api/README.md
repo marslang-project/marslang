@@ -36,6 +36,10 @@ Both accept `--use std,ext` (`-Use` in PowerShell) for the package sets to
 install; `std` is built into the interpreter, and `ext` is not published yet.
 `marslang pkgs` prints where packages you install are imported from.
 
+For editing, [vscode-marslang](https://github.com/marslang-project/vscode-marslang)
+gives Visual Studio Code highlighting for `.mars` files and shows what
+`marslang check` reports as you save.
+
 ## Run
 
 From an installed interpreter, or with Rust from the repository root:

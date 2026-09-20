@@ -57,6 +57,13 @@ tag is pushed.
 `MARSLANG_PKGS`, or `marslang_pkgs` in your home directory. A program's own
 directory is always searched first.
 
+## Edit
+
+[vscode-marslang](https://github.com/marslang-project/vscode-marslang) is the
+Visual Studio Code extension: `.mars` files become their own language, are
+highlighted, and are checked by this interpreter when they are opened and saved,
+with each error shown on its line.
+
 ## Build
 
 ```bash

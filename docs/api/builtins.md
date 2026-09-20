@@ -59,5 +59,16 @@ error and exit status 1.
 Calls nested deeper than 10,000 levels raise `RangeError: maximum call depth exceeded`.
 Calling a function, method, or built-in with the wrong number of arguments raises `TypeError`.
 
-Undefined variables, invalid syntax, and fixed-binding reassignment can fail
-during compilation. Full source-location diagnostics remain pending.
+Undefined variables, invalid syntax, and fixed-binding reassignment fail during
+compilation, before anything runs. Syntax errors and bad imports report the
+source line they are on:
+
+```text
+error: line 9: expected expression, got End
+error: line 2: package 'shapes.circle' not found: looked for ...
+```
+
+Name resolution has no positions yet, so `error: unknown name 'nope'` says what
+is missing but not where. Editors can still place it: the
+[VS Code extension](https://github.com/marslang-project/vscode-marslang) marks
+the first use of the name it quotes.

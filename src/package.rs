@@ -87,28 +87,39 @@ impl Loader {
         let mut keep = Vec::with_capacity(program.items.len());
         for item in program.items.iter_mut() {
             let Item::Import(import) = item else { keep.push(true); continue };
-            let written = import.module.trim().to_string();
-            if import.alias.as_deref() == Some("*") { return Err("wildcard imports are not implemented yet".into()); }
-            let module = resolve_name(&written, package)?;
-            if module.split('.').any(|segment| !is_ident(segment)) {
-                return Err(format!("invalid package name '{written}'"));
-            }
-            if module.split('.').any(|segment| segment == "init") {
-                return Err(format!("'init' is reserved for package init files; import the package itself instead of '{written}'"));
-            }
-            let alias = import.alias.clone().unwrap_or_else(|| module.rsplit('.').next().unwrap().to_string());
-            if !is_ident(&alias) { return Err(format!("invalid import alias '{alias}' for package '{written}'")); }
-            if (module == "rs" || module.starts_with("rs.")) && !standard {
-                return Err(format!("native package '{module}' is only available to standard packages"));
-            }
-            self.load(&module)?;
-            keep.push(seen.insert((module.clone(), alias.clone())));
-            import.alias = Some(alias);
-            import.key = Some(module);
+            let line = import.line;
+            let kept = self.load_import(import, package, standard, &mut seen)
+                .map_err(|e| crate::parser::at_line(line, e))?;
+            keep.push(kept);
         }
         let mut keep = keep.into_iter();
         program.items.retain(|_| keep.next().unwrap());
         Ok(())
+    }
+
+    /// Load what one `takepkg` names, recording its package key and alias.
+    /// Returns false when the same package and alias were already imported here.
+    fn load_import(&mut self, import: &mut ImportDecl, package: Option<&str>, standard: bool,
+                   seen: &mut HashSet<(String, String)>) -> Result<bool, String> {
+        let written = import.module.trim().to_string();
+        if import.alias.as_deref() == Some("*") { return Err("wildcard imports are not implemented yet".into()); }
+        let module = resolve_name(&written, package)?;
+        if module.split('.').any(|segment| !is_ident(segment)) {
+            return Err(format!("invalid package name '{written}'"));
+        }
+        if module.split('.').any(|segment| segment == "init") {
+            return Err(format!("'init' is reserved for package init files; import the package itself instead of '{written}'"));
+        }
+        let alias = import.alias.clone().unwrap_or_else(|| module.rsplit('.').next().unwrap().to_string());
+        if !is_ident(&alias) { return Err(format!("invalid import alias '{alias}' for package '{written}'")); }
+        if (module == "rs" || module.starts_with("rs.")) && !standard {
+            return Err(format!("native package '{module}' is only available to standard packages"));
+        }
+        self.load(&module)?;
+        let fresh = seen.insert((module.clone(), alias.clone()));
+        import.alias = Some(alias);
+        import.key = Some(module);
+        Ok(fresh)
     }
 
     /// Load a package by absolute name, after its parent packages.

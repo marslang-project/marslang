@@ -2,6 +2,24 @@ use crate::ast::*;
 
 pub type PResult<T> = Result<T, String>;
 
+/// A statement after normalization, with the source line it started on, so an
+/// error can say where it is even though layout does not delimit statements.
+pub struct Line {
+    text: String,
+    number: usize,
+}
+
+impl Line {
+    fn trim(&self) -> &str {
+        self.text.trim()
+    }
+}
+
+/// Prefix a message with its source line, unless it already carries one.
+pub(crate) fn at_line(number: usize, message: String) -> String {
+    if message.starts_with("line ") { message } else { format!("line {number}: {message}") }
+}
+
 pub fn parse_program(input: &str) -> PResult<Program> {
     let lines = preprocess(input)?;
     let mut idx = 0usize;
@@ -12,22 +30,23 @@ pub fn parse_program(input: &str) -> PResult<Program> {
             idx += 1;
             continue;
         }
+        let number = lines[idx].number;
         if line.starts_with("takepkg ") {
-            items.push(Item::Import(parse_import(line)?));
+            items.push(Item::Import(parse_import(line, number).map_err(|e| at_line(number, e))?));
             idx += 1;
             continue;
         }
         if line.starts_with("family ") {
-            let (family, next) = parse_family(&lines, idx)?;
+            let (family, next) = parse_family(&lines, idx).map_err(|e| at_line(number, e))?;
             items.push(Item::Family(family));
             idx = next;
             continue;
         }
         if line.starts_with('@') {
-            return Err(format!("decorators are only supported on family methods: '{line}'"));
+            return Err(at_line(number, format!("decorators are only supported on family methods: '{line}'")));
         }
         if line.starts_with("func ") {
-            let (func, next) = parse_func(&lines, idx)?;
+            let (func, next) = parse_func(&lines, idx).map_err(|e| at_line(number, e))?;
             items.push(Item::Func(func));
             idx = next;
             continue;
@@ -83,7 +102,7 @@ fn validate_loop_control(body: &[Stmt], depth: usize) -> PResult<()> {
     Ok(())
 }
 
-fn preprocess(input: &str) -> PResult<Vec<String>> {
+fn preprocess(input: &str) -> PResult<Vec<Line>> {
     let mut clean = String::new();
     let mut chars = input.chars().peekable();
     let mut quote = None;
@@ -146,12 +165,23 @@ fn preprocess(input: &str) -> PResult<Vec<String>> {
     }
     // Layout does not delimit statements. Split only outside strings and
     // parenthesized headers/calls, so compact blocks use the same parser path.
-    let mut normalized = String::new();
+    // Each piece keeps the source line it started on, for error messages.
+    let mut lines = Vec::new();
+    let mut text = String::new();
+    let mut number = 1usize;
+    let mut source = 1usize;
     let mut quote = None;
     let mut escaped = false;
     let mut depth = 0usize;
     for ch in clean.chars() {
-        normalized.push(ch);
+        if ch == '\n' {
+            lines.push(Line { text: std::mem::take(&mut text), number });
+            source += 1;
+            number = source;
+            continue;
+        }
+        if text.is_empty() { number = source; }
+        text.push(ch);
         if let Some(q) = quote {
             if escaped { escaped = false; }
             else if ch == '\\' { escaped = true; }
@@ -162,14 +192,17 @@ fn preprocess(input: &str) -> PResult<Vec<String>> {
             '\'' | '"' => quote = Some(ch),
             '(' | '[' => depth += 1,
             ')' | ']' => depth = depth.saturating_sub(1),
-            '{' | '}' | ';' if depth == 0 => normalized.push('\n'),
+            '{' | '}' | ';' if depth == 0 => {
+                lines.push(Line { text: std::mem::take(&mut text), number });
+            }
             _ => {}
         }
     }
-    Ok(normalized.lines().map(str::to_string).collect())
+    if !text.is_empty() { lines.push(Line { text, number }); }
+    Ok(lines)
 }
 
-fn parse_import(line: &str) -> PResult<ImportDecl> {
+fn parse_import(line: &str, number: usize) -> PResult<ImportDecl> {
     let body = line
         .trim_end_matches(';')
         .trim_start_matches("takepkg")
@@ -179,17 +212,19 @@ fn parse_import(line: &str) -> PResult<ImportDecl> {
             module: module.trim().to_string(),
             alias: Some(alias.trim().to_string()),
             key: None,
+            line: number,
         })
     } else {
         Ok(ImportDecl {
             module: body.to_string(),
             alias: None,
             key: None,
+            line: number,
         })
     }
 }
 
-fn parse_family(lines: &[String], start: usize) -> PResult<(FamilyDecl, usize)> {
+fn parse_family(lines: &[Line], start: usize) -> PResult<(FamilyDecl, usize)> {
     let header = lines[start].trim();
     let mut header = header.trim_start_matches("family").trim().to_string();
     if !header.contains('{') {
@@ -262,13 +297,13 @@ fn parse_family(lines: &[String], start: usize) -> PResult<(FamilyDecl, usize)> 
     Err("unterminated family block".to_string())
 }
 
-fn parse_func(lines: &[String], start: usize) -> PResult<(FuncDecl, usize)> {
+fn parse_func(lines: &[Line], start: usize) -> PResult<(FuncDecl, usize)> {
     parse_func_from(lines[start].trim(), lines, start)
 }
 
 /// Parse a function whose header is `header` (normally `lines[start]`); a block
 /// body continues on the following lines.
-fn parse_func_from(header: &str, lines: &[String], start: usize) -> PResult<(FuncDecl, usize)> {
+fn parse_func_from(header: &str, lines: &[Line], start: usize) -> PResult<(FuncDecl, usize)> {
     if header.contains("=>") {
         let (left, right) = header
             .trim_end_matches(';')
@@ -308,7 +343,7 @@ fn parse_func_from(header: &str, lines: &[String], start: usize) -> PResult<(Fun
     ))
 }
 
-fn parse_block_stmts(lines: &[String], idx: &mut usize) -> PResult<Vec<Stmt>> {
+fn parse_block_stmts(lines: &[Line], idx: &mut usize) -> PResult<Vec<Stmt>> {
     let mut stmts = Vec::new();
     while *idx < lines.len() {
         let line = lines[*idx].trim();
@@ -399,7 +434,7 @@ fn opens_keyword_block(line: &str, keyword: &str) -> bool {
     line.strip_prefix(keyword).and_then(|rest| rest.trim_start().strip_suffix('{')).is_some_and(|mid| mid.trim().is_empty())
 }
 
-fn parse_run_stmt(lines: &[String], start: usize) -> PResult<(Stmt, usize)> {
+fn parse_run_stmt(lines: &[Line], start: usize) -> PResult<(Stmt, usize)> {
     let mut i = start + 1;
     let body = parse_block_stmts(lines, &mut i)?;
     let mut handlers = Vec::new();
@@ -459,7 +494,12 @@ fn parse_handle_header(header: &str) -> PResult<(Vec<String>, Option<String>)> {
     Ok((types, None))
 }
 
-fn parse_stmt_at(lines: &[String], idx: usize) -> PResult<(Stmt, usize)> {
+fn parse_stmt_at(lines: &[Line], idx: usize) -> PResult<(Stmt, usize)> {
+    let number = lines[idx].number;
+    parse_stmt_from(lines, idx).map_err(|e| at_line(number, e))
+}
+
+fn parse_stmt_from(lines: &[Line], idx: usize) -> PResult<(Stmt, usize)> {
     let l = lines[idx].trim();
 
     if opens_keyword_block(l, "run") {
@@ -541,7 +581,7 @@ fn parse_for_sequence(text: &str) -> PResult<Vec<Stmt>> {
     }).collect()
 }
 
-fn parse_if_stmt(lines: &[String], start: usize) -> PResult<(Stmt, usize)> {
+fn parse_if_stmt(lines: &[Line], start: usize) -> PResult<(Stmt, usize)> {
     let line = lines[start].trim();
     if !line.ends_with('{') {
         return Err("if statement header must end with '{'".to_string());
@@ -595,7 +635,7 @@ fn parse_if_stmt(lines: &[String], start: usize) -> PResult<(Stmt, usize)> {
     ))
 }
 
-fn parse_repeat_stmt(lines: &[String], start: usize) -> PResult<(Stmt, usize)> {
+fn parse_repeat_stmt(lines: &[Line], start: usize) -> PResult<(Stmt, usize)> {
     let line = lines[start].trim();
     if !line.ends_with('{') {
         return Err("repeat statement header must end with '{'".to_string());
