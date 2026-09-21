@@ -109,7 +109,7 @@ fn unterminated_comment_has_diagnostic() {
     let diagnostic = marslang::compile("/* unfinished")
         .expect_err("unterminated comment must be rejected");
     assert!(diagnostic.to_lowercase().contains("comment"), "{diagnostic}");
-    assert!(diagnostic.contains("1:1"), "expected opening location 1:1: {diagnostic}");
+    assert!(diagnostic.contains("line 1: unterminated block comment starting at column 1"), "expected the opening location: {diagnostic}");
 }
 
 #[test]
@@ -153,7 +153,7 @@ func m{
 }
 "#, "say \"// hello\"\nC:\\\n3\n");
     let error = marslang::compile("// ignored\n  /* open").unwrap_err();
-    assert!(error.contains("2:3"), "{error}");
+    assert!(error.contains("line 2: unterminated block comment starting at column 3"), "{error}");
     assert!(marslang::compile("out(\"unfinished);").is_err());
 }
 
@@ -1167,7 +1167,7 @@ fn decorators_need_the_package_and_a_known_marker() {
         ("takepkg std.Decorator;\nfamily Box{\n @Decorator.static\n func x() => 1;\n}", "@Decorator.static is not implemented yet"),
         ("takepkg std.Decorator;\nfamily Box{\n @Decorator.private @Decorator.subclass\n func x() => 1;\n}", "cannot be both private and subclass"),
         ("takepkg std.Decorator;\nfamily Box{\n @Decorator.private\n func init(){}\n}", "constructors are always public"),
-        ("takepkg std.Decorator;\n@Decorator.private\nfunc x() => 1;", "only supported on family methods"),
+        ("takepkg std.Decorator;\n@Decorator.private\nfunc x() => 1;", "line 3: @Decorator.private applies to family methods, not to func x"),
         ("takepkg std.Decorator;\nfamily Box{\n @Decorator.private\n}", "must be followed by a func"),
         ("takepkg std.Decorator;\nfamily Box{\n @private\n func x() => 1;\n}", "invalid decorator"),
     ] {
@@ -1249,9 +1249,53 @@ fn padding_with_merging_fills_is_rejected() {
 }
 
 #[test]
+fn triple_quoted_strings_span_lines() {
+    executes("func m{\n    s = \"\"\"first\n  \"second\"\tand\\tescapes\nthird\"\"\";\n    out(s);\n    out(\"\"\"\"\"\".len());\n    out(\"\"\"a\"\"\" + \"b\");\n}",
+        "first\n  \"second\"\tand\tescapes\nthird\n0\nab\n");
+    // Lines after a multi-line string keep their numbers.
+    let error = marslang::compile("func m{\n    s = \"\"\"a\nb\nc\"\"\";\n    out(1 +;\n}").unwrap_err();
+    assert!(error.contains("line 5: expected expression"), "{error}");
+    let error = marslang::compile("func m{\n    s = \"\"\"open;\n}").unwrap_err();
+    assert!(error.contains("line 2: unterminated string starting at column 9"), "{error}");
+}
+
+#[test]
+fn docstrings_describe_functions_families_and_methods() {
+    let source = "takepkg std.Decorator;\n\
+        @Decorator.docstring(\"\"\"\n    Shapes with an area.\n\n    Measured in square units.\n\"\"\")\n\
+        family Shape{\n    @Decorator.docstring(\"The area.\")\n    func area() => 0;\n}\n\
+        @Decorator.docstring(\"Adds.\") func add(int a, int b) => a + b;\n\
+        func m{ total = add(1, 2); s = Shape(); out(s.area() + total); }";
+    // Docstrings change nothing at runtime.
+    executes(source, "3\n");
+    let symbols = marslang::symbols(source, std::path::Path::new(".")).expect("symbols");
+    for expected in [
+        r#"{"name":"Shape","parent":null,"line":7,"end":10,"doc":"Shapes with an area.\n\nMeasured in square units.","#,
+        r#"{"name":"area","family":"Shape","line":9,"end":9,"params":[],"doc":"The area.","access":"public"}"#,
+        r#"{"name":"add","family":null,"line":11,"end":11,"params":[{"name":"a","type":"int"},{"name":"b","type":"int"}],"doc":"Adds.""#,
+        r#"{"name":"s","kind":"variable","type":"Shape","inferred":true,"scope":"m"}"#,
+        r#"{"name":"a","kind":"parameter","type":"int","inferred":false,"scope":"add"}"#,
+        r#"{"name":"total","kind":"variable","type":null,"inferred":false,"scope":"m"}"#,
+    ] {
+        assert!(symbols.contains(expected), "missing {expected}\nin {symbols}");
+    }
+    for (source, message) in [
+        ("takepkg std.Decorator;\n@Decorator.docstring(42)\nfunc f() => 1;", "@Decorator.docstring needs one string"),
+        ("takepkg std.Decorator;\n@Decorator.docstring(\"a\")\n@Decorator.docstring(\"b\")\nfunc f() => 1;", "func f has more than one @Decorator.docstring"),
+        ("takepkg std.Decorator;\n@Decorator.private\nfamily Box{}", "@Decorator.private applies to family methods, not to family Box"),
+        ("takepkg std.Decorator;\nfamily Box{\n @Decorator.private(\"x\")\n func x() => 1;\n}", "@Decorator.private takes no argument"),
+        ("takepkg std.Decorator;\n@Decorator.docstring(\"a\")\nx = 1;", "line 3: decorators must be followed by a func or family"),
+        ("@Decorator.docstring(\"a\")\nfunc f() => 1;", "needs `takepkg std.Decorator;`"),
+    ] {
+        let error = marslang::compile(source).expect_err(source);
+        assert!(error.contains(message), "{source}: {error}");
+    }
+}
+
+#[test]
 fn decorator_package_lists_the_available_markers() {
     executes("takepkg std.Decorator;\nfunc m{ out(Decorator.private, Decorator.subclass, Decorator.static); }",
         "private subclass static\n");
     let error = marslang::compile("takepkg std.Decorator;\nfamily Box{\n @Decorator.secret\n func x() => 1;\n}").unwrap_err();
-    assert!(error.contains("std.Decorator provides: private, subclass, static, class, overload"), "{error}");
+    assert!(error.contains("std.Decorator provides: docstring, private, subclass, static, class, overload"), "{error}");
 }

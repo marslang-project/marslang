@@ -1,4 +1,4 @@
-// std.Decorator: the decorator markers written above family methods.
+// std.Decorator: the decorator markers written above functions, families, and methods.
 //
 //     takepkg std.Decorator;
 //     family Account{
@@ -10,6 +10,11 @@
 // if it is exported here, and its value names the marker. The interpreter applies
 // them while compiling, so they are not called at runtime. Markers listed here but
 // not yet applied by the interpreter report "not implemented yet".
+
+// Documentation for the func, family, or method below it, shown by editors:
+//     @Decorator.docstring("Adds two numbers.")
+// A triple-quoted string may span lines; its indentation is removed.
+fixed docstring (string) = "docstring";
 
 // Callable only from methods of the family that declares it.
 fixed private (string) = "private";

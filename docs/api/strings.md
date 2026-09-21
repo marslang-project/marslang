@@ -4,6 +4,19 @@ Both single and double quotes create strings. Boolean literals are `true` and
 `false` (lowercase). Strings are immutable values: these methods return results
 without changing the original binding.
 
+Triple double quotes make a string that spans lines, keeping its line breaks,
+indentation, and any `"` inside it; escapes such as `\t` still work:
+
+```mars
+banner = """Marslang
+  says "hello"
+  to\tyou""";
+```
+
+The text is taken exactly as written, so the line break after an opening `"""`
+and the indentation of the lines are part of the string. Docstrings are the
+exception: `@Decorator.docstring` removes the indentation they share.
+
 ## Characters
 
 A character is one Unicode extended grapheme cluster: a visible character can

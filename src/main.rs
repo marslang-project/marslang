@@ -4,7 +4,7 @@ use std::io::{self, Write};
 use std::path::Path;
 use std::process::ExitCode;
 
-const USAGE: &str = "Usage: marslang <file.mars> | marslang run <file.mars> | marslang check <file.mars> | marslang lex <file.mars> | marslang repl | marslang pkgs | marslang --version";
+const USAGE: &str = "Usage: marslang <file.mars> | marslang run <file.mars> | marslang check <file.mars> | marslang lex <file.mars> | marslang repl | marslang pkgs | marslang symbols <file.mars> [--stdin] | marslang --version";
 
 fn main() -> ExitCode {
     match run() {
@@ -35,6 +35,21 @@ fn run() -> Result<(), String> {
             Ok(())
         }
         Some("lex") => lex_cmd(file(2)?),
+        // Declarations as JSON, for editors. With --stdin the source is read
+        // from standard input (unsaved edits), and packages from the file's folder.
+        Some("symbols") => {
+            let path = file(2)?;
+            let source = if args.get(3).map(String::as_str) == Some("--stdin") {
+                let mut text = String::new();
+                io::Read::read_to_string(&mut io::stdin(), &mut text).map_err(|e| format!("failed to read standard input: {e}"))?;
+                text
+            } else {
+                read(path)?
+            };
+            let base = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+            println!("{}", marslang::symbols(&source, base)?);
+            Ok(())
+        }
         // Where packages installed for this user are imported from, so an
         // installation can be checked without running a program.
         Some("pkgs") => {

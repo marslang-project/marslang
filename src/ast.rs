@@ -43,10 +43,23 @@ pub struct FuncDecl {
     pub name: String,
     pub params: Vec<Param>,
     pub body: FuncBody,
-    /// Decorators written above the function, without `@` (`Decorator.private`).
-    pub decorators: Vec<String>,
+    /// Decorators written above the function.
+    pub decorators: Vec<Decorator>,
     /// Who may call a family method, from its decorators.
     pub access: Access,
+    /// Documentation from `@Decorator.docstring(...)`, with indentation removed.
+    pub doc: Option<String>,
+    /// Source lines of the header and of the last line of the body.
+    pub line: usize,
+    pub end_line: usize,
+}
+
+/// `@Alias.name` or `@Alias.name(argument)` above a func or family.
+#[derive(Debug, Clone)]
+pub struct Decorator {
+    /// Without `@`: `Decorator.private`.
+    pub name: String,
+    pub arg: Option<Expr>,
 }
 
 /// Method access set by `@Decorator.private` / `@Decorator.subclass`.
@@ -77,6 +90,12 @@ pub struct FamilyDecl {
     pub name: String,
     pub extends: Option<String>,
     pub methods: Vec<FuncDecl>,
+    pub decorators: Vec<Decorator>,
+    /// Documentation from `@Decorator.docstring(...)`, with indentation removed.
+    pub doc: Option<String>,
+    /// Source lines of the header and of the closing brace.
+    pub line: usize,
+    pub end_line: usize,
 }
 
 #[derive(Debug, Clone)]

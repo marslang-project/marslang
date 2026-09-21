@@ -1,8 +1,8 @@
 # marslang
 
-Marslang is an interpreted language. This repository is its Rust implementation (**marslang rs-0.10.0**): it parses and checks a `.mars` program, then runs it directly. No JavaScript or Node is involved.
+Marslang is an interpreted language. This repository is its Rust implementation (**marslang rs-0.11.0**): it parses and checks a `.mars` program, then runs it directly. No JavaScript or Node is involved.
 
-See the [rs-0.10.0 release notes](docs/releases/rs-0.10.0.md) for `std.Error`, the [rs-0.9.1 release notes](docs/releases/rs-0.9.1.md) for line numbers in compile errors, the [rs-0.9.0 release notes](docs/releases/rs-0.9.0.md) for installation and the user package directory, the [rs-0.8.1 release notes](docs/releases/rs-0.8.1.md) for access and type-check fixes, the [rs-0.8.0 release notes](docs/releases/rs-0.8.0.md) for private methods, the [rs-0.7.0 release notes](docs/releases/rs-0.7.0.md) for error handling and new standard packages, and the [rs-0.6.0 release notes](docs/releases/rs-0.6.0.md) for the Rust interpreter and package system.
+See the [rs-0.11.0 release notes](docs/releases/rs-0.11.0.md) for docstrings and triple-quoted strings, the [rs-0.10.0 release notes](docs/releases/rs-0.10.0.md) for `std.Error`, the [rs-0.9.1 release notes](docs/releases/rs-0.9.1.md) for line numbers in compile errors, the [rs-0.9.0 release notes](docs/releases/rs-0.9.0.md) for installation and the user package directory, the [rs-0.8.1 release notes](docs/releases/rs-0.8.1.md) for access and type-check fixes, the [rs-0.8.0 release notes](docs/releases/rs-0.8.0.md) for private methods, the [rs-0.7.0 release notes](docs/releases/rs-0.7.0.md) for error handling and new standard packages, and the [rs-0.6.0 release notes](docs/releases/rs-0.6.0.md) for the Rust interpreter and package system.
 
 The development direction is to stabilize the Rust interpreter before self-hosting. Discussion documents under `docs/` stay local; `docs/api/` and `docs/releases/` are available to Git.
 
@@ -79,6 +79,8 @@ cargo run -- run hello.mars
 ```
 
 `marslang check file.mars` parses and resolves a program without running it.
+`marslang symbols file.mars` prints what it declares, with types and docstrings,
+as JSON for editors (`--stdin` reads the source from standard input).
 Syntax errors, unknown names, and fixed-binding reassignment are reported before
 anything runs. Runtime errors print `error: <Kind>: <message>` and exit with status 1.
 

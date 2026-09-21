@@ -6,6 +6,7 @@ pub mod lexer;
 mod package;
 pub mod parser;
 mod resolve;
+mod symbols;
 pub mod value;
 
 pub use interp::InputSource;
@@ -52,6 +53,18 @@ fn compile_in(source: &str, base: &std::path::Path) -> Result<Compiled, String> 
     package::apply_decorators(&mut program, &loader.markers())?;
     resolve::resolve(&mut program)?;
     Ok(Compiled { program, packages: loader.packages })
+}
+
+/// What a program declares, as JSON: functions, families, and methods with their
+/// parameters, source lines, and docstrings, and variables with their scope and
+/// type. This is `marslang symbols`, which editors read for hover information.
+/// Packages are loaded, from `base`, so decorators are checked as in `compile`.
+pub fn symbols(source: &str, base: &std::path::Path) -> Result<String, String> {
+    let mut program = parser::parse_program(source)?;
+    let mut loader = package::Loader::new(base);
+    loader.load_imports(&mut program, None)?;
+    package::apply_decorators(&mut program, &loader.markers())?;
+    Ok(symbols::describe(&program))
 }
 
 /// Run a compiled program with the process's stdin/stdout.

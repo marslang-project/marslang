@@ -263,39 +263,119 @@ fn is_ident(text: &str) -> bool {
     chars.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_') && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-/// Check each family method's decorators and record their effect. A decorator
-/// `@X.name` needs `X` to be the alias of a `takepkg std.Decorator;` in the file.
+/// Check the decorators on every function, family, and method, and record their
+/// effect. A decorator `@X.name` needs `X` to be the alias of a
+/// `takepkg std.Decorator;` in the file, and `name` one of its markers.
 pub(crate) fn apply_decorators(program: &mut Program, markers: &[String]) -> Result<(), String> {
     let aliases: HashSet<String> = program.items.iter().filter_map(|item| match item {
         Item::Import(import) if import.key.as_deref() == Some("std.Decorator") => import.alias.clone(),
         _ => None,
     }).collect();
+    let check = Decorators { aliases: &aliases, markers };
     for item in &mut program.items {
-        let Item::Family(family) = item else { continue };
-        for method in &mut family.methods {
-            for decorator in &method.decorators {
-                let (alias, name) = decorator.split_once('.').expect("the parser checks decorator shape");
-                if !aliases.contains(alias) {
-                    return Err(format!("@{decorator} needs `takepkg std.Decorator;` (or an alias named {alias})"));
-                }
-                // std.Decorator lists the markers; the interpreter applies these.
-                let access = match name {
-                    _ if !markers.iter().any(|marker| marker == name) => {
-                        return Err(format!("unknown decorator @{decorator}; std.Decorator provides: {}", markers.join(", ")));
-                    }
-                    "private" => Access::Private,
-                    "subclass" => Access::Subclass,
-                    _ => return Err(format!("@{decorator} is not implemented yet")),
-                };
-                if method.access != Access::Public && method.access != access {
-                    return Err(format!("{}.{} cannot be both private and subclass", family.name, method.name));
-                }
-                if method.name == "init" {
-                    return Err(format!("{}.init cannot be @{decorator}; constructors are always public", family.name));
-                }
-                method.access = access;
+        match item {
+            Item::Func(function) => {
+                let line = function.line;
+                function.doc = check.docstring(&function.decorators, &format!("func {}", function.name), false)
+                    .map_err(|e| crate::parser::at_line(line, e))?;
             }
+            Item::Family(family) => {
+                let line = family.line;
+                family.doc = check.docstring(&family.decorators, &format!("family {}", family.name), false)
+                    .map_err(|e| crate::parser::at_line(line, e))?;
+                for method in &mut family.methods {
+                    let line = method.line;
+                    check.method(&family.name, method).map_err(|e| crate::parser::at_line(line, e))?;
+                }
+            }
+            _ => {}
         }
     }
     Ok(())
+}
+
+struct Decorators<'a> {
+    aliases: &'a HashSet<String>,
+    markers: &'a [String],
+}
+
+impl Decorators<'_> {
+    /// The marker a decorator names, once its alias and name are known to be valid.
+    fn marker<'d>(&self, decorator: &'d Decorator) -> Result<&'d str, String> {
+        let written = &decorator.name;
+        let (alias, name) = written.split_once('.').expect("the parser checks decorator shape");
+        if !self.aliases.contains(alias) {
+            return Err(format!("@{written} needs `takepkg std.Decorator;` (or an alias named {alias})"));
+        }
+        if !self.markers.iter().any(|marker| marker == name) {
+            return Err(format!("unknown decorator @{written}; std.Decorator provides: {}", self.markers.join(", ")));
+        }
+        Ok(name)
+    }
+
+    /// Apply the decorators of a function or family that is not a method: only
+    /// `@Decorator.docstring` applies there. Returns the docstring, if any.
+    fn docstring(&self, decorators: &[Decorator], what: &str, method: bool) -> Result<Option<String>, String> {
+        let mut doc = None;
+        for decorator in decorators {
+            let name = self.marker(decorator)?;
+            match name {
+                "docstring" => {
+                    let Some(Expr::String(text)) = &decorator.arg else {
+                        return Err(format!("@{} needs one string, such as @{}(\"Adds two numbers.\")", decorator.name, decorator.name));
+                    };
+                    if doc.is_some() { return Err(format!("{what} has more than one @{}", decorator.name)); }
+                    doc = Some(clean_doc(text));
+                }
+                "private" | "subclass" if !method => {
+                    return Err(format!("@{} applies to family methods, not to {what}", decorator.name));
+                }
+                "private" | "subclass" => {}
+                _ => return Err(format!("@{} is not implemented yet", decorator.name)),
+            }
+        }
+        Ok(doc)
+    }
+
+    fn method(&self, family: &str, method: &mut FuncDecl) -> Result<(), String> {
+        method.doc = self.docstring(&method.decorators, &format!("{family}.{}", method.name), true)?;
+        for decorator in &method.decorators {
+            let access = match self.marker(decorator)? {
+                "private" => Access::Private,
+                "subclass" => Access::Subclass,
+                _ => continue,
+            };
+            if decorator.arg.is_some() { return Err(format!("@{} takes no argument", decorator.name)); }
+            if method.access != Access::Public && method.access != access {
+                return Err(format!("{family}.{} cannot be both private and subclass", method.name));
+            }
+            if method.name == "init" {
+                return Err(format!("{family}.init cannot be @{}; constructors are always public", decorator.name));
+            }
+            method.access = access;
+        }
+        Ok(())
+    }
+}
+
+/// A docstring as written, without the indentation of the code around it: the
+/// first line is trimmed, the common indentation of the rest is removed, and
+/// blank lines at either end are dropped.
+pub(crate) fn clean_doc(text: &str) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    let indent = lines.iter().skip(1)
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| line.chars().take_while(|c| c.is_whitespace()).count())
+        .min()
+        .unwrap_or(0);
+    let cleaned: Vec<String> = lines.iter().enumerate().map(|(i, line)| {
+        let line = if i == 0 { line.trim_start().to_string() } else { line.chars().skip(indent).collect() };
+        line.trim_end().to_string()
+    }).collect();
+    let first = cleaned.iter().position(|line| !line.is_empty());
+    let last = cleaned.iter().rposition(|line| !line.is_empty());
+    match (first, last) {
+        (Some(first), Some(last)) => cleaned[first..=last].join("\n"),
+        _ => String::new(),
+    }
 }

@@ -43,7 +43,22 @@ pub fn parse_program(input: &str) -> PResult<Program> {
             continue;
         }
         if line.starts_with('@') {
-            return Err(at_line(number, format!("decorators are only supported on family methods: '{line}'")));
+            let (decorators, target, at) = collect_decorators(&lines, idx, line)?;
+            let target_line = lines[at].number;
+            if target.starts_with("func ") {
+                let (mut func, next) = parse_func_from(&target, &lines, at).map_err(|e| at_line(target_line, e))?;
+                func.decorators = decorators;
+                items.push(Item::Func(func));
+                idx = next;
+            } else if target.starts_with("family ") {
+                let (mut family, next) = parse_family_from(&target, &lines, at).map_err(|e| at_line(target_line, e))?;
+                family.decorators = decorators;
+                items.push(Item::Family(family));
+                idx = next;
+            } else {
+                return Err(at_line(target_line, "decorators must be followed by a func or family".into()));
+            }
+            continue;
         }
         if line.starts_with("func ") {
             let (func, next) = parse_func(&lines, idx).map_err(|e| at_line(number, e))?;
@@ -102,6 +117,15 @@ fn validate_loop_control(body: &[Stmt], depth: usize) -> PResult<()> {
     Ok(())
 }
 
+/// Stands for a newline that was inside a triple-quoted string.
+const LINE_MARK: char = '\u{E000}';
+
+/// Whether the two characters after a `"` are also `"`.
+fn opens_triple(chars: &std::iter::Peekable<std::str::Chars>) -> bool {
+    let mut ahead = chars.clone();
+    ahead.next() == Some('"') && ahead.next() == Some('"')
+}
+
 fn preprocess(input: &str) -> PResult<Vec<Line>> {
     let mut clean = String::new();
     let mut chars = input.chars().peekable();
@@ -110,6 +134,7 @@ fn preprocess(input: &str) -> PResult<Vec<Line>> {
     let mut block_start = None;
     let mut line_comment = false;
     let (mut line, mut column) = (1usize, 0usize);
+    let mut quote_start = (1usize, 0usize);
     while let Some(ch) = chars.next() {
         column += 1;
         if ch == '\n' {
@@ -150,18 +175,62 @@ fn preprocess(input: &str) -> PResult<Vec<Line>> {
             chars.next();
             column += 1;
             clean.push(' ');
+        } else if ch == '"' && opens_triple(&chars) {
+            // """...""" spans lines. It becomes an ordinary one-line string, with raw
+            // newlines and quotes escaped, followed by one LINE_MARK per newline so
+            // later statements still know which source line they are on.
+            let (start_line, start_column) = (line, column);
+            chars.next();
+            chars.next();
+            column += 2;
+            let mut newlines = 0;
+            let mut escaped = false;
+            clean.push('"');
+            loop {
+                let Some(c) = chars.next() else {
+                    return Err(format!("line {start_line}: unterminated string starting at column {start_column}"));
+                };
+                column += 1;
+                if c == '\n' {
+                    line += 1;
+                    column = 0;
+                    newlines += 1;
+                }
+                if escaped {
+                    escaped = false;
+                    if c == '\n' { clean.push('n'); } else if c != '\r' { clean.push(c); }
+                    continue;
+                }
+                match c {
+                    '\\' => { escaped = true; clean.push('\\'); }
+                    '"' if opens_triple(&chars) => {
+                        chars.next();
+                        chars.next();
+                        column += 2;
+                        break;
+                    }
+                    '"' => clean.push_str("\\\""),
+                    '\n' => clean.push_str("\\n"),
+                    '\r' => {}
+                    _ => clean.push(c),
+                }
+            }
+            clean.push('"');
+            for _ in 0..newlines { clean.push(LINE_MARK); }
         } else {
             if ch == '\'' || ch == '"' {
                 quote = Some(ch);
+                quote_start = (line, column);
             }
             clean.push(ch);
         }
     }
     if let Some((line, column)) = block_start {
-        return Err(format!("unterminated block comment at {line}:{column}"));
+        return Err(format!("line {line}: unterminated block comment starting at column {column}"));
     }
     if quote.is_some() {
-        return Err(format!("unterminated string at {line}:{column}"));
+        let (line, column) = quote_start;
+        return Err(format!("line {line}: unterminated string starting at column {column}"));
     }
     // Layout does not delimit statements. Split only outside strings and
     // parenthesized headers/calls, so compact blocks use the same parser path.
@@ -174,6 +243,10 @@ fn preprocess(input: &str) -> PResult<Vec<Line>> {
     let mut escaped = false;
     let mut depth = 0usize;
     for ch in clean.chars() {
+        if ch == LINE_MARK {
+            source += 1;
+            continue;
+        }
         if ch == '\n' {
             lines.push(Line { text: std::mem::take(&mut text), number });
             source += 1;
@@ -225,7 +298,11 @@ fn parse_import(line: &str, number: usize) -> PResult<ImportDecl> {
 }
 
 fn parse_family(lines: &[Line], start: usize) -> PResult<(FamilyDecl, usize)> {
-    let header = lines[start].trim();
+    parse_family_from(lines[start].trim(), lines, start)
+}
+
+/// Parse a family whose header is `header` (normally `lines[start]`).
+fn parse_family_from(header: &str, lines: &[Line], start: usize) -> PResult<(FamilyDecl, usize)> {
     let mut header = header.trim_start_matches("family").trim().to_string();
     if !header.contains('{') {
         return Err("family must open with '{' on same line".to_string());
@@ -244,32 +321,19 @@ fn parse_family(lines: &[Line], start: usize) -> PResult<(FamilyDecl, usize)> {
     };
 
     let mut methods = Vec::new();
-    let mut decorators: Vec<String> = Vec::new();
     let mut i = start + 1;
     while i < lines.len() {
-        let mut line = lines[i].trim();
+        let line = lines[i].trim();
         if line.starts_with('@') {
-            // `@Alias.name` markers, one or more per line, before a func.
-            while let Some(rest) = line.strip_prefix('@') {
-                let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
-                let name = &rest[..end];
-                let parts: Vec<&str> = name.split('.').collect();
-                if parts.len() != 2 || !parts.iter().all(|p| is_bare_ident(p)) {
-                    return Err(format!("invalid decorator '@{name}'; decorators look like @Decorator.private"));
-                }
-                decorators.push(name.to_string());
-                line = rest[end..].trim_start();
+            let (decorators, target, at) = collect_decorators(lines, i, line)?;
+            if !target.starts_with("func ") {
+                return Err(at_line(lines[at].number, "decorators in a family must be followed by a func".into()));
             }
-            if line.is_empty() { i += 1; continue; }
-            if !line.starts_with("func ") { return Err("decorators must be followed by a func".into()); }
-            let (mut func, next) = parse_func_from(line, lines, i)?;
-            func.decorators = std::mem::take(&mut decorators);
+            let (mut func, next) = parse_func_from(&target, lines, at).map_err(|e| at_line(lines[at].number, e))?;
+            func.decorators = decorators;
             methods.push(func);
             i = next;
             continue;
-        }
-        if !decorators.is_empty() && !line.starts_with("func ") && !line.is_empty() {
-            return Err("decorators must be followed by a func".into());
         }
         if line == "}" || line == "};" {
             return Ok((
@@ -277,6 +341,10 @@ fn parse_family(lines: &[Line], start: usize) -> PResult<(FamilyDecl, usize)> {
                     name,
                     extends,
                     methods,
+                    decorators: Vec::new(),
+                    doc: None,
+                    line: lines[start].number,
+                    end_line: lines[i].number,
                 },
                 i + 1,
             ));
@@ -286,8 +354,7 @@ fn parse_family(lines: &[Line], start: usize) -> PResult<(FamilyDecl, usize)> {
             continue;
         }
         if line.starts_with("func ") {
-            let (mut func, next) = parse_func(lines, i)?;
-            func.decorators = std::mem::take(&mut decorators);
+            let (func, next) = parse_func(lines, i).map_err(|e| at_line(lines[i].number, e))?;
             methods.push(func);
             i = next;
             continue;
@@ -295,6 +362,56 @@ fn parse_family(lines: &[Line], start: usize) -> PResult<(FamilyDecl, usize)> {
         return Err(format!("unexpected token in family body: '{line}'"));
     }
     Err("unterminated family block".to_string())
+}
+
+/// Read the decorators starting at `lines[idx]` (whose text is `first`), across
+/// as many lines as they take. Returns them, the text of the declaration they
+/// decorate, and the index of the line that text is on.
+fn collect_decorators(lines: &[Line], idx: usize, first: &str) -> PResult<(Vec<Decorator>, String, usize)> {
+    let mut decorators = Vec::new();
+    let mut at = idx;
+    let mut text = first.to_string();
+    while text.starts_with('@') {
+        let (more, rest) = parse_decorators(&text).map_err(|e| at_line(lines[at].number, e))?;
+        decorators.extend(more);
+        if !rest.is_empty() {
+            text = rest;
+            break;
+        }
+        at += 1;
+        while at < lines.len() && matches!(lines[at].trim(), "" | ";") { at += 1; }
+        if at >= lines.len() {
+            return Err(at_line(lines[idx].number, "decorators must be followed by a func or family".into()));
+        }
+        text = lines[at].trim().to_string();
+    }
+    Ok((decorators, text, at))
+}
+
+/// `@Alias.name` and `@Alias.name(argument)` decorators at the start of `line`,
+/// and the rest of the line after them.
+fn parse_decorators(line: &str) -> PResult<(Vec<Decorator>, String)> {
+    let mut decorators = Vec::new();
+    let mut rest = line.trim_start();
+    while let Some(after_at) = rest.strip_prefix('@') {
+        let end = after_at.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '.')).unwrap_or(after_at.len());
+        let name = &after_at[..end];
+        let parts: Vec<&str> = name.split('.').collect();
+        if parts.len() != 2 || !parts.iter().all(|p| is_bare_ident(p)) {
+            return Err(format!("invalid decorator '@{name}'; decorators look like @Decorator.private"));
+        }
+        let mut after = &after_at[end..];
+        let mut arg = None;
+        if after.starts_with('(') {
+            let close = find_matching_paren(after).map_err(|_| format!("@{name} has an unclosed '('"))?;
+            let inner = after[1..close].trim();
+            if !inner.is_empty() { arg = Some(parse_expr(inner)?); }
+            after = &after[close + 1..];
+        }
+        decorators.push(Decorator { name: name.to_string(), arg });
+        rest = after.trim_start();
+    }
+    Ok((decorators, rest.to_string()))
 }
 
 fn parse_func(lines: &[Line], start: usize) -> PResult<(FuncDecl, usize)> {
@@ -317,6 +434,9 @@ fn parse_func_from(header: &str, lines: &[Line], start: usize) -> PResult<(FuncD
                 body: FuncBody::Expr(parse_expr(right.trim())?),
                 decorators: Vec::new(),
                 access: Access::Public,
+                doc: None,
+                line: lines[start].number,
+                end_line: lines[start].number,
             },
             start + 1,
         ));
@@ -338,6 +458,9 @@ fn parse_func_from(header: &str, lines: &[Line], start: usize) -> PResult<(FuncD
             body: FuncBody::Block(body),
             decorators: Vec::new(),
             access: Access::Public,
+            doc: None,
+            line: lines[start].number,
+            end_line: lines[i.saturating_sub(1).max(start)].number,
         },
         i,
     ))
