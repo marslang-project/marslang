@@ -5,19 +5,18 @@ use crate::value::*;
 
 pub fn package() -> Value {
     NativePackage::new("rs.core")
-        // core.raise("RangeError", "message") raises a runtime error of that kind.
+        // core.raise(RangeError, "message") raises a built-in error family, the
+        // same way err(RangeError, "message") does. A family you declare is
+        // raised with err(), which keeps track of which family it is.
         .function("raise", 2, |args| {
-            let (Value::Str(kind), Value::Str(message)) = (&args[0], &args[1]) else {
-                return type_err("rs.core.raise expects a kind and a message string");
-            };
-            let kind = match kind.as_ref() {
-                "TypeError" => ErrorKind::TypeError,
-                "RangeError" => ErrorKind::RangeError,
-                "OutOfBoundsError" => ErrorKind::OutOfBoundsError,
-                "SyntaxError" => ErrorKind::SyntaxError,
-                _ => ErrorKind::Error,
-            };
-            err(kind, message.to_string())
+            let usage = "rs.core.raise expects a built-in error family and a message, such as core.raise(RangeError, \"message\")";
+            let (Value::Func(f), Value::Str(message)) = (&args[0], &args[1]) else { return type_err(usage) };
+            let Callable::Family(family) = f.as_ref() else { return type_err(usage) };
+            match family.error_kind {
+                Some(kind) if family.name == kind.name() => err(kind, message.to_string()),
+                Some(_) => type_err(format!("rs.core.raise only raises built-in error families; raise {} with err()", family.name)),
+                None => type_err(format!("{} is not an error family; error families inherit from Error", family.name)),
+            }
         })
         // core.kind(value): "int", "longint", "float", "string", "bool", "null", "array", ...
         .function("kind", 1, |args| Ok(Value::str(args[0].type_name())))

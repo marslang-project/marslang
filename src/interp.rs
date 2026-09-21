@@ -165,8 +165,30 @@ impl<'o> Interp<'o> {
                 _ => {}
             }
         }
+        // Parents outside this file: a built-in error family, or `alias.Family`
+        // from a package this file imports (packages load before their importers).
+        let imports: HashMap<String, Value> = program.items.iter().filter_map(|item| match item {
+            Item::Import(import) => {
+                let package = import.key.as_ref().and_then(|key| self.packages.get(key))?;
+                Some((display_name(import.alias.as_deref()?).to_string(), package.clone()))
+            }
+            _ => None,
+        }).collect();
+        let errors = &self.error_families;
+        let outside = |parent: &str| -> Option<Rc<Family>> {
+            match parent.split_once('.') {
+                Some((alias, name)) => match imports.get(alias) {
+                    Some(Value::Package(package)) => match package.members.get(name) {
+                        Some(Value::Func(f)) => match f.as_ref() { Callable::Family(family) => Some(family.clone()), _ => None },
+                        _ => None,
+                    },
+                    _ => None,
+                },
+                None => errors.get(parent).cloned(),
+            }
+        };
         let mut families = HashMap::new();
-        for name in decls.keys() { build_family(name, &decls, &mut families, &self.error_families, index, &mut Vec::new())?; }
+        for name in decls.keys() { build_family(name, &decls, &mut families, &outside, index, &mut Vec::new())?; }
         self.units.push(Unit { name, globals: RefCell::new(HashMap::new()), imports: RefCell::new(HashMap::new()), functions, families });
         Ok(index)
     }
@@ -549,6 +571,10 @@ impl<'o> Interp<'o> {
         let instance = Value::new_instance(family.clone(), Meta::default());
         match family.method("init") {
             Some(init) => { self.call_function(&init, Some(instance.clone()), args)?; }
+            None if family.error_kind.is_some() => {
+                let name = &family.name;
+                return type_err(format!("{name} is an error family: raise it with err({name}, message) instead of calling it"));
+            }
             None if !args.is_empty() => return type_err(format!("{} has no init and takes no arguments", family.name)),
             None => {}
         }
@@ -1190,15 +1216,15 @@ impl<'o> Interp<'o> {
 // ----- free helpers -----
 
 fn build_family(name: &str, decls: &HashMap<String, &FamilyDecl>, built: &mut HashMap<String, Rc<Family>>,
-                errors: &HashMap<&'static str, Rc<Family>>, unit: usize, visiting: &mut Vec<String>) -> RResult<Rc<Family>> {
+                outside: &dyn Fn(&str) -> Option<Rc<Family>>, unit: usize, visiting: &mut Vec<String>) -> RResult<Rc<Family>> {
     if let Some(family) = built.get(name) { return Ok(family.clone()); }
     if visiting.iter().any(|v| v == name) { return type_err(format!("family '{name}' inherits from itself")); }
     let decl = decls[name];
     visiting.push(name.to_string());
     let parent = match &decl.extends {
-        Some(parent) if decls.contains_key(parent) => Some(build_family(parent, decls, built, errors, unit, visiting)?),
-        Some(parent) => match errors.get(parent.as_str()) {
-            Some(error) => Some(error.clone()),
+        Some(parent) if decls.contains_key(parent) => Some(build_family(parent, decls, built, outside, unit, visiting)?),
+        Some(parent) => match outside(parent) {
+            Some(family) => Some(family),
             None => return type_err(format!("family '{name}' extends unknown family '{parent}'")),
         },
         None => None,

@@ -485,7 +485,10 @@ fn write_value(value: &Value, out: &mut String, seen: &mut Vec<usize>, nested: b
                 out.push_str(" }");
             }
         }
-        Value::Func(f) => { let _ = write!(out, "<func {}>", f.name()); }
+        Value::Func(f) => match f.as_ref() {
+            Callable::Family(family) => { let _ = write!(out, "<family {}>", family.name); }
+            _ => { let _ = write!(out, "<func {}>", f.name()); }
+        },
         Value::Package(p) => { let _ = write!(out, "<package {}>", p.name); }
     }
     if matches!(value, Value::Array(_) | Value::Set(_) | Value::Map(_) | Value::Pair(_) | Value::Instance(_)) {

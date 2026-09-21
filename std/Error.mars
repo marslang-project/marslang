@@ -1,0 +1,26 @@
+// std.Error: the built-in error families, as one namespace.
+//
+//     takepkg std.Error;
+//     err(Error.RangeError, "index out of range");
+//     run{ ... } handle(Error.TypeError e){ out(e.message); }
+//     family ParseError(Error.Base){}
+//
+// These are the same families the interpreter raises, so handle(Error.RangeError)
+// also catches a division by zero. Families are raised with err(Family, message),
+// never called. Importing this package names it Error in your file, so the base
+// family is Error.Base there; `takepkg std.Error = errors;` keeps the bare names.
+
+// The base family: every error inherits from it, so handle(Error.Base) catches all.
+fixed Base = Error;
+
+// A value of the wrong type, or a call with the wrong arguments.
+fixed TypeError = TypeError;
+
+// A number out of range: integer overflow, division by zero, a math domain error.
+fixed RangeError = RangeError;
+
+// A position or length outside a string or collection.
+fixed OutOfBoundsError = OutOfBoundsError;
+
+// Text that does not parse, such as longint("12x").
+fixed SyntaxError = SyntaxError;

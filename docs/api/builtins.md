@@ -44,7 +44,8 @@ Constructors `arr`, `set`, `pair`, `map`, and `dict` are documented in
 
 Errors are families. `Error` is the base family; the built-in kinds below inherit
 from it. See [error handling](language.md#error-handling) for `err`, `lasterr`, and
-`run{} handle(...){} then{}`.
+`run{} handle(...){} then{}`, and [std.Error](std-error.md) for the same families
+as `Error.TypeError`, `Error.RangeError`, and so on.
 
 | Error | Current examples |
 | --- | --- |

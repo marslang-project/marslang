@@ -1,6 +1,6 @@
 # Marslang language and API reference
 
-This reference describes the Rust interpreter as of `rs-0.9.1`,
+This reference describes the Rust interpreter as of `rs-0.10.0`,
 including dynamic numeric type tracking and the expanded `std.math` package.
 The source extension is `.mars`; earlier releases used `.mrs`.
 Use the matching source checkout for the filenames documented here.
@@ -19,6 +19,7 @@ notes elsewhere under `docs/` remain local.
 - [std.types](std-types.md): a value's kind, family checks.
 - [std.time](std-time.md): clocks and sleeping.
 - [std.Decorator](std-decorator.md): `@Decorator.private` and `@Decorator.subclass` methods.
+- [std.Error](std-error.md): the built-in error families as `Error.TypeError`, `Error.RangeError`, and so on.
 
 ## Install
 

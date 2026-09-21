@@ -853,6 +853,44 @@ fn run_handle_catches_builtin_and_custom_errors() {
 }
 
 #[test]
+fn std_error_names_the_builtin_families() {
+    executes(r#"
+        takepkg std.Error;
+        takepkg std.math;
+        family ParseError(Error.Base){}
+        func m{
+            out(Error.TypeError);
+            // The package's families are the interpreter's own.
+            run{ err(Error.TypeError, "named"); } handle(TypeError e){ out("bare " + e.message); }
+            run{ err(TypeError, "bare"); } handle(Error.TypeError e){ out("named " + e.message); }
+            run{ x = 1 / 0; } handle(Error.RangeError e){ out(e); }
+            run{ math.sqrt(-1.0); } handle(Error.RangeError){ out("math domain"); }
+            run{ arr(1).slice(0, 9); } handle(Error.OutOfBoundsError){ out("bounds"); }
+            run{ longint("12x"); } handle(Error.SyntaxError){ out("syntax"); }
+            // A family can extend one through the package, and Base catches everything.
+            run{ err(ParseError, "empty"); } handle(Error.Base e){ out(e); }
+            run{ err(Error.Base, "base"); } handle(Error e){ out(e); }
+        }"#,
+        "<family TypeError>\nbare named\nnamed bare\nRangeError: division by zero\nmath domain\nbounds\nsyntax\nParseError: empty\nError: base\n");
+    // An alias keeps the bare names free.
+    executes("takepkg std.Error = errors;\nfunc m{ run{ err(errors.RangeError, \"aliased\"); } handle(RangeError e){ out(e.message); } }",
+        "aliased\n");
+}
+
+#[test]
+fn error_families_are_raised_not_called() {
+    runtime_error("func m{ e = TypeError(\"called\"); }", "raise it with err(TypeError, message)");
+    runtime_error("takepkg std.Error;\nfunc m{ Error.RangeError(\"called\"); }", "raise it with err(RangeError, message)");
+    runtime_error("family ParseError(Error){}\nfunc m{ ParseError(); }", "raise it with err(ParseError, message)");
+    // A family that defines init still constructs, and err() raises the instance.
+    executes("family Coded(Error){ func init(int code){ me.message = \"code \" + string(code); } }\n\
+        func m{ run{ err(Coded(7)); } handle(Coded e){ out(e.message); } }", "code 7\n");
+    let error = marslang::compile("family Loose(Error.Nope){}\nfunc m{}").map(|compiled| marslang::run_captured(compiled, "").1);
+    let message = match error { Ok(Err(e)) => e.to_string(), Err(e) => e, Ok(Ok(())) => String::from("ran") };
+    assert!(message.contains("extends unknown family 'Error.Nope'"), "{message}");
+}
+
+#[test]
 fn first_matching_handler_wins_and_unmatched_errors_propagate() {
     executes(r#"
         family ParseError(Error){}

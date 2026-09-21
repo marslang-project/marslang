@@ -185,6 +185,12 @@ Errors are families. `Error` is the base family, and `TypeError`, `RangeError`,
 `family Name(Error){}` or inherit from a built-in kind. Every error has a `message`
 field and prints as `Name: message`.
 
+[std.Error](std-error.md) names the built-in families in one namespace:
+`takepkg std.Error;` then `err(Error.RangeError, "too big")`,
+`handle(Error.TypeError e)`, and `family ParseError(Error.Base){}`. They are the
+same families as the bare names. A family is raised with `err`, never called:
+`TypeError("x")` is itself a `TypeError` that says so.
+
 | Form | Meaning |
 | --- | --- |
 | `err(Family, message)` | Raise a new error of that family |
@@ -201,7 +207,8 @@ last: after the body, after a handler, while an unhandled error propagates, and 
 the block exits early with `ret`, `break`, or `continue`. An error, `ret`, `break`,
 or `continue` inside `then` replaces the pending outcome. Errors raised by the
 interpreter itself, such as division by zero, are caught the same way. Use
-`alias.Family` to name an error family from a package.
+`alias.Family` to name an error family from a package, in a handler, in `err`,
+or as a parent: `family Timeout(net.NetworkError){}`.
 
 ## Operators
 

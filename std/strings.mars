@@ -29,7 +29,7 @@ func lower(string text) => native.lower(text);
 func repeated(string text, int count) => native.repeated(text, count);
 
 func _fill(string fill){
-    if (fill.len() != 1){ core.raise("RangeError", "padding fill must be one character"); }
+    if (fill.len() != 1){ core.raise(RangeError, "padding fill must be one character"); }
 }
 
 // Some one-character fills join their neighbours into fewer characters (a
@@ -37,7 +37,7 @@ func _fill(string fill){
 // is measured rather than assumed.
 func _padded(string padded, int width, string fill){
     if (padded.len() != width){
-        core.raise("RangeError", "padding fill " + fill + " merges with neighbouring characters, so the text cannot be padded to width " + string(width));
+        core.raise(RangeError, "padding fill " + fill + " merges with neighbouring characters, so the text cannot be padded to width " + string(width));
     }
     ret padded;
 }

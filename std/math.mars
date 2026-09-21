@@ -22,14 +22,14 @@ func _kind(string name, array args, string input){
     kind = core.kind(args.iget(0));
     for (value, args){
         if (core.kind(value) != kind){
-            core.raise("TypeError", "std.math." + name + " requires matching numeric types");
+            core.raise(TypeError, "std.math." + name + " requires matching numeric types");
         }
     }
     if (input == "float" and kind != "float"){
-        core.raise("TypeError", "std.math." + name + " requires float arguments");
+        core.raise(TypeError, "std.math." + name + " requires float arguments");
     }
     if (input == "integer" and kind == "float"){
-        core.raise("TypeError", "std.math." + name + " requires int or longint arguments");
+        core.raise(TypeError, "std.math." + name + " requires int or longint arguments");
     }
     ret kind;
 }
@@ -40,7 +40,7 @@ func _checked(string name, array args, string input){
     if (kind == "float"){
         for (value, args){
             if (not _is_finite(value)){
-                core.raise("RangeError", "std.math requires finite float values");
+                core.raise(RangeError, "std.math requires finite float values");
             }
         }
     }
@@ -50,14 +50,14 @@ func _checked(string name, array args, string input){
 // A NaN or infinite result means a domain error or overflow.
 func _result(string name, float value){
     if (not _is_finite(value)){
-        core.raise("RangeError", "std.math." + name + " domain error or non-finite result");
+        core.raise(RangeError, "std.math." + name + " domain error or non-finite result");
     }
     ret value;
 }
 
 func _intermediate(float value){
     if (not _is_finite(value)){
-        core.raise("RangeError", "std.math non-finite intermediate result");
+        core.raise(RangeError, "std.math non-finite intermediate result");
     }
     ret value;
 }
@@ -99,7 +99,7 @@ func abs([int,longint,float] value){
 func clamp([int,longint,float] value, [int,longint,float] low, [int,longint,float] high){
     _checked("clamp", arr(value, low, high), "same");
     if (low > high){
-        core.raise("RangeError", "std.math.clamp lower bound exceeds upper bound");
+        core.raise(RangeError, "std.math.clamp lower bound exceeds upper bound");
     }
     if (value < low){ ret low; }
     if (value > high){ ret high; }
@@ -176,7 +176,7 @@ func pow([int,longint,float] base, [int,longint,float] exponent){
         ret _result("pow", native.pow(base, exponent));
     }
     if (exponent < 0){
-        core.raise("RangeError", "std.math.pow integer exponent must be nonnegative");
+        core.raise(RangeError, "std.math.pow integer exponent must be nonnegative");
     }
     // Square-and-multiply in the base's kind; overflow raises that kind's error.
     result = base - base + 1;
@@ -218,7 +218,7 @@ func log1p([int,longint,float] x){ _checked("log1p", arr(x), "float"); ret _resu
 func log([int,longint,float] x, [int,longint,float] base){
     _checked("log", arr(x, base), "float");
     if (x <= 0.0 or base <= 0.0 or base == 1.0){
-        core.raise("RangeError", "std.math.log invalid domain");
+        core.raise(RangeError, "std.math.log invalid domain");
     }
     ret _result("log", native.ln(x) / native.ln(base));
 }
@@ -315,7 +315,7 @@ func is_odd([int,longint,float] n){ _kind("is_odd", arr(n), "integer"); ret n % 
 // Quotient rounded toward negative infinity.
 func div_floor([int,longint,float] a, [int,longint,float] b){
     _kind("div_floor", arr(a, b), "integer");
-    if (b == 0){ core.raise("RangeError", "division by zero"); }
+    if (b == 0){ core.raise(RangeError, "division by zero"); }
     rest = a % b;
     quotient = (a - rest) / b;
     if (rest != 0 and (rest < 0) != (b < 0)){ ret quotient - 1; }
@@ -325,7 +325,7 @@ func div_floor([int,longint,float] a, [int,longint,float] b){
 // Quotient rounded toward positive infinity.
 func div_ceil([int,longint,float] a, [int,longint,float] b){
     _kind("div_ceil", arr(a, b), "integer");
-    if (b == 0){ core.raise("RangeError", "division by zero"); }
+    if (b == 0){ core.raise(RangeError, "division by zero"); }
     rest = a % b;
     quotient = (a - rest) / b;
     if (rest != 0 and (rest < 0) == (b < 0)){ ret quotient + 1; }
@@ -333,7 +333,7 @@ func div_ceil([int,longint,float] a, [int,longint,float] b){
 }
 
 func _nonnegative(string name, [int,longint] n){
-    if (n < 0){ core.raise("RangeError", "std.math." + name + " requires nonnegative arguments"); }
+    if (n < 0){ core.raise(RangeError, "std.math." + name + " requires nonnegative arguments"); }
 }
 
 // n! in n's kind; overflow raises the kind's overflow error.
