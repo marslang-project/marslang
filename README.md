@@ -183,3 +183,14 @@ cargo build --release
 ```
 
 The executable will be at `target/release/marslang.exe` on Windows.
+
+## License
+
+Marslang is **source-available** under the [Marslang Source License](LICENSE.md),
+not an open source license. In short:
+
+- Use it, and share unmodified copies free of charge, for any noncommercial purpose.
+- Change it only to prepare a contribution, such as a pull request.
+- Programs you write in Marslang are yours, to use and license however you like.
+- Commercial use, and anything else the license does not cover, needs the
+  author's written permission: open an issue to ask.

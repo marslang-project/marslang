@@ -5,6 +5,7 @@ edition = "2021"
 description = "The Marslang interpreter."
 homepage = "https://marslang.kevin-z.com"
 repository = "https://github.com/marslang-project/marslang"
+license-file = "LICENSE.md"
 
 [dependencies]
 indexmap = "2.14.2"

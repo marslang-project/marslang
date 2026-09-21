@@ -61,7 +61,7 @@ jobs:
           tag="${{ inputs.tag || github.ref_name }}"
           name="marslang-$tag-${{ matrix.target }}"
           mkdir -p "staging/$name" dist
-          cp README.md "staging/$name/"
+          cp README.md LICENSE.md "staging/$name/"
           if [ "${{ runner.os }}" = Windows ]; then
             cp "target/${{ matrix.target }}/release/marslang.exe" "staging/$name/"
             (cd staging && 7z a -tzip "../dist/$name.zip" "$name" >/dev/null)
