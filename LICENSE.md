@@ -1,6 +1,6 @@
 # Marslang Source License 1.0
 
-Copyright (c) 2026 Unknownuserfrommars (the "Author").
+Copyright (c) 2026 Kevin Zhou (the "Author").
 
 This license covers the files it accompanies — a Marslang repository or package
 — and anything built from them, such as release binaries, install scripts, and
