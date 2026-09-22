@@ -15,8 +15,8 @@ pub(crate) const MAX_SAFE: i64 = 9_007_199_254_740_991;
 pub enum Value {
     Null,
     Bool(bool),
-    /// `int` kind. Literals may exceed 32 bits (up to 2^53-1), but checked
-    /// arithmetic and `int` annotations enforce the signed 32-bit range.
+    /// `int` kind: signed 32-bit, enforced by checked arithmetic and `int`
+    /// annotations. Literals that do not fit are `longint`.
     Int(i64),
     /// `longint` kind: signed 64-bit.
     Long(i64),

@@ -254,7 +254,22 @@ fn bundled_example_executes() {
 fn large_integer_literals_do_not_round_before_type_checks() {
     executes("func f(longint n){out(n);} func m{f(9223372036854775807);f(-9223372036854775808);}", "9223372036854775807\n-9223372036854775808\n");
     runtime_error("func m{out(9223372036854775808);}", "longint overflow");
-    runtime_error("func m{out(9007199254740991+1);}", "unsafe integer arithmetic");
+    runtime_error("func m{out(9223372036854775807+1);}", "longint overflow");
+}
+
+#[test]
+fn integer_literals_beyond_32_bits_are_longints() {
+    executes("takepkg std.types;
+func m{ x = 3000000000; out(x + 1, types.kind(x)); out(2147483647, types.kind(2147483647)); out(-2147483648, types.kind(-2147483648)); out(2147483648 * 2, types.kind(-2147483649)); }",
+        "3000000001 longint
+2147483647 int
+-2147483648 int
+4294967296 longint
+");
+    runtime_error("func m{ out(2147483647 + 1); }", "int overflow");
+    runtime_error("func f(int n){ out(n); } func m{ f(3000000000); }", "int overflow");
+    executes("func m{ x (float) = 3000000000; out(x / 7 > 428571428); }", "true
+");
 }
 
 #[test]

@@ -1009,6 +1009,8 @@ impl<'o> Interp<'o> {
                 Value::Float(f) if f.is_finite() && f.fract() == 0.0 => {
                     if f.abs() > i32::MAX as f64 + 1.0 { range_err("int overflow") } else { int_in_range(f as i128) }
                 }
+                // A literal such as 3000000000 is a longint because it does not fit.
+                Value::Long(l) if i32::try_from(l).is_err() => range_err("int overflow"),
                 _ => type_err("expected int"),
             },
             "longint" => match value {
@@ -1018,6 +1020,8 @@ impl<'o> Interp<'o> {
             },
             "float" => match value {
                 Value::Int(i) => Ok(Value::Float(i as f64)),
+                // Exactly representable longints convert, as ints do.
+                Value::Long(l) if l.abs() <= MAX_SAFE => Ok(Value::Float(l as f64)),
                 Value::Float(_) => Ok(value),
                 _ => type_err("expected float"),
             },

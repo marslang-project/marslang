@@ -135,12 +135,11 @@ families inheriting from it. `Function` and `Family` are for parameters only.
 - **Keywords**: `func` `family` `takepkg` `ret` `if` `elif` `else` `while`
   `repeat` `for` `break` `continue` `run` `handle` `then` `fixed` `hot` `cold`
   `and` `or` `not` `also` `true` `false` `fasle` `null` `me`.
-- **Numbers**: `42`, `3.5`, `1e9`, `2.5E-3`. A whole number is an `int` up to
-  2^53 - 1 and a `longint` above; one with a `.` or an exponent is a `float`.
-  `int` arithmetic is 32-bit, so an `int` literal above 2,147,483,647, such as
-  `3000000000`, prints but raises `int overflow` in any arithmetic; write
-  `longint(3000000000)` for such values. There are no hexadecimal, binary, or
-  digit-separator forms, and a leading `-` is the unary operator.
+- **Numbers**: `42`, `3.5`, `1e9`, `2.5E-3`. A whole number is an `int` when it
+  fits in 32 bits (-2,147,483,648 to 2,147,483,647) and a `longint` otherwise,
+  so `3000000000 + 1` is the longint `3000000001`; one with a `.` or an
+  exponent is a `float`. There are no hexadecimal, binary, or digit-separator
+  forms, and a leading `-` is the unary operator.
 - **Strings**: `"..."`, `'...'`, and `"""..."""`, which may span lines and
   contain `"`. Escapes: `\n` `\r` `\t` `\b` `\f` `\v` `\0`, `\xHH`, `\uHHHH`,
   `\u{H...}`, and a backslash before any other character stands for that

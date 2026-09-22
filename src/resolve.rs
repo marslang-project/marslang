@@ -49,14 +49,14 @@ fn typed(value: Expr, ty: &Option<String>) -> Expr {
 }
 
 /// Lower numeric literal text to its runtime kind, following the numeric contract:
-/// decimal integers up to 2^53-1 are `int`, larger ones `longint`, and literals with
+/// decimal integers that fit in 32 bits are `int`, larger ones `longint`, and literals with
 /// a fraction or exponent are `float`. Out-of-range longints stay as text and raise
 /// `longint overflow` when evaluated.
 fn number(text: &str, negative: bool) -> Option<Expr> {
     if text.chars().all(|c| c.is_ascii_digit()) {
         let magnitude: i128 = text.parse().ok()?;
         let value = if negative { -magnitude } else { magnitude };
-        if magnitude <= MAX_SAFE { return Some(Expr::Int(value as i64)); }
+        if i32::try_from(value).is_ok() { return Some(Expr::Int(value as i64)); }
         return i64::try_from(value).ok().map(Expr::Long);
     }
     let value: f64 = text.parse().ok()?;
@@ -177,9 +177,10 @@ impl Resolver {
         match e {
             Expr::Number(text) => { if let Some(lowered) = number(text, false) { *e = lowered; } }
             Expr::Unary { op, value } if op == "-" && matches!(value.as_ref(), Expr::Number(t) if t.chars().all(|c| c.is_ascii_digit())) => {
-                // A negated large literal is one longint literal, so -2^63 stays representable.
+                // A negated large literal is one literal, so -2^31 stays an int and
+                // -2^63 a representable longint.
                 let Expr::Number(text) = value.as_ref() else { unreachable!() };
-                if text.parse::<i128>().map(|v| v > MAX_SAFE).unwrap_or(true) {
+                if text.parse::<i128>().map(|v| v > i32::MAX as i128).unwrap_or(true) {
                     if let Some(lowered) = number(text, true) { *e = lowered; return Ok(()); }
                 }
                 self.expr(value)?;
