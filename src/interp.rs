@@ -463,6 +463,18 @@ impl<'o> Interp<'o> {
                 let object = self.eval(object, env)?;
                 self.get_member(&object, field, env.owner.as_ref())?
             }
+            Expr::Index { object, index } => {
+                let object = self.eval(object, env)?;
+                let index = self.eval(index, env)?;
+                match &object {
+                    Value::Str(text) => character_at(text, &index)?,
+                    Value::Array(array) => {
+                        let items = array.items.borrow();
+                        items[whole_index(&index, items.len(), "array")?].clone()
+                    }
+                    other => return type_err(format!("{} {} cannot be indexed; strings and arrays can", article(other.type_name()), other.type_name())),
+                }
+            }
             Expr::Call { callee, args } => return self.eval_call(callee, args, env),
         })
     }
@@ -1442,7 +1454,10 @@ fn slice_items<T: Clone>(items: &[T], args: &[Value], by_length: bool) -> RResul
 /// String methods operate on grapheme clusters. Returns `None` for names that
 /// are not string methods.
 fn string_method(text: &str, name: &str, args: &[Value]) -> RResult<Option<Value>> {
+    use crate::package::native::rs_string as shared;
     let no_args = |method: &str| if args.is_empty() { Ok(()) } else { type_err(format!("string.{method}() takes no arguments")) };
+    let count = |n: usize| if args.len() == n { Ok(()) } else { type_err(format!("string.{name}() takes {n} argument(s), got {}", args.len())) };
+    let strings = |parts: Vec<&str>| Value::array(parts.into_iter().map(Value::str).collect());
     Ok(Some(match name {
         "len" => { no_args("len")?; Value::Int(text.graphemes(true).count() as i64) }
         "reverse" => { no_args("reverse")?; Value::str(&text.graphemes(true).rev().collect::<String>()) }
@@ -1450,8 +1465,82 @@ fn string_method(text: &str, name: &str, args: &[Value]) -> RResult<Option<Value
             let graphemes: Vec<&str> = text.graphemes(true).collect();
             Value::str(&slice_items(&graphemes, args, name == "lenslice")?.concat())
         }
+        "iget" => { count(1)?; character_at(text, &args[0])? }
+        // split() splits at runs of whitespace; split(sep) at each separator.
+        "split" => match args.len() {
+            0 => strings(text.split_whitespace().collect()),
+            1 => strings(shared::split(text, text_arg(args, 0, name)?)?),
+            n => return type_err(format!("string.split() takes 0 or 1 argument(s), got {n}")),
+        },
+        "lines" => { no_args("lines")?; strings(text.lines().collect()) }
+        // strip() removes whitespace; strip(chars) removes any of those characters.
+        "strip" | "lstrip" | "rstrip" => {
+            let (start, end) = (name != "rstrip", name != "lstrip");
+            match args.len() {
+                0 => Value::str(match (start, end) {
+                    (true, true) => text.trim(),
+                    (true, false) => text.trim_start(),
+                    _ => text.trim_end(),
+                }),
+                1 => Value::str(&strip_characters(text, text_arg(args, 0, name)?, start, end)),
+                n => return type_err(format!("string.{name}() takes 0 or 1 argument(s), got {n}")),
+            }
+        }
+        "upper" => { no_args("upper")?; Value::str(&text.to_uppercase()) }
+        "lower" => { no_args("lower")?; Value::str(&text.to_lowercase()) }
+        "replace" => { count(2)?; Value::str(&shared::replace(text, text_arg(args, 0, name)?, text_arg(args, 1, name)?)?) }
+        "find" | "rfind" => {
+            count(1)?;
+            Value::Int(shared::find(text, text_arg(args, 0, name)?, name == "rfind").map_or(-1, |i| i as i64))
+        }
+        "contains" => { count(1)?; Value::Bool(shared::find(text, text_arg(args, 0, name)?, false).is_some()) }
+        "starts_with" => { count(1)?; Value::Bool(shared::starts_with(text, text_arg(args, 0, name)?)) }
+        "ends_with" => { count(1)?; Value::Bool(shared::ends_with(text, text_arg(args, 0, name)?)) }
         _ => return type_err(format!("string has no method '{name}'")),
     }))
+}
+
+fn text_arg<'a>(args: &'a [Value], i: usize, method: &str) -> RResult<&'a str> {
+    match &args[i] {
+        Value::Str(text) => Ok(text),
+        other => type_err(format!("string.{method}() expects a string, got {}", other.type_name())),
+    }
+}
+
+/// `text` without any of the characters in `chars` at the start and/or end.
+fn strip_characters(text: &str, chars: &str, start: bool, end: bool) -> String {
+    let remove: std::collections::HashSet<&str> = chars.graphemes(true).collect();
+    let all: Vec<&str> = text.graphemes(true).collect();
+    let mut kept = &all[..];
+    while start && kept.first().is_some_and(|c| remove.contains(c)) { kept = &kept[1..]; }
+    while end && kept.last().is_some_and(|c| remove.contains(c)) { kept = &kept[..kept.len() - 1]; }
+    kept.concat()
+}
+
+/// "a" or "an", for the kind names in messages.
+fn article(word: &str) -> &'static str {
+    if word.starts_with(['a', 'e', 'i', 'o', 'u']) { "an" } else { "a" }
+}
+
+/// Character `index` of `text`, counting whole characters from 0.
+fn character_at(text: &str, index: &Value) -> RResult<Value> {
+    let characters: Vec<&str> = text.graphemes(true).collect();
+    Ok(Value::str(characters[whole_index(index, characters.len(), "string")?]))
+}
+
+/// A position from 0 to `len - 1`; anything else is an OutOfBoundsError, and
+/// a value that is not a whole number a TypeError.
+fn whole_index(value: &Value, len: usize, what: &str) -> RResult<usize> {
+    let index = match value {
+        Value::Int(i) | Value::Long(i) => *i,
+        Value::Float(f) if f.fract() == 0.0 && f.is_finite() => *f as i64,
+        other => return type_err(format!("{what} indexes must be whole numbers, got {}", other.type_name())),
+    };
+    if index < 0 || index as usize >= len {
+        let unit = if what == "string" { "characters" } else { "elements" };
+        return err(ErrorKind::OutOfBoundsError, format!("index {index} is out of range for {} {what} of {len} {unit}", article(what)));
+    }
+    Ok(index as usize)
 }
 
 fn iterate(value: &Value) -> RResult<Vec<Value>> {

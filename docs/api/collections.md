@@ -24,6 +24,7 @@ changes neither the container nor the value being inserted.
 | `len()` | Element count |
 | `is_empty()` | Whether the array is empty |
 | `has(value)` | Whether an equal value is present |
+| `items[index]` | Element at a position counting from 0; outside the array raises `OutOfBoundsError` |
 | `iget(index)` | Element at a nonnegative index; invalid indices raise `RangeError` |
 | `get(value)` / `rget(value)` | First/last matching index, or `-1` |
 
@@ -39,6 +40,7 @@ changes neither the container nor the value being inserted.
 | `rev()` / `reverse()` | Reverse in place; return the array |
 
 Array reversal mutates the array. [String reversal](strings.md) returns a new string.
+`items[index]` only reads; change an element with `modify(index, value)`.
 
 ### Slicing
 

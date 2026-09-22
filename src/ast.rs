@@ -173,6 +173,11 @@ pub enum Expr {
         object: Box<Expr>,
         field: String,
     },
+    /// `object[index]`: one character of a string, or one element of an array.
+    Index {
+        object: Box<Expr>,
+        index: Box<Expr>,
+    },
     Binary {
         left: Box<Expr>,
         op: String,

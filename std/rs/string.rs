@@ -10,18 +10,7 @@ use crate::value::*;
 
 pub fn package() -> Value {
     NativePackage::new("rs.string")
-        .function("split", 2, |args| {
-            let (text, separator) = (text(&args[0])?, text(&args[1])?);
-            if separator.is_empty() { return range_err("split separator must not be empty"); }
-            let mut parts = Vec::new();
-            let mut start = 0;
-            for (at, end) in Text::new(text).matches(separator) {
-                parts.push(&text[start..at]);
-                start = end;
-            }
-            parts.push(&text[start..]);
-            Ok(strings(parts.into_iter()))
-        })
+        .function("split", 2, |args| Ok(strings(split(text(&args[0])?, text(&args[1])?)?.into_iter())))
         .function("split_whitespace", 1, |args| Ok(strings(text(&args[0])?.split_whitespace())))
         .function("lines", 1, |args| Ok(strings(text(&args[0])?.lines())))
         .function("join", 2, |args| {
@@ -38,30 +27,12 @@ pub fn package() -> Value {
         .function("trim", 1, |args| Ok(Value::str(text(&args[0])?.trim())))
         .function("trim_start", 1, |args| Ok(Value::str(text(&args[0])?.trim_start())))
         .function("trim_end", 1, |args| Ok(Value::str(text(&args[0])?.trim_end())))
-        .function("starts_with", 2, |args| {
-            let (haystack, prefix) = (text(&args[0])?, text(&args[1])?);
-            Ok(Value::Bool(haystack.starts_with(prefix) && Text::new(haystack).is_boundary(prefix.len())))
-        })
-        .function("ends_with", 2, |args| {
-            let (haystack, suffix) = (text(&args[0])?, text(&args[1])?);
-            Ok(Value::Bool(haystack.ends_with(suffix) && Text::new(haystack).is_boundary(haystack.len() - suffix.len())))
-        })
-        .function("contains", 2, |args| Ok(Value::Bool(Text::new(text(&args[0])?).find(text(&args[1])?, false).is_some())))
-        .function("find", 2, |args| Ok(index(Text::new(text(&args[0])?).find(text(&args[1])?, false))))
-        .function("rfind", 2, |args| Ok(index(Text::new(text(&args[0])?).find(text(&args[1])?, true))))
-        .function("replace", 3, |args| {
-            let (haystack, old, new) = (text(&args[0])?, text(&args[1])?, text(&args[2])?);
-            if old.is_empty() { return range_err("replace needs a non-empty text to replace"); }
-            let mut replaced = String::with_capacity(haystack.len());
-            let mut start = 0;
-            for (at, end) in Text::new(haystack).matches(old) {
-                replaced.push_str(&haystack[start..at]);
-                replaced.push_str(new);
-                start = end;
-            }
-            replaced.push_str(&haystack[start..]);
-            Ok(Value::str(&replaced))
-        })
+        .function("starts_with", 2, |args| Ok(Value::Bool(starts_with(text(&args[0])?, text(&args[1])?))))
+        .function("ends_with", 2, |args| Ok(Value::Bool(ends_with(text(&args[0])?, text(&args[1])?))))
+        .function("contains", 2, |args| Ok(Value::Bool(find(text(&args[0])?, text(&args[1])?, false).is_some())))
+        .function("find", 2, |args| Ok(index(find(text(&args[0])?, text(&args[1])?, false))))
+        .function("rfind", 2, |args| Ok(index(find(text(&args[0])?, text(&args[1])?, true))))
+        .function("replace", 3, |args| Ok(Value::str(&replace(text(&args[0])?, text(&args[1])?, text(&args[2])?)?)))
         .function("upper", 1, |args| Ok(Value::str(&text(&args[0])?.to_uppercase())))
         .function("lower", 1, |args| Ok(Value::str(&text(&args[0])?.to_lowercase())))
         .function("repeated", 2, |args| {
@@ -75,6 +46,49 @@ pub fn package() -> Value {
             }
         })
         .build()
+}
+
+// Shared with the interpreter's string methods, so `text.split(",")` and
+// `strings.split(text, ",")` behave the same.
+
+/// The parts of `text` between whole-character occurrences of `separator`.
+pub(crate) fn split<'a>(text: &'a str, separator: &str) -> RResult<Vec<&'a str>> {
+    if separator.is_empty() { return range_err("split separator must not be empty"); }
+    let mut parts = Vec::new();
+    let mut start = 0;
+    for (at, end) in Text::new(text).matches(separator) {
+        parts.push(&text[start..at]);
+        start = end;
+    }
+    parts.push(&text[start..]);
+    Ok(parts)
+}
+
+/// `haystack` with every whole-character occurrence of `old` replaced.
+pub(crate) fn replace(haystack: &str, old: &str, new: &str) -> RResult<String> {
+    if old.is_empty() { return range_err("replace needs a non-empty text to replace"); }
+    let mut replaced = String::with_capacity(haystack.len());
+    let mut start = 0;
+    for (at, end) in Text::new(haystack).matches(old) {
+        replaced.push_str(&haystack[start..at]);
+        replaced.push_str(new);
+        start = end;
+    }
+    replaced.push_str(&haystack[start..]);
+    Ok(replaced)
+}
+
+/// Character position of the first (or last) whole-character occurrence.
+pub(crate) fn find(haystack: &str, part: &str, last: bool) -> Option<usize> {
+    Text::new(haystack).find(part, last)
+}
+
+pub(crate) fn starts_with(haystack: &str, prefix: &str) -> bool {
+    haystack.starts_with(prefix) && Text::new(haystack).is_boundary(prefix.len())
+}
+
+pub(crate) fn ends_with(haystack: &str, suffix: &str) -> bool {
+    haystack.ends_with(suffix) && Text::new(haystack).is_boundary(haystack.len() - suffix.len())
 }
 
 fn text(value: &Value) -> RResult<&str> {

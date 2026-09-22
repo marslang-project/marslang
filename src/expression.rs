@@ -63,7 +63,7 @@ pub fn parse(text: &str) -> Result<Expr, String> {
                     op = combined; chars.next();
                 }
             }
-            if !matches!(op.as_str(), "+" | "-" | "*" | "/" | "%" | "**" | "=" | "==" | "!=" | "<" | ">" | "<=" | ">=" | "(" | ")" | "," | ".") {
+            if !matches!(op.as_str(), "+" | "-" | "*" | "/" | "%" | "**" | "=" | "==" | "!=" | "<" | ">" | "<=" | ">=" | "(" | ")" | "[" | "]" | "," | ".") {
                 return Err(format!("unsupported expression token '{op}' at column {}", start + 1));
             }
             tokens.push(Token::Op(op));
@@ -109,6 +109,12 @@ impl Parser {
                 self.pos += 1;
                 let Token::Name(field) = self.take() else { return Err("expected member name".into()); };
                 left = Expr::Member { object: Box::new(left), field }; continue;
+            }
+            if self.is("[") {
+                self.pos += 1;
+                let index = self.expr(0)?;
+                self.expect("]")?;
+                left = Expr::Index { object: Box::new(left), index: Box::new(index) }; continue;
             }
             if self.is("(") {
                 self.pos += 1; let mut args = Vec::new();

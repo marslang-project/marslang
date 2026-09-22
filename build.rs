@@ -27,7 +27,8 @@ fn main() {
     out.push_str("pub(crate) mod native {\n");
     let native = files(&std_dir.join("rs"), "rs");
     for (name, path) in &native {
-        out.push_str(&format!("    #[path = {:?}]\n    mod rs_{name};\n", path.display().to_string()));
+        // pub(crate): the interpreter's own string methods share rs_string's helpers.
+        out.push_str(&format!("    #[path = {:?}]\n    pub(crate) mod rs_{name};\n", path.display().to_string()));
     }
     out.push_str("\n    pub(crate) const PACKAGES: &[(&str, fn() -> crate::value::Value)] = &[\n");
     for (name, _) in &native {

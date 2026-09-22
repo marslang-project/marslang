@@ -121,6 +121,8 @@ impl Resolver {
                         *name = binding.name; *value = typed(value.clone(), &binding.ty);
                     }
                     Expr::Member { object, .. } => self.expr(object)?,
+                    Expr::Index { .. } => return Err(
+                        "cannot assign through an index: use .modify(index, value) on an array; strings cannot be changed".into()),
                     _ => return Err("invalid assignment target".into()),
                 }
             }
@@ -186,6 +188,7 @@ impl Resolver {
             }
             Expr::Call { callee, args } => { self.expr(callee)?; for arg in args { self.expr(arg)?; } }
             Expr::Member { object, .. } => self.expr(object)?,
+            Expr::Index { object, index } => { self.expr(object)?; self.expr(index)?; }
             _ => {}
         }
         Ok(())

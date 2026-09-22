@@ -31,14 +31,28 @@ extended grapheme cluster rules); its Unicode version follows the crate version.
 
 | Call | Result |
 | --- | --- |
+| `text[i]` / `text.iget(i)` | The character at position `i`, counting from 0 |
 | `text.len()` | Number of characters |
 | `text.reverse()` | New string with characters in reverse order |
 | `text.slice(start,end)` | New string selecting positions `[start,end)` |
 | `text.lenslice(start,length)` | New string selecting `length` characters from `start` |
+| `text.split()` / `text.split(sep)` | Array of the words between runs of whitespace / of the parts between each `sep`; an empty `sep` raises `RangeError` |
+| `text.lines()` | Array of lines, splitting at `\n` or `\r\n` |
+| `text.strip()` / `lstrip()` / `rstrip()` | Without whitespace at both ends / the start / the end |
+| `text.strip(chars)` / `lstrip(chars)` / `rstrip(chars)` | Without any of the characters in `chars` at those ends |
+| `text.upper()` / `text.lower()` | Unicode case conversion (`"Straße".upper()` is `"STRASSE"`) |
+| `text.replace(old,new)` | Every occurrence of `old` replaced; an empty `old` raises `RangeError` |
+| `text.find(part)` / `text.rfind(part)` | Position of the first / last occurrence, or `-1` |
+| `text.contains(part)` / `starts_with(part)` / `ends_with(part)` | Boolean |
 | `text.copy()` | The same immutable string value |
 
-`len()` and `reverse()` take no arguments. Use `text.lenslice(index,1)` to extract
-one character; string bracket indexing is not implemented.
+Every method returns a new value; the string itself never changes, so
+`text[0] = "x"` is a compile error. Positions, searches, and splits work in
+whole characters: `"café".find("e")` is `-1` when the `é` is `e` plus a combining
+accent, because that accent belongs to the same character. An index outside the
+string raises `OutOfBoundsError`, and one that is not a whole number `TypeError`.
+The [std.strings](std-strings.md) functions do the same as these methods, for
+code that prefers `strings.split(text, ",")`.
 
 ## Counting from the end
 

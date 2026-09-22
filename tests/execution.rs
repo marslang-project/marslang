@@ -1326,6 +1326,47 @@ fn every_public_standard_library_declaration_has_a_docstring() {
 }
 
 #[test]
+fn string_methods_split_strip_and_search() {
+    executes(r#"
+        func m{
+            s = "  Hello, World  ";
+            out(s.strip() + "|", s.lstrip() + "|", s.rstrip() + "|");
+            out("a,b,,c".split(","), "one two   three".split(), "x\ny".lines());
+            out("xxhixx".strip("x"), "--a--".lstrip("-"), "--a--".rstrip("-"));
+            out("Straße".upper(), "ABC".lower(), "a-b-c".replace("-", "+"));
+            out("banana".find("an"), "banana".rfind("an"), "banana".find("z"));
+            out("mars".starts_with("ma"), "mars".ends_with("rs"), "mars".contains("x"));
+            // Whole characters, as everywhere else: é is one character, not two.
+            out("cafe\u0301".ends_with("e"), "cafe\u0301".find("\u0301"));
+        }"#,
+        "Hello, World| Hello, World  |   Hello, World|\n\
+         [\"a\", \"b\", \"\", \"c\"] [\"one\", \"two\", \"three\"] [\"x\", \"y\"]\n\
+         hi a-- --a\nSTRASSE abc a+b+c\n1 3 -1\ntrue true false\nfalse -1\n");
+    runtime_error("func m{ \"a\".split(\"\"); }", "split separator must not be empty");
+    runtime_error("func m{ \"a\".strip(1); }", "string.strip() expects a string, got int");
+    runtime_error("func m{ \"a\".replace(\"a\"); }", "string.replace() takes 2 argument(s), got 1");
+}
+
+#[test]
+fn indexing_reads_characters_and_elements() {
+    executes(r#"
+        func m{
+            word = "héllo👋";
+            out(word[0], word[1], word[5], word.iget(5), word.len());
+            nums = arr(10, 20, arr(1, 2));
+            out(nums[0], nums[2][1], nums[1 + 1][0]);
+            run{ out(word[6]); } handle(OutOfBoundsError e){ out(e.message); }
+            run{ out(nums[-1]); } handle(OutOfBoundsError e){ out(e.message); }
+        }"#,
+        "h é 👋 👋 6\n10 2 1\nindex 6 is out of range for a string of 6 characters\n\
+         index -1 is out of range for an array of 3 elements\n");
+    runtime_error("func m{ arr(1)[0.5]; }", "array indexes must be whole numbers, got float");
+    runtime_error("func m{ x = 5; x[0]; }", "an int cannot be indexed; strings and arrays can");
+    let error = marslang::compile("func m{ s = \"ab\"; s[0] = \"x\"; }").unwrap_err();
+    assert!(error.contains("cannot assign through an index"), "{error}");
+}
+
+#[test]
 fn decorator_package_lists_the_available_markers() {
     executes("takepkg std.Decorator;\nfunc m{ out(Decorator.private, Decorator.subclass, Decorator.static); }",
         "private subclass static\n");
