@@ -39,8 +39,11 @@ fn measure(source: &str) -> (isize, isize) {
 }
 
 fn cycles(count: usize) -> String {
-    format!("family Node{{ func init(){{ me.me2 = me; me.cb = me.get; }} func get => 1; }}
-        func m{{ repeat {count} {{ a = arr(); a.add(a); p = pair(1, 2); p.first = p; n = Node(); }} }}")
+    // Also closure cycles: `again` lives in the frame it closes over, and each
+    // Node holds a function that holds the Node as `me`.
+    format!("family Node{{ func init(){{ me.me2 = me; me.cb = me.get; me.fn = func(int x) => me.me2; }} func get => 1; }}
+        func make(){{ func again(int n){{ if (n > 0){{ ret again(n - 1); }} ret 0; }} ret again(2); }}
+        func m{{ repeat {count} {{ a = arr(); a.add(a); p = pair(1, 2); p.first = p; n = Node(); make(); }} }}")
 }
 
 #[test]
@@ -51,6 +54,8 @@ fn cycles_are_reclaimed_during_and_after_a_run() {
         let (cyclic, _) = measure("func m{ repeat 1000 { a=arr(); a.add(a); } }");
         assert_eq!(plain, 0, "ordinary arrays retained memory after the run");
         assert_eq!(cyclic, 0, "self-referencing arrays retained memory after the run");
+        let (closures, _) = measure("func make(){ func again(int n) => n; ret 1; } func m{ repeat 1000 { make(); } }");
+        assert_eq!(closures, 0, "nested functions retained their frames after the run");
     }
     // Garbage cycles are collected while the program runs, so peak memory does
     // not grow with the number of cycles created.

@@ -206,14 +206,53 @@ impl Value {
     pub fn method(receiver: Value, function: Rc<Function>) -> Value {
         Value::Func(Rc::new(Callable::Method(receiver, function))).tracked()
     }
+    /// A function closing over the frame it was made in, and `me` there.
+    pub fn closure(function: Rc<Function>, frame: Option<Rc<Frame>>, me: Option<Value>) -> Value {
+        if let Some(frame) = &frame { crate::gc::track_frame(frame); }
+        Value::Func(Rc::new(Callable::Closure(function, frame, me))).tracked()
+    }
     pub fn package(name: String, members: IndexMap<String, Value>) -> Value {
         Value::Package(Rc::new(Package { name, members })).tracked()
     }
 }
 
+/// The local variables of one call. A closure keeps the frame it was made in,
+/// so frames are shared, and each has the frame of the function it is nested in
+/// as its parent. Names are unique after resolving, so a lookup walks outward
+/// without any risk of finding a different variable of the same name.
+pub struct Frame {
+    pub values: RefCell<HashMap<String, Value>>,
+    pub parent: RefCell<Option<Rc<Frame>>>,
+    /// Registered with the cycle collector: done once a closure captures it.
+    pub tracked: Cell<bool>,
+}
+
+impl Frame {
+    pub fn new(values: HashMap<String, Value>, parent: Option<Rc<Frame>>) -> Rc<Frame> {
+        Rc::new(Frame { values: RefCell::new(values), parent: RefCell::new(parent), tracked: Cell::new(false) })
+    }
+
+    pub fn lookup(&self, name: &str) -> Option<Value> {
+        if let Some(value) = self.values.borrow().get(name) { return Some(value.clone()); }
+        self.parent.borrow().as_ref().and_then(|parent| parent.lookup(name))
+    }
+
+    /// Set `name` in the nearest frame that has it, or hand the value back when none does.
+    pub fn assign(&self, name: &str, value: Value) -> Result<(), Value> {
+        if let Some(slot) = self.values.borrow_mut().get_mut(name) {
+            *slot = value;
+            return Ok(());
+        }
+        match self.parent.borrow().as_ref() {
+            Some(parent) => parent.assign(name, value),
+            None => Err(value),
+        }
+    }
+}
+
 /// A user function or method, bound to the package whose globals it reads.
 pub struct Function {
-    pub decl: FuncDecl,
+    pub decl: std::sync::Arc<FuncDecl>,
     pub package: usize,
     /// The family declaring this method; `None` for a free function.
     pub owner: Option<std::rc::Weak<Family>>,
@@ -255,6 +294,9 @@ impl Builtin {
 pub enum Callable {
     Func(Rc<Function>),
     Method(Value, Rc<Function>),
+    /// An anonymous or nested function: the frame it closes over (none at top
+    /// level) and `me`, when it was made inside a method.
+    Closure(Rc<Function>, Option<Rc<Frame>>, Option<Value>),
     Family(Rc<Family>),
     Builtin(Builtin),
     Native(Rc<NativeFn>),
@@ -296,13 +338,13 @@ impl Callable {
             Callable::Family(f) => Rc::as_ptr(f) as usize,
             Callable::Native(f) => Rc::as_ptr(f) as usize,
             Callable::Builtin(b) => *b as usize,
-            Callable::Method(..) => self as *const Callable as usize,
+            Callable::Method(..) | Callable::Closure(..) => self as *const Callable as usize,
         })
     }
 
     pub fn name(&self) -> String {
         match self {
-            Callable::Func(f) | Callable::Method(_, f) => f.decl.name.clone(),
+            Callable::Func(f) | Callable::Method(_, f) | Callable::Closure(f, ..) => f.decl.name.clone(),
             Callable::Family(f) => f.name.clone(),
             Callable::Builtin(b) => format!("{b:?}").to_lowercase(),
             Callable::Native(f) => f.name.clone(),

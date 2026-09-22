@@ -1367,6 +1367,88 @@ fn indexing_reads_characters_and_elements() {
 }
 
 #[test]
+fn anonymous_functions_and_closures() {
+    executes(r#"
+        func apply(Function f, int v) => f(v);
+
+        func counter(){
+            count = 0;
+            func bump(){
+                count = count + 1;
+                ret count;
+            }
+            ret bump;
+        }
+
+        func m{
+            double = func(int x) => x * 2;
+            out(double(21), apply(double, 5), apply(func(int x) => x + 100, 1), (func(int x) => x - 1)(1));
+
+            // Each call to counter makes a new count, which its bump keeps.
+            next = counter();
+            next(); next();
+            other = counter();
+            out(next(), other(), next());
+
+            func fact(int n){
+                if (n <= 1){ ret 1; }
+                ret n * fact(n - 1);
+            }
+            out(fact(10));
+
+            // A closure sees the variable, not the value it had when made.
+            base = 10;
+            add_base = func(int x) => x + base;
+            base = 20;
+            out(add_base(1));
+
+            fns = arr();
+            for (i = 0, i < 3, i++){ fns.add(func(int x) => x + i); }
+            out(fns[0](10));
+        }"#,
+        "42 10 101 0\n3 1 4\n3628800\n21\n13\n");
+}
+
+#[test]
+fn closures_in_methods_keep_me_and_family_access() {
+    executes(r#"
+        takepkg std.Decorator;
+        family Account{
+            func init(int balance){ me.balance = balance; }
+            @Decorator.private
+            func _fee() => 1;
+            func adder() => func(int x) => me.balance + x - me._fee();
+        }
+        func m{
+            add = Account(100).adder();
+            out(add(5));
+        }"#, "104\n");
+}
+
+#[test]
+fn function_and_family_parameter_types() {
+    executes(r#"
+        family Box{ func init(int v){ me.v = v; } }
+        func build(Family F, int v) => F(v);
+        func call(Function f) => f();
+        func m{
+            out(build(Box, 3).v, call(func() => "called"), call(out));
+        }"#, "\n3 called null\n");
+    runtime_error("func call(Function f) => f();\nfunc m{ call(5); }", "expected a function, got int");
+    runtime_error("family Box{}\nfunc build(Family F) => F();\nfunc m{ build(func() => 1); }", "expected a family, got function");
+    for (source, message) in [
+        ("func m{ f (Function) = func(int x) => x; }", "Function and Family are parameter types"),
+        ("func m{ f = func(int x) { ret x; }; }", "for a longer body, declare a named func inside the block"),
+        ("func m{ func g(){ break; } }", "break/continue must be inside a loop"),
+        ("func m{ func g() => 1; func g() => 2; }", "duplicate local 'g'"),
+        ("func m{ func g() => 1; g = 5; }", "cannot reassign fixed/hot binding 'g'"),
+    ] {
+        let error = marslang::compile(source).expect_err(source);
+        assert!(error.contains(message), "{source}: {error}");
+    }
+}
+
+#[test]
 fn decorator_package_lists_the_available_markers() {
     executes("takepkg std.Decorator;\nfunc m{ out(Decorator.private, Decorator.subclass, Decorator.static); }",
         "private subclass static\n");

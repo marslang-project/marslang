@@ -59,7 +59,7 @@ struct Env {
     /// The family whose method is running, for private/subclass access checks.
     owner: Option<Rc<Family>>,
     /// `None` while running top-level statements, which declare globals.
-    locals: Option<HashMap<String, Value>>,
+    locals: Option<Rc<Frame>>,
     me: Option<Value>,
 }
 
@@ -135,7 +135,7 @@ impl<'o> Interp<'o> {
         let unit = self.load_unit(program, None)?;
         self.run_top_level(program, unit)?;
         let entry = self.units[unit].functions.get("m").cloned();
-        if let Some(entry) = entry { self.call_function(&entry, None, Vec::new())?; }
+        if let Some(entry) = entry { self.call_function(&entry, None, Vec::new(), None)?; }
         Ok(())
     }
 
@@ -160,7 +160,7 @@ impl<'o> Interp<'o> {
         let mut decls = HashMap::new();
         for item in &program.items {
             match item {
-                Item::Func(f) => { functions.insert(f.name.clone(), Rc::new(Function { decl: f.clone(), package: index, owner: None })); }
+                Item::Func(f) => { functions.insert(f.name.clone(), Rc::new(Function { decl: std::sync::Arc::new(f.clone()), package: index, owner: None })); }
                 Item::Family(f) => { decls.insert(f.name.clone(), f); }
                 _ => {}
             }
@@ -218,7 +218,7 @@ impl<'o> Interp<'o> {
     // ----- variables -----
 
     fn lookup(&self, name: &str, env: &Env) -> RResult<Value> {
-        if let Some(value) = env.locals.as_ref().and_then(|locals| locals.get(name)) { return Ok(value.clone()); }
+        if let Some(value) = env.locals.as_ref().and_then(|frame| frame.lookup(name)) { return Ok(value); }
         if name == "me" {
             return env.me.clone().ok_or_else(|| RuntimeError::new(ErrorKind::Error, "'me' is only available inside family methods"));
         }
@@ -233,14 +233,19 @@ impl<'o> Interp<'o> {
     }
 
     fn declare(&self, env: &mut Env, name: &str, value: Value) {
-        match &mut env.locals {
-            Some(locals) => { locals.insert(name.to_string(), value); }
+        match &env.locals {
+            Some(frame) => { frame.values.borrow_mut().insert(name.to_string(), value); }
             None => { self.units[env.unit].globals.borrow_mut().insert(name.to_string(), value); }
         }
     }
 
     fn assign(&self, env: &mut Env, name: &str, value: Value) {
-        if let Some(slot) = env.locals.as_mut().and_then(|locals| locals.get_mut(name)) { *slot = value; return; }
+        // The nearest frame that has the name, which for a closure may be the
+        // frame of the function around it.
+        let value = match &env.locals {
+            Some(frame) => match frame.assign(name, value) { Ok(()) => return, Err(value) => value },
+            None => value,
+        };
         let mut globals = self.units[env.unit].globals.borrow_mut();
         if let Some(slot) = globals.get_mut(name) { *slot = value; return; }
         drop(globals);
@@ -283,6 +288,10 @@ impl<'o> Interp<'o> {
             Stmt::Expr(e) => { self.eval(e, env)?; }
             Stmt::Break => return Ok(Flow::Break),
             Stmt::Continue => return Ok(Flow::Continue),
+            Stmt::Func { name, decl } => {
+                let closure = self.closure(decl, env);
+                self.declare(env, name, closure);
+            }
             Stmt::If { cond, then_block, elif_blocks, else_block } => {
                 if self.eval(cond, env)?.truth() { return self.exec_block(then_block, env); }
                 for (cond, body) in elif_blocks {
@@ -475,8 +484,17 @@ impl<'o> Interp<'o> {
                     other => return type_err(format!("{} {} cannot be indexed; strings and arrays can", article(other.type_name()), other.type_name())),
                 }
             }
+            Expr::Lambda(decl) => self.closure(decl, env),
             Expr::Call { callee, args } => return self.eval_call(callee, args, env),
         })
+    }
+
+    /// A function made where it stands: it keeps the current frame, `me`, and
+    /// the family whose method is running, so it can reach what the code
+    /// around it can, including that family's private methods.
+    fn closure(&self, decl: &std::sync::Arc<FuncDecl>, env: &Env) -> Value {
+        let function = Rc::new(Function { decl: decl.clone(), package: env.unit, owner: env.owner.as_ref().map(Rc::downgrade) });
+        Value::closure(function, env.locals.clone(), env.me.clone())
     }
 
     fn eval_args(&mut self, args: &[Expr], env: &mut Env) -> RResult<Vec<Value>> {
@@ -494,7 +512,7 @@ impl<'o> Interp<'o> {
                 let target = self.method_target(&object, field, env.owner.as_ref())?;
                 let args = self.eval_args(args, env)?;
                 match target {
-                    Some(MethodTarget::Method(method)) => self.call_function(&method, Some(object), args),
+                    Some(MethodTarget::Method(method)) => self.call_function(&method, Some(object), args, None),
                     Some(MethodTarget::Value(function)) => self.call_value(&function, args),
                     None => match &object {
                         Value::Str(text) => Ok(string_method(text, field, &args)?.expect("string methods always resolve")),
@@ -523,13 +541,14 @@ impl<'o> Interp<'o> {
             return type_err(format!("{} is not callable", function.type_name()));
         };
         match callable.as_ref() {
-            Callable::Func(f) => self.call_function(f, None, args),
+            Callable::Func(f) => self.call_function(f, None, args, None),
             Callable::Method(receiver, f) => {
                 // A bound method taken out of its family keeps its restriction:
                 // check against whoever calls it now, not where it was taken.
                 check_access(f, self.caller.as_ref())?;
-                self.call_function(f, Some(receiver.clone()), args)
+                self.call_function(f, Some(receiver.clone()), args, None)
             }
+            Callable::Closure(f, frame, me) => self.call_function(f, me.clone(), args, frame.clone()),
             Callable::Family(family) => self.construct(family, args),
             Callable::Builtin(builtin) => self.call_builtin(*builtin, args),
             Callable::Native(function) => {
@@ -549,7 +568,8 @@ impl<'o> Interp<'o> {
         }
     }
 
-    fn call_function(&mut self, function: &Rc<Function>, me: Option<Value>, args: Vec<Value>) -> RResult<Value> {
+    /// `parent` is the frame a closure closes over; its variables stay visible.
+    fn call_function(&mut self, function: &Rc<Function>, me: Option<Value>, args: Vec<Value>, parent: Option<Rc<Frame>>) -> RResult<Value> {
         let decl = &function.decl;
         if args.len() != decl.params.len() {
             let name = match &self.units[function.package].name {
@@ -565,7 +585,7 @@ impl<'o> Interp<'o> {
         }
         let owner = function.owner.as_ref().and_then(|owner| owner.upgrade());
         let previous_caller = std::mem::replace(&mut self.caller, owner.clone());
-        let mut env = Env { unit: function.package, owner, locals: Some(locals), me };
+        let mut env = Env { unit: function.package, owner, locals: Some(Frame::new(locals, parent)), me };
         self.depth += 1;
         let result = match &decl.body {
             FuncBody::Expr(e) => self.eval(e, &mut env),
@@ -582,7 +602,7 @@ impl<'o> Interp<'o> {
     fn construct(&mut self, family: &Rc<Family>, args: Vec<Value>) -> RResult<Value> {
         let instance = Value::new_instance(family.clone(), Meta::default());
         match family.method("init") {
-            Some(init) => { self.call_function(&init, Some(instance.clone()), args)?; }
+            Some(init) => { self.call_function(&init, Some(instance.clone()), args, None)?; }
             None if family.error_kind.is_some() => {
                 let name = &family.name;
                 return type_err(format!("{name} is an error family: raise it with err({name}, message) instead of calling it"));
@@ -998,6 +1018,15 @@ impl<'o> Interp<'o> {
             },
             "string" => match value { Value::Str(_) => Ok(value), _ => type_err("expected string") },
             "any" => Ok(value),
+            // Parameter types for passing code around: func apply(Function f).
+            "Function" => match &value {
+                Value::Func(f) if !matches!(f.as_ref(), Callable::Family(_)) => Ok(value),
+                _ => type_err(format!("expected a function, got {}", value.type_name())),
+            },
+            "Family" => match &value {
+                Value::Func(f) if matches!(f.as_ref(), Callable::Family(_)) => Ok(value),
+                _ => type_err(format!("expected a family, got {}", value.type_name())),
+            },
             _ => match collection_type(ty) {
                 Some((kind, args)) => self.plan_collection(value, ty, kind, args, unit, pending, choices),
                 None => self.instance_of(value, ty, unit),
@@ -1246,7 +1275,7 @@ fn build_family(name: &str, decls: &HashMap<String, &FamilyDecl>, built: &mut Ha
     // Each method keeps a weak link to its family, for access checks.
     let family = Rc::new_cyclic(|owner| {
         let methods = decl.methods.iter()
-            .map(|m| (m.name.clone(), Rc::new(Function { decl: m.clone(), package: unit, owner: Some(owner.clone()) })))
+            .map(|m| (m.name.clone(), Rc::new(Function { decl: std::sync::Arc::new(m.clone()), package: unit, owner: Some(owner.clone()) })))
             .collect();
         Family { name: name.to_string(), parent, methods, error_kind }
     });

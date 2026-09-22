@@ -1,7 +1,7 @@
 use crate::ast::Expr;
 
 #[derive(Clone, Debug)]
-enum Token { Name(String), Number(String), String(String), Op(String), End }
+enum Token { Name(String), Number(String), String(String), Op(String), Lambda(String), End }
 
 pub fn parse(text: &str) -> Result<Expr, String> {
     let mut tokens = Vec::new();
@@ -13,6 +13,38 @@ pub fn parse(text: &str) -> Result<Expr, String> {
             while let Some((_, c)) = chars.peek() {
                 if !c.is_ascii_alphanumeric() && *c != '_' { break; }
                 word.push(chars.next().unwrap().1);
+            }
+            if word == "func" {
+                // func(type name, ...) => body: an anonymous function. Its body is
+                // one expression; a longer one is a named func inside the block.
+                let mut ahead = chars.clone();
+                while matches!(ahead.peek(), Some((_, c)) if c.is_whitespace()) { ahead.next(); }
+                if let Some((open, '(')) = ahead.peek().copied() {
+                    ahead.next();
+                    let (mut depth, mut close, mut quote, mut escaped) = (1usize, None, None, false);
+                    for (at, c) in ahead.by_ref() {
+                        if let Some(q) = quote {
+                            if escaped { escaped = false; } else if c == '\\' { escaped = true; } else if c == q { quote = None; }
+                            continue;
+                        }
+                        match c {
+                            '"' | '\'' => quote = Some(c),
+                            '(' => depth += 1,
+                            ')' => { depth -= 1; if depth == 0 { close = Some(at); break; } }
+                            _ => {}
+                        }
+                    }
+                    let close = close.ok_or("an anonymous function is missing the ')' after its parameters")?;
+                    while matches!(ahead.peek(), Some((_, c)) if c.is_whitespace()) { ahead.next(); }
+                    let arrow = matches!(ahead.next(), Some((_, '='))) && matches!(ahead.next(), Some((_, '>')));
+                    if !arrow {
+                        return Err("an anonymous function is written func(type name) => expression; \
+                                    for a longer body, declare a named func inside the block".into());
+                    }
+                    chars = ahead;
+                    tokens.push(Token::Lambda(text[open + 1..close].to_string()));
+                    continue;
+                }
             }
             tokens.push(if matches!(word.as_str(), "and" | "or" | "not") {
                 Token::Op(word)
@@ -97,6 +129,10 @@ impl Parser {
                 "null" => Expr::Null, _ => Expr::Ident(s),
             },
             Token::Number(s) => Expr::Number(s), Token::String(s) => Expr::String(s),
+            Token::Lambda(params) => {
+                let body = self.expr(0)?;
+                Expr::Lambda(std::sync::Arc::new(crate::parser::lambda(&params, body)?))
+            }
             Token::Op(s) if s == "(" => { let v = self.expr(0)?; self.expect(")")?; v }
             Token::Op(op) if matches!(op.as_str(), "+" | "-" | "not") => {
                 let value = self.expr(if op == "not" { 3 } else { 6 })?;

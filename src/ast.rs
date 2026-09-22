@@ -131,6 +131,11 @@ pub enum Stmt {
     },
     Break,
     Continue,
+    /// A `func` declared inside a block: a closure bound to `name`, a local.
+    Func {
+        name: String,
+        decl: std::sync::Arc<FuncDecl>,
+    },
     /// `run{...} handle(...){...} ... then{...}`
     Run {
         body: Vec<Stmt>,
@@ -178,6 +183,9 @@ pub enum Expr {
         object: Box<Expr>,
         index: Box<Expr>,
     },
+    /// `func(int x) => x + 1`: an anonymous function, closing over the
+    /// variables around it.
+    Lambda(std::sync::Arc<FuncDecl>),
     Binary {
         left: Box<Expr>,
         op: String,

@@ -414,6 +414,21 @@ fn parse_decorators(line: &str) -> PResult<(Vec<Decorator>, String)> {
     Ok((decorators, rest.to_string()))
 }
 
+/// The declaration of `func(params) => body`, an anonymous function.
+pub(crate) fn lambda(params: &str, body: Expr) -> PResult<FuncDecl> {
+    let (_, params) = parse_func_signature(&format!("anonymous({params})"))?;
+    Ok(FuncDecl {
+        name: "anonymous".into(),
+        params,
+        body: FuncBody::Expr(body),
+        decorators: Vec::new(),
+        access: Access::Public,
+        doc: None,
+        line: 0,
+        end_line: 0,
+    })
+}
+
 fn parse_func(lines: &[Line], start: usize) -> PResult<(FuncDecl, usize)> {
     parse_func_from(lines[start].trim(), lines, start)
 }
@@ -624,6 +639,13 @@ fn parse_stmt_at(lines: &[Line], idx: usize) -> PResult<(Stmt, usize)> {
 
 fn parse_stmt_from(lines: &[Line], idx: usize) -> PResult<(Stmt, usize)> {
     let l = lines[idx].trim();
+
+    // A func inside a block: a closure over the variables around it.
+    if l.starts_with("func ") {
+        let (decl, next) = parse_func(lines, idx)?;
+        validate_function_loops(&decl)?;
+        return Ok((Stmt::Func { name: decl.name.clone(), decl: std::sync::Arc::new(decl) }, next));
+    }
 
     if opens_keyword_block(l, "run") {
         return parse_run_stmt(lines, idx);

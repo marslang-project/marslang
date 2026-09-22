@@ -5,7 +5,9 @@
 //! bound methods. This collector finds unreachable cycles the way CPython's does:
 //!
 //! 1. Every object that can hold values (arrays, sets, maps, pairs, instances,
-//!    bound methods, packages) is registered when it is created.
+//!    bound methods, closures, packages) is registered when it is created, and
+//!    a call frame once a closure captures it: a closure stored in the frame it
+//!    closes over is a cycle.
 //! 2. For each live object, start from its strong count and subtract one for
 //!    every reference held by another registered object. Whatever remains is
 //!    held from outside the object graph: globals, call frames, or temporaries
@@ -50,6 +52,7 @@ enum Tracked {
     Instance(Weak<Instance>),
     Func(Weak<Callable>),
     Package(Weak<Package>),
+    Frame(Weak<Frame>),
 }
 
 enum Node {
@@ -60,6 +63,7 @@ enum Node {
     Instance(Rc<Instance>),
     Func(Rc<Callable>),
     Package(Rc<Package>),
+    Frame(Rc<Frame>),
 }
 
 /// Register a newly created value that can hold other values.
@@ -70,10 +74,26 @@ pub(crate) fn track(value: &Value) {
         Value::Map(o) => Tracked::Map(Rc::downgrade(o)),
         Value::Pair(o) => Tracked::Pair(Rc::downgrade(o)),
         Value::Instance(o) => Tracked::Instance(Rc::downgrade(o)),
-        Value::Func(f) if matches!(f.as_ref(), Callable::Method(..)) => Tracked::Func(Rc::downgrade(f)),
+        Value::Func(f) if matches!(f.as_ref(), Callable::Method(..) | Callable::Closure(..)) => Tracked::Func(Rc::downgrade(f)),
         Value::Package(o) => Tracked::Package(Rc::downgrade(o)),
         _ => return,
     };
+    register(tracked);
+}
+
+/// Register a call frame that a closure captures, and the frames around it,
+/// each once. Frames no closure captures are never registered: nothing can
+/// point back at them, so reference counting alone frees them.
+pub(crate) fn track_frame(frame: &Rc<Frame>) {
+    let mut current = Some(frame.clone());
+    while let Some(frame) = current {
+        if frame.tracked.replace(true) { return; }
+        register(Tracked::Frame(Rc::downgrade(&frame)));
+        current = frame.parent.borrow().clone();
+    }
+}
+
+fn register(tracked: Tracked) {
     HEAP.with(|heap| {
         let mut heap = heap.borrow_mut();
         heap.objects.push(tracked);
@@ -110,8 +130,8 @@ pub(crate) fn collect() -> usize {
     let mut edges: Vec<Vec<usize>> = Vec::with_capacity(nodes.len());
     for node in &nodes {
         let mut children = Vec::new();
-        let complete = node.visit(&mut |child| {
-            if let Some(&j) = child_id(child).and_then(|id| index.get(&id)) { children.push(j); }
+        let complete = node.visit(&mut |id| {
+            if let Some(&j) = index.get(&id) { children.push(j); }
         });
         if !complete {
             // A container is mutably borrowed: not a safe point. Retry later.
@@ -177,6 +197,7 @@ impl Tracked {
             Tracked::Instance(w) => Node::Instance(w.upgrade()?),
             Tracked::Func(w) => Node::Func(w.upgrade()?),
             Tracked::Package(w) => Node::Package(w.upgrade()?),
+            Tracked::Frame(w) => Node::Frame(w.upgrade()?),
         })
     }
 }
@@ -191,6 +212,7 @@ impl Node {
             Node::Instance(o) => Rc::as_ptr(o) as *const () as usize,
             Node::Func(o) => Rc::as_ptr(o) as *const () as usize,
             Node::Package(o) => Rc::as_ptr(o) as *const () as usize,
+            Node::Frame(o) => Rc::as_ptr(o) as *const () as usize,
         }
     }
 
@@ -203,6 +225,7 @@ impl Node {
             Node::Instance(o) => Rc::strong_count(o),
             Node::Func(o) => Rc::strong_count(o),
             Node::Package(o) => Rc::strong_count(o),
+            Node::Frame(o) => Rc::strong_count(o),
         }
     }
 
@@ -215,26 +238,44 @@ impl Node {
             Node::Instance(o) => Tracked::Instance(Rc::downgrade(o)),
             Node::Func(o) => Tracked::Func(Rc::downgrade(o)),
             Node::Package(o) => Tracked::Package(Rc::downgrade(o)),
+            Node::Frame(o) => Tracked::Frame(Rc::downgrade(o)),
         }
     }
 
-    /// Visit every value this node holds. Returns false if a container is
-    /// currently mutably borrowed.
-    fn visit(&self, visit: &mut dyn FnMut(&Value)) -> bool {
+    /// Visit the identity of everything this node holds that may be a node:
+    /// the values in it, and for closures and frames the frames they hold.
+    /// Returns false if a container is currently mutably borrowed.
+    fn visit(&self, child: &mut dyn FnMut(usize)) -> bool {
+        fn value(v: &Value, child: &mut dyn FnMut(usize)) { if let Some(id) = child_id(v) { child(id) } }
+        fn frame(f: &Rc<Frame>, child: &mut dyn FnMut(usize)) { child(Rc::as_ptr(f) as *const () as usize) }
         match self {
-            Node::Array(o) => match o.items.try_borrow() { Ok(items) => items.iter().for_each(visit), Err(_) => return false },
-            Node::Set(o) => match o.items.try_borrow() { Ok(items) => items.values().for_each(visit), Err(_) => return false },
+            Node::Array(o) => match o.items.try_borrow() { Ok(items) => items.iter().for_each(|v| value(v, child)), Err(_) => return false },
+            Node::Set(o) => match o.items.try_borrow() { Ok(items) => items.values().for_each(|v| value(v, child)), Err(_) => return false },
             Node::Map(o) => match o.items.try_borrow() {
-                Ok(items) => items.values().for_each(|(k, v)| { visit(k); visit(v); }),
+                Ok(items) => items.values().for_each(|(k, v)| { value(k, child); value(v, child); }),
                 Err(_) => return false,
             },
             Node::Pair(o) => match (o.first.try_borrow(), o.second.try_borrow()) {
-                (Ok(first), Ok(second)) => { visit(&first); visit(&second); }
+                (Ok(first), Ok(second)) => { value(&first, child); value(&second, child); }
                 _ => return false,
             },
-            Node::Instance(o) => match o.fields.try_borrow() { Ok(fields) => fields.values().for_each(visit), Err(_) => return false },
-            Node::Func(f) => if let Callable::Method(receiver, _) = f.as_ref() { visit(receiver) },
-            Node::Package(o) => o.members.values().for_each(visit),
+            Node::Instance(o) => match o.fields.try_borrow() { Ok(fields) => fields.values().for_each(|v| value(v, child)), Err(_) => return false },
+            Node::Func(f) => match f.as_ref() {
+                Callable::Method(receiver, _) => value(receiver, child),
+                Callable::Closure(_, captured, me) => {
+                    if let Some(captured) = captured { frame(captured, child); }
+                    if let Some(me) = me { value(me, child); }
+                }
+                _ => {}
+            },
+            Node::Package(o) => o.members.values().for_each(|v| value(v, child)),
+            Node::Frame(o) => match (o.values.try_borrow(), o.parent.try_borrow()) {
+                (Ok(values), Ok(parent)) => {
+                    values.values().for_each(|v| value(v, child));
+                    if let Some(parent) = parent.as_ref() { frame(parent, child); }
+                }
+                _ => return false,
+            },
         }
         true
     }
@@ -252,6 +293,12 @@ impl Node {
                 released.push(o.second.replace(Value::Null));
             }
             Node::Instance(o) => released.extend(std::mem::take(&mut *o.fields.borrow_mut()).into_values()),
+            // Every other node of the cycle is garbage too and still held, so
+            // dropping the parent here cannot free anything mid-collection.
+            Node::Frame(o) => {
+                released.extend(std::mem::take(&mut *o.values.borrow_mut()).into_values());
+                o.parent.borrow_mut().take();
+            }
             Node::Func(_) | Node::Package(_) => {}
         }
     }

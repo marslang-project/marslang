@@ -94,7 +94,17 @@ impl Resolver {
     }
     fn stmt(&mut self, stmt: &mut Stmt) -> Result<(), String> {
         match stmt {
+            Stmt::Func { name, decl } => {
+                // Bound before its body is resolved, so it can call itself.
+                *name = self.bind(name, true, None, None)?.name;
+                self.function(std::sync::Arc::make_mut(decl))?;
+            }
             Stmt::Var(v) => {
+                if let Some(ty) = &v.ty {
+                    if ty.split(|c: char| !c.is_alphanumeric()).any(|word| word == "Function" || word == "Family") {
+                        return Err(format!("'{}': Function and Family are parameter types, as in func apply(Function f)", v.name));
+                    }
+                }
                 let explicit = v.is_fixed || v.temp != TempKind::Default || v.ty.is_some();
                 if !explicit && self.find(&v.name).is_some() {
                     let mut replacement = Stmt::Assign { target: Expr::Ident(v.name.clone()), value: v.value.clone() };
@@ -163,7 +173,7 @@ impl Resolver {
         }
         Ok(())
     }
-    fn expr(&self, e: &mut Expr) -> Result<(), String> {
+    fn expr(&mut self, e: &mut Expr) -> Result<(), String> {
         match e {
             Expr::Number(text) => { if let Some(lowered) = number(text, false) { *e = lowered; } }
             Expr::Unary { op, value } if op == "-" && matches!(value.as_ref(), Expr::Number(t) if t.chars().all(|c| c.is_ascii_digit())) => {
@@ -189,6 +199,8 @@ impl Resolver {
             Expr::Call { callee, args } => { self.expr(callee)?; for arg in args { self.expr(arg)?; } }
             Expr::Member { object, .. } => self.expr(object)?,
             Expr::Index { object, index } => { self.expr(object)?; self.expr(index)?; }
+            // Resolved where it stands, so it sees the variables around it.
+            Expr::Lambda(decl) => self.function(std::sync::Arc::make_mut(decl))?,
             _ => {}
         }
         Ok(())

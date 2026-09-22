@@ -92,6 +92,69 @@ refers to the family declared in the same file; use `alias.Family` for a family 
 an imported package. Families with the same name in different packages are different types.
 Only slicing accepts a named `reverse=` argument; other calls are positional.
 
+## Functions as values
+
+A function is a value: pass it, store it, and call it later. `func(type name) =>
+expression` makes one without a name, and a `func` written inside a block is a
+named one that only that block can see.
+
+```mars
+func apply(Function f, int value) => f(value);
+
+func counter(){
+    count = 0;
+    func bump(){
+        count = count + 1;
+        ret count;
+    }
+    ret bump;
+}
+
+func m{
+    double = func(int x) => x * 2;
+    out(apply(double, 5), apply(func(int x) => x + 100, 1));   // 10 101
+
+    next = counter();
+    next();
+    out(next());                                               // 2
+}
+```
+
+| Form | Meaning |
+| --- | --- |
+| `func(int x) => x * 2` | An anonymous function; its body is one expression |
+| `func name(...){ ... }` inside a block | A named function local to that block, which can call itself |
+| `Function f` | A parameter that takes any function, bound method, or built-in |
+| `Family F` | A parameter that takes a family, to construct with `F(...)` |
+
+An anonymous function's body is a single expression. For more, declare a named
+`func` in the block and pass its name: `func(int x){ ... }` is an error that
+says so.
+
+**Closures.** A function made inside another keeps the variables around it,
+not copies of their values: assigning to one inside the function changes it
+outside, and a change outside is seen inside. Each call of `counter` above makes
+a new `count`, which its `bump` keeps after `counter` returns. Inside a method,
+a nested function keeps `me` and may call the family's private methods.
+
+Because the variable itself is kept, functions made in a loop share the loop
+variable and see its last value:
+
+```mars
+func m{
+    fns = arr();
+    for (i = 0, i < 3, i++){ fns.add(func(int x) => x + i); }
+    out(fns[0](10));    // 13, since i is 3 once the loop ends
+}
+```
+
+To keep each value, make the function in a function that takes it as a
+parameter, which is a new variable on every call.
+
+`Function` and `Family` are parameter types only; `f (Function) = ...` is a
+compile error. A nested function cannot be reassigned, and closures that
+refer to each other or to themselves are reclaimed like any other cycle.
+
 ## Control flow
 
 | Form | Behavior |

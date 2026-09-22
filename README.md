@@ -83,7 +83,7 @@ Implemented:
 - lexical binding resolution: bare assignment updates the nearest binding or declares a local; annotations and `cold` declare explicitly
 - `fixed` bindings and recursively immutable containers; direct fixed-copy propagation and `.copy()` for independent mutable deep copies
 - constant-expression substitution for hot variables; runtime type checks, signed 32/64-bit integer bounds, and identity-based collection equality
-- `func` block and expression forms
+- `func` block and expression forms, anonymous functions (`func(int x) => x * 2`), nested functions, and closures
 - `family` definitions with optional inheritance and `init` -> constructor mapping
 - `ret`, assignment, function calls, member access
 - `if/elif/else`, `repeat`, `while`, two- and three-part `for`, `break`, and `continue`

@@ -189,6 +189,14 @@ impl Walker<'_> {
     fn stmt(&mut self, stmt: &Stmt, scope: &str, known: &mut HashSet<String>) {
         match stmt {
             Stmt::Var(var) if known.insert(var.name.clone()) => self.declared(var, Some(scope)),
+            // A nested function: listed with the others, so hovering it or
+            // anything inside it works, and a variable of its enclosing scope.
+            Stmt::Func { name, decl } => {
+                known.insert(name.clone());
+                self.variable(name, "function", Some("Function".into()), false, Some(scope));
+                let json = self.function(decl, None, known);
+                self.functions.push(json);
+            }
             // A bare assignment declares a local unless the name already exists.
             Stmt::Assign { target: Expr::Ident(name), value } if known.insert(name.clone()) => {
                 let ty = self.infer(value);
@@ -259,6 +267,7 @@ impl Walker<'_> {
             Expr::String(_) => "string".into(),
             Expr::Bool(_) => "bool".into(),
             Expr::Typed { ty, .. } => ty.clone(),
+            Expr::Lambda(_) => "Function".into(),
             Expr::Freeze(value) => return self.infer(value),
             Expr::Unary { op, .. } if op == "!" || op == "not" => "bool".into(),
             Expr::Unary { value, .. } => return self.infer(value),
