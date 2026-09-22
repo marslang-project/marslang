@@ -10,6 +10,7 @@ notes elsewhere under `docs/` remain local.
 ## Reference
 
 - [Language syntax](language.md): variables, functions, families, and control flow.
+- [Grammar](grammar.md): exactly what may be written, and operator precedence.
 - [Strings and slicing](strings.md): Unicode characters, reversal, and strict bounds.
 - [Collections](collections.md): arrays, sets, pairs, maps, and copying.
 - [Built-ins and errors](builtins.md): input/output, conversions, and runtime errors.
