@@ -1,16 +1,17 @@
 // std.types: inspect values at runtime.
 takepkg rs.core;
+takepkg std.Decorator;
 
-// "int", "longint", "float", "string", "bool", "null", "array", "set", "map",
-// "pair", "instance", "function", or "package".
+@Decorator.docstring("The kind of a value as a string: \"int\", \"longint\", \"float\", \"string\", \"bool\", \"null\", \"array\", \"set\", \"map\", \"pair\", \"instance\", \"function\", or \"package\".")
 func kind(any value) => core.kind(value);
 
-// The family name of an instance, or null for any other value.
+@Decorator.docstring("The family name of an instance, or null for any other value.")
 func family_name(any value) => core.family_name(value);
 
-// Whether value is an instance of family or of a family inheriting from it.
+@Decorator.docstring("Whether value is an instance of family, or of a family inheriting from it.")
 func is_instance(any value, any family) => core.is_instance(value, family);
 
+@Decorator.docstring("Whether value is an int, longint, or float.")
 func is_number(any value){
     k = core.kind(value);
     ret k == "int" or k == "longint" or k == "float";

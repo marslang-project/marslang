@@ -1293,6 +1293,39 @@ fn docstrings_describe_functions_families_and_methods() {
 }
 
 #[test]
+fn symbols_describe_imported_packages() {
+    let symbols = marslang::symbols("takepkg std.math;\ntakepkg std.containers = c;\nfunc m{ s = c.stack(); }",
+        std::path::Path::new(".")).expect("symbols");
+    for expected in [
+        r#""name":"sqrt","family":null,"#,
+        r#""params":[{"name":"x","type":"[int,longint,float]"}],"doc":"Square root, as a float. A negative x raises RangeError.""#,
+        r#"{"alias":"c","name":"std.containers","#,
+        r#"{"name":"PI","kind":"fixed","type":"float","inferred":false}"#,
+        r#"{"name":"s","kind":"variable","type":"c.stack","inferred":true,"scope":"m"}"#,
+    ] {
+        assert!(symbols.contains(expected), "missing {expected}\nin {symbols}");
+    }
+    // Private helpers stay out: `_gcd` is std.math's own.
+    assert!(!symbols.contains(r#""name":"_gcd""#), "{symbols}");
+}
+
+#[test]
+fn every_public_standard_library_declaration_has_a_docstring() {
+    let names: Vec<String> = std::fs::read_dir("std").expect("std directory").filter_map(|entry| {
+        let path = entry.ok()?.path();
+        if path.extension()? != "mars" { return None; }
+        Some(path.file_stem()?.to_string_lossy().into_owned())
+    }).collect();
+    let source: String = names.iter().map(|name| format!("takepkg std.{name};\n")).collect::<String>() + "func m{}";
+    let symbols = marslang::symbols(&source, std::path::Path::new(".")).expect("symbols");
+    let packages = &symbols[symbols.find(r#""packages":["#).expect("packages")..];
+    for (at, _) in packages.match_indices(r#""doc":null"#) {
+        let start = packages[..at].rfind(r#"{"name":"#).unwrap_or(0);
+        panic!("a public declaration has no docstring: {}", &packages[start..at]);
+    }
+}
+
+#[test]
 fn decorator_package_lists_the_available_markers() {
     executes("takepkg std.Decorator;\nfunc m{ out(Decorator.private, Decorator.subclass, Decorator.static); }",
         "private subclass static\n");

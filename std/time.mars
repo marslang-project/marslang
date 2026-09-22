@@ -1,12 +1,12 @@
 // std.time: clocks and sleeping. Times are float seconds.
 takepkg rs.time = native;
+takepkg std.Decorator;
 
-// Seconds since 1970-01-01 UTC, from the system clock (can jump if it is changed).
+@Decorator.docstring("Seconds since 1970-01-01 UTC, from the system clock, which can jump when the clock is changed.")
 func now() => native.now();
 
-// Seconds from a fixed starting point; never goes backwards. Use it to measure
-// elapsed time: end - start.
+@Decorator.docstring("Seconds from a fixed starting point. It never goes backwards, so use it to measure elapsed time.")
 func monotonic() => native.monotonic();
 
-// Pause the program for a finite, nonnegative number of seconds.
+@Decorator.docstring("Pause the program for seconds, of any numeric kind. Negative or non-finite values raise RangeError.")
 func sleep([int,longint,float] seconds){ native.sleep(float(seconds)); }

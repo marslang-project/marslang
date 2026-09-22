@@ -2,24 +2,31 @@
 // Empty containers return null from pop and peek, like built-in arrays.
 takepkg std.Decorator;
 
-// Last in, first out.
+@Decorator.docstring("Last in, first out: pop() returns the item pushed most recently.")
 family stack{
+    @Decorator.docstring("An empty stack.")
     func init(){ me._items = arr(); }
+    @Decorator.docstring("Put item on top. Returns the stack, so pushes can be chained.")
     func push(any item){ me._items.add(item); ret me; }
+    @Decorator.docstring("Remove and return the top item, or null when the stack is empty.")
     func pop(){ ret me._items.lpop(); }
+    @Decorator.docstring("The top item without removing it, or null when the stack is empty.")
     func peek(){
         if (me._items.is_empty()){ ret null; }
         ret me._items.iget(me._items.len() - 1);
     }
+    @Decorator.docstring("The number of items.")
     func len => me._items.len();
+    @Decorator.docstring("Whether the stack holds no items.")
     func is_empty => me._items.is_empty();
-    // Items from bottom to top.
+    @Decorator.docstring("A copy of the items as an array, bottom to top.")
     func items => me._items.slice(0, me._items.len());
 }
 
-// Double-ended queue on a ring buffer: adding or removing at either end does not
-// move the other items.
+// A ring buffer, so adding or removing at either end does not move the other items.
+@Decorator.docstring("A double-ended queue: push and pop at either end in constant time.")
 family deque{
+    @Decorator.docstring("An empty deque.")
     func init(){
         me._ring = arr(null, null, null, null, null, null, null, null);
         me._head = 0;
@@ -36,12 +43,14 @@ family deque{
         me._ring = bigger;
         me._head = 0;
     }
+    @Decorator.docstring("Add item at the back. Returns the deque.")
     func push_back(any item){
         me._grow();
         me._ring.modify(me._slot(me._count), item);
         me._count = me._count + 1;
         ret me;
     }
+    @Decorator.docstring("Add item at the front. Returns the deque.")
     func push_front(any item){
         me._grow();
         me._head = (me._head - 1 + me._ring.len()) % me._ring.len();
@@ -49,6 +58,7 @@ family deque{
         me._count = me._count + 1;
         ret me;
     }
+    @Decorator.docstring("Remove and return the front item, or null when empty.")
     func pop_front(){
         if (me._count == 0){ ret null; }
         item = me._ring.iget(me._head);
@@ -57,6 +67,7 @@ family deque{
         me._count = me._count - 1;
         ret item;
     }
+    @Decorator.docstring("Remove and return the back item, or null when empty.")
     func pop_back(){
         if (me._count == 0){ ret null; }
         last = me._slot(me._count - 1);
@@ -65,17 +76,21 @@ family deque{
         me._count = me._count - 1;
         ret item;
     }
+    @Decorator.docstring("The front item without removing it, or null when empty.")
     func peek_front(){
         if (me._count == 0){ ret null; }
         ret me._ring.iget(me._head);
     }
+    @Decorator.docstring("The back item without removing it, or null when empty.")
     func peek_back(){
         if (me._count == 0){ ret null; }
         ret me._ring.iget(me._slot(me._count - 1));
     }
+    @Decorator.docstring("The number of items.")
     func len => me._count;
+    @Decorator.docstring("Whether the deque holds no items.")
     func is_empty => me._count == 0;
-    // Items from front to back.
+    @Decorator.docstring("A copy of the items as an array, front to back.")
     func items(){
         result = arr();
         for (i=0, i<me._count, i++){ result.add(me._ring.iget(me._slot(i))); }
@@ -83,21 +98,28 @@ family deque{
     }
 }
 
-// First in, first out.
+@Decorator.docstring("First in, first out: pop() returns the item pushed earliest.")
 family queue{
+    @Decorator.docstring("An empty queue.")
     func init(){ me._items = deque(); }
+    @Decorator.docstring("Add item at the back. Returns the queue, so pushes can be chained.")
     func push(any item){ me._items.push_back(item); ret me; }
+    @Decorator.docstring("Remove and return the front item, or null when the queue is empty.")
     func pop() => me._items.pop_front();
+    @Decorator.docstring("The front item without removing it, or null when the queue is empty.")
     func peek() => me._items.peek_front();
+    @Decorator.docstring("The number of items.")
     func len => me._items.len();
+    @Decorator.docstring("Whether the queue holds no items.")
     func is_empty => me._items.is_empty();
-    // Items from front to back.
+    @Decorator.docstring("A copy of the items as an array, front to back.")
     func items => me._items.items();
 }
 
-// Binary min-heap keyed by priority: the lowest priority number comes out first;
-// equal priorities come out in the order they were pushed.
+// A binary min-heap keyed by priority, with a push counter breaking ties.
+@Decorator.docstring("pop() returns the item with the lowest priority number; equal priorities come out in the order they were pushed.")
 family priority_queue{
+    @Decorator.docstring("An empty priority queue.")
     func init(){
         me._heap = arr();
         me._pushed = 0;
@@ -116,6 +138,7 @@ family priority_queue{
         me._heap.modify(a, me._heap.iget(b));
         me._heap.modify(b, held);
     }
+    @Decorator.docstring("Add item with a priority number of any kind; lower numbers come out first. Returns the queue.")
     func push(any item, [int,longint,float] priority){
         me._heap.add(pair(pair(priority, me._pushed), item));
         me._pushed = me._pushed + 1;
@@ -128,6 +151,7 @@ family priority_queue{
         }
         ret me;
     }
+    @Decorator.docstring("Remove and return the item with the lowest priority, or null when empty.")
     func pop(){
         if (me._heap.is_empty()){ ret null; }
         top = me._heap.iget(0).second;
@@ -149,13 +173,16 @@ family priority_queue{
         }
         ret top;
     }
+    @Decorator.docstring("The item with the lowest priority without removing it, or null when empty.")
     func peek(){
         if (me._heap.is_empty()){ ret null; }
         ret me._heap.iget(0).second;
     }
+    @Decorator.docstring("The number of items.")
     func len => me._heap.len();
+    @Decorator.docstring("Whether the queue holds no items.")
     func is_empty => me._heap.is_empty();
-    // Items in the order pop would return them; the queue is unchanged.
+    @Decorator.docstring("The items as an array, in the order pop() would return them.")
     func items(){
         drain = priority_queue();
         drain._heap = me._heap.slice(0, me._heap.len());

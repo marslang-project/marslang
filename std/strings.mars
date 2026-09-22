@@ -2,30 +2,43 @@
 // widths count characters (grapheme clusters), like len() and lenslice().
 takepkg rs.core;
 takepkg rs.string = native;
+takepkg std.Decorator;
 
+@Decorator.docstring("The parts of text between each separator, as an array. An empty separator raises RangeError.")
 func split(string text, string separator) => native.split(text, separator);
-// Split on runs of whitespace, ignoring leading and trailing whitespace.
+@Decorator.docstring("The words of text: the parts between runs of whitespace.")
 func split_whitespace(string text) => native.split_whitespace(text);
-// Split at line breaks (\n or \r\n).
+@Decorator.docstring("The lines of text, split at \\n or \\r\\n.")
 func lines(string text) => native.lines(text);
+@Decorator.docstring("The strings in items joined into one, with separator between them.")
 func join(array items, string separator) => native.join(items, separator);
 
+@Decorator.docstring("text without whitespace at either end.")
 func trim(string text) => native.trim(text);
+@Decorator.docstring("text without whitespace at the start.")
 func trim_start(string text) => native.trim_start(text);
+@Decorator.docstring("text without whitespace at the end.")
 func trim_end(string text) => native.trim_end(text);
 
+@Decorator.docstring("Whether text begins with prefix.")
 func starts_with(string text, string prefix) => native.starts_with(text, prefix);
+@Decorator.docstring("Whether text ends with suffix.")
 func ends_with(string text, string suffix) => native.ends_with(text, suffix);
+@Decorator.docstring("Whether part occurs in text as whole characters.")
 func contains(string text, string part) => native.contains(text, part);
-// Character position of the first/last occurrence, or -1.
+@Decorator.docstring("The character position of the first occurrence of part, or -1.")
 func find(string text, string part) => native.find(text, part);
+@Decorator.docstring("The character position of the last occurrence of part, or -1.")
 func rfind(string text, string part) => native.rfind(text, part);
-// Replace every occurrence.
+@Decorator.docstring("text with every occurrence of old replaced by new. An empty old raises RangeError.")
 func replace(string text, string old, string new) => native.replace(text, old, new);
 
+@Decorator.docstring("text in upper case, by Unicode rules: \"straße\" becomes \"STRASSE\".")
 func upper(string text) => native.upper(text);
+@Decorator.docstring("text in lower case, by Unicode rules.")
 func lower(string text) => native.lower(text);
 
+@Decorator.docstring("text repeated count times.")
 func repeated(string text, int count) => native.repeated(text, count);
 
 func _fill(string fill){
@@ -42,7 +55,7 @@ func _padded(string padded, int width, string fill){
     ret padded;
 }
 
-// Pad on the left to width characters.
+@Decorator.docstring("text padded at the start with fill, one character, until it is width characters long. A fill that merges with its neighbours raises RangeError.")
 func pad_start(string text, int width, string fill){
     _fill(fill);
     missing = width - text.len();
@@ -50,7 +63,7 @@ func pad_start(string text, int width, string fill){
     ret _padded(native.repeated(fill, missing) + text, width, fill);
 }
 
-// Pad on the right to width characters.
+@Decorator.docstring("text padded at the end with fill, one character, until it is width characters long. A fill that merges with its neighbours raises RangeError.")
 func pad_end(string text, int width, string fill){
     _fill(fill);
     missing = width - text.len();

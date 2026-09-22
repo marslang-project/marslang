@@ -3,6 +3,7 @@
 // only the platform float primitives come from the native rs.math package.
 takepkg rs.core;
 takepkg rs.math = native;
+takepkg std.Decorator;
 
 fixed PI (float) = 3.141592653589793;
 fixed E (float) = 2.718281828459045;
@@ -64,6 +65,7 @@ func _intermediate(float value){
 
 // ----- comparison and sign -----
 
+@Decorator.docstring("The smaller of a and b, in its own numeric kind.")
 func min([int,longint,float] a, [int,longint,float] b){
     if (_checked("min", arr(a, b), "same") == "float" and a == 0.0 and b == 0.0){
         // Zero ties do not depend on argument order: -0.0 is the smaller zero.
@@ -74,6 +76,7 @@ func min([int,longint,float] a, [int,longint,float] b){
     ret b;
 }
 
+@Decorator.docstring("The larger of a and b, in its own numeric kind.")
 func max([int,longint,float] a, [int,longint,float] b){
     if (_checked("max", arr(a, b), "same") == "float" and a == 0.0 and b == 0.0){
         if (native.signbit(a) and native.signbit(b)){ ret -0.0; }
@@ -91,11 +94,13 @@ func _abs([int,longint,float] value){
     ret value;
 }
 
+@Decorator.docstring("The absolute value, in the same numeric kind.")
 func abs([int,longint,float] value){
     _checked("abs", arr(value), "same");
     ret _abs(value);
 }
 
+@Decorator.docstring("value limited to the inclusive range [low, high]; low above high raises RangeError.")
 func clamp([int,longint,float] value, [int,longint,float] low, [int,longint,float] high){
     _checked("clamp", arr(value, low, high), "same");
     if (low > high){
@@ -106,7 +111,7 @@ func clamp([int,longint,float] value, [int,longint,float] low, [int,longint,floa
     ret value;
 }
 
-// -1, 0, or 1 as an int, for any numeric kind.
+@Decorator.docstring("-1, 0, or 1 as an int, by the sign of a finite value; both zeros give 0.")
 func sign([int,longint,float] value){
     _checked("sign", arr(value), "same");
     if (value < 0){ ret -1; }
@@ -114,12 +119,13 @@ func sign([int,longint,float] value){
     ret 0;
 }
 
+@Decorator.docstring("Whether a finite value is negative, true for the float -0.0 as well.")
 func signbit([int,longint,float] value){
     if (_checked("signbit", arr(value), "same") == "float"){ ret native.signbit(value); }
     ret value < 0;
 }
 
-// The magnitude of value with the sign of sign_of.
+@Decorator.docstring("The magnitude of value with the sign of sign_of; both must be the same numeric kind.")
 func copysign([int,longint,float] value, [int,longint,float] sign_of){
     kind = _checked("copysign", arr(value, sign_of), "same");
     negative = signbit(sign_of);
@@ -164,13 +170,18 @@ func _round(float x){
     ret rounded;
 }
 
+@Decorator.docstring("Rounded toward negative infinity, as a float.")
 func floor([int,longint,float] x){ _checked("floor", arr(x), "float"); ret _result("floor", _floor(x)); }
+@Decorator.docstring("Rounded toward positive infinity, as a float.")
 func ceil([int,longint,float] x){ _checked("ceil", arr(x), "float"); ret _result("ceil", _ceil(x)); }
+@Decorator.docstring("The fractional part dropped, rounding toward zero, as a float.")
 func trunc([int,longint,float] x){ _checked("trunc", arr(x), "float"); ret _result("trunc", _trunc(x)); }
+@Decorator.docstring("The nearest whole number as a float; exact halves go to the even neighbour.")
 func round([int,longint,float] x){ _checked("round", arr(x), "float"); ret _result("round", _round(x)); }
 
 // ----- powers, roots, and logarithms -----
 
+@Decorator.docstring("base to the power exponent. Both must be the same numeric kind, which the result keeps; a negative whole-number exponent raises RangeError.")
 func pow([int,longint,float] base, [int,longint,float] exponent){
     if (_checked("pow", arr(base, exponent), "same") == "float"){
         ret _result("pow", native.pow(base, exponent));
@@ -190,10 +201,13 @@ func pow([int,longint,float] base, [int,longint,float] exponent){
     ret result;
 }
 
+@Decorator.docstring("Square root, as a float. A negative x raises RangeError.")
 func sqrt([int,longint,float] x){ _checked("sqrt", arr(x), "float"); ret _result("sqrt", native.sqrt(x)); }
+@Decorator.docstring("Cube root, as a float; negative x is allowed.")
 func cbrt([int,longint,float] x){ _checked("cbrt", arr(x), "float"); ret _result("cbrt", native.cbrt(x)); }
 
 // Scaled so that large or tiny inputs do not overflow or underflow.
+@Decorator.docstring("sqrt(x*x + y*y) without overflowing or underflowing on the way.")
 func hypot([int,longint,float] x, [int,longint,float] y){
     _checked("hypot", arr(x, y), "float");
     big = _abs(x);
@@ -207,14 +221,22 @@ func hypot([int,longint,float] x, [int,longint,float] y){
     ret _result("hypot", big * native.sqrt(1.0 + ratio * ratio));
 }
 
+@Decorator.docstring("e to the power x.")
 func exp([int,longint,float] x){ _checked("exp", arr(x), "float"); ret _result("exp", native.exp(x)); }
+@Decorator.docstring("2 to the power x.")
 func exp2([int,longint,float] x){ _checked("exp2", arr(x), "float"); ret _result("exp2", native.pow(2.0, x)); }
+@Decorator.docstring("exp(x) - 1, accurate when x is close to zero.")
 func expm1([int,longint,float] x){ _checked("expm1", arr(x), "float"); ret _result("expm1", native.expm1(x)); }
+@Decorator.docstring("Natural logarithm. x must be positive.")
 func ln([int,longint,float] x){ _checked("ln", arr(x), "float"); ret _result("ln", native.ln(x)); }
+@Decorator.docstring("Base-2 logarithm. x must be positive.")
 func log2([int,longint,float] x){ _checked("log2", arr(x), "float"); ret _result("log2", native.log2(x)); }
+@Decorator.docstring("Base-10 logarithm. x must be positive.")
 func log10([int,longint,float] x){ _checked("log10", arr(x), "float"); ret _result("log10", native.log10(x)); }
+@Decorator.docstring("ln(1 + x), accurate when x is close to zero. x must be greater than -1.")
 func log1p([int,longint,float] x){ _checked("log1p", arr(x), "float"); ret _result("log1p", native.log1p(x)); }
 
+@Decorator.docstring("Logarithm of x in the given base. Both must be positive, and base must not be 1.")
 func log([int,longint,float] x, [int,longint,float] base){
     _checked("log", arr(x, base), "float");
     if (x <= 0.0 or base <= 0.0 or base == 1.0){
@@ -225,26 +247,38 @@ func log([int,longint,float] x, [int,longint,float] base){
 
 // ----- trigonometry -----
 
+@Decorator.docstring("Sine of an angle in radians.")
 func sin([int,longint,float] x){ _checked("sin", arr(x), "float"); ret _result("sin", native.sin(x)); }
+@Decorator.docstring("Cosine of an angle in radians.")
 func cos([int,longint,float] x){ _checked("cos", arr(x), "float"); ret _result("cos", native.cos(x)); }
+@Decorator.docstring("Tangent of an angle in radians.")
 func tan([int,longint,float] x){ _checked("tan", arr(x), "float"); ret _result("tan", native.tan(x)); }
+@Decorator.docstring("Inverse sine, in radians. x must be in [-1, 1].")
 func asin([int,longint,float] x){ _checked("asin", arr(x), "float"); ret _result("asin", native.asin(x)); }
+@Decorator.docstring("Inverse cosine, in radians. x must be in [-1, 1].")
 func acos([int,longint,float] x){ _checked("acos", arr(x), "float"); ret _result("acos", native.acos(x)); }
+@Decorator.docstring("Inverse tangent, in radians.")
 func atan([int,longint,float] x){ _checked("atan", arr(x), "float"); ret _result("atan", native.atan(x)); }
+@Decorator.docstring("Hyperbolic sine.")
 func sinh([int,longint,float] x){ _checked("sinh", arr(x), "float"); ret _result("sinh", native.sinh(x)); }
+@Decorator.docstring("Hyperbolic cosine.")
 func cosh([int,longint,float] x){ _checked("cosh", arr(x), "float"); ret _result("cosh", native.cosh(x)); }
+@Decorator.docstring("Hyperbolic tangent.")
 func tanh([int,longint,float] x){ _checked("tanh", arr(x), "float"); ret _result("tanh", native.tanh(x)); }
 
+@Decorator.docstring("The angle of the point (x, y) from the positive x axis, in radians; note that y comes first.")
 func atan2([int,longint,float] y, [int,longint,float] x){
     _checked("atan2", arr(y, x), "float");
     ret _result("atan2", native.atan2(y, x));
 }
 
+@Decorator.docstring("An angle in degrees, converted to radians.")
 func radians([int,longint,float] angle){
     _checked("radians", arr(angle), "float");
     ret _result("radians", angle * (PI / 180.0));
 }
 
+@Decorator.docstring("An angle in radians, converted to degrees.")
 func degrees([int,longint,float] angle){
     _checked("degrees", arr(angle), "float");
     ret _result("degrees", angle * (180.0 / PI));
@@ -256,21 +290,25 @@ func _lerp(float a, float b, float t) => a + _intermediate(_intermediate(b - a) 
 
 func _inverse_lerp(float a, float b, float value) => _intermediate(value - a) / _intermediate(b - a);
 
+@Decorator.docstring("a + (b - a) * t: the point a fraction t of the way from a to b; t outside [0, 1] extrapolates.")
 func lerp([int,longint,float] a, [int,longint,float] b, [int,longint,float] t){
     _checked("lerp", arr(a, b, t), "float");
     ret _result("lerp", _lerp(a, b, t));
 }
 
+@Decorator.docstring("(value - a) / (b - a): how far value lies from a to b. Equal a and b raise RangeError.")
 func inverse_lerp([int,longint,float] a, [int,longint,float] b, [int,longint,float] value){
     _checked("inverse_lerp", arr(a, b, value), "float");
     ret _result("inverse_lerp", _inverse_lerp(a, b, value));
 }
 
+@Decorator.docstring("value moved from the range [in_low, in_high] to the same position in [out_low, out_high]. Equal input bounds raise RangeError.")
 func remap([int,longint,float] value, [int,longint,float] in_low, [int,longint,float] in_high, [int,longint,float] out_low, [int,longint,float] out_high){
     _checked("remap", arr(value, in_low, in_high, out_low, out_high), "float");
     ret _result("remap", _lerp(out_low, out_high, _inverse_lerp(in_low, in_high, value)));
 }
 
+@Decorator.docstring("0.0 when x is below edge, otherwise 1.0.")
 func step([int,longint,float] edge, [int,longint,float] x){
     _checked("step", arr(edge, x), "float");
     if (x < edge){ ret 0.0; }
@@ -279,8 +317,11 @@ func step([int,longint,float] edge, [int,longint,float] x){
 
 // ----- classification (accepts NaN and infinity) -----
 
+@Decorator.docstring("Whether the float x is NaN.")
 func is_nan([int,longint,float] x){ _kind("is_nan", arr(x), "float"); ret x != x; }
+@Decorator.docstring("Whether the float x is positive or negative infinity.")
 func is_inf([int,longint,float] x){ _kind("is_inf", arr(x), "float"); ret x == _INF or x == -_INF; }
+@Decorator.docstring("Whether the float x is neither infinite nor NaN.")
 func is_finite([int,longint,float] x){ _kind("is_finite", arr(x), "float"); ret _is_finite(x); }
 
 // ----- integers (int or longint; results keep the arguments' kind) -----
@@ -296,23 +337,25 @@ func _gcd([int,longint] a, [int,longint] b){
     ret _abs(a);
 }
 
-// Greatest common divisor, never negative; gcd(0, 0) is 0.
+@Decorator.docstring("Greatest common divisor of two whole numbers, never negative; gcd(0, 0) is 0.")
 func gcd([int,longint,float] a, [int,longint,float] b){
     _kind("gcd", arr(a, b), "integer");
     ret _gcd(a, b);
 }
 
-// Least common multiple, never negative; 0 when either argument is 0.
+@Decorator.docstring("Least common multiple of two whole numbers, never negative; 0 when either is 0.")
 func lcm([int,longint,float] a, [int,longint,float] b){
     _kind("lcm", arr(a, b), "integer");
     if (a == 0 or b == 0){ ret a - a; }
     ret _abs(a / _gcd(a, b) * b);
 }
 
+@Decorator.docstring("Whether the whole number n is even.")
 func is_even([int,longint,float] n){ _kind("is_even", arr(n), "integer"); ret n % 2 == 0; }
+@Decorator.docstring("Whether the whole number n is odd.")
 func is_odd([int,longint,float] n){ _kind("is_odd", arr(n), "integer"); ret n % 2 != 0; }
 
-// Quotient rounded toward negative infinity.
+@Decorator.docstring("a divided by b, rounded toward negative infinity. A zero b raises RangeError.")
 func div_floor([int,longint,float] a, [int,longint,float] b){
     _kind("div_floor", arr(a, b), "integer");
     if (b == 0){ core.raise(RangeError, "division by zero"); }
@@ -322,7 +365,7 @@ func div_floor([int,longint,float] a, [int,longint,float] b){
     ret quotient;
 }
 
-// Quotient rounded toward positive infinity.
+@Decorator.docstring("a divided by b, rounded toward positive infinity. A zero b raises RangeError.")
 func div_ceil([int,longint,float] a, [int,longint,float] b){
     _kind("div_ceil", arr(a, b), "integer");
     if (b == 0){ core.raise(RangeError, "division by zero"); }
@@ -336,7 +379,7 @@ func _nonnegative(string name, [int,longint] n){
     if (n < 0){ core.raise(RangeError, "std.math." + name + " requires nonnegative arguments"); }
 }
 
-// n! in n's kind; overflow raises the kind's overflow error.
+@Decorator.docstring("n! for a whole number n, in n's numeric kind. A negative n raises RangeError, and a result too large for the kind raises its overflow error.")
 func factorial([int,longint,float] n){
     _kind("factorial", arr(n), "integer");
     _nonnegative("factorial", n);
@@ -345,7 +388,7 @@ func factorial([int,longint,float] n){
     ret result;
 }
 
-// Ways to choose k of n items where order matters; 0 when k > n.
+@Decorator.docstring("The number of ordered ways to pick k of n items; 0 when k > n. Negative arguments raise RangeError.")
 func perm([int,longint,float] n, [int,longint,float] k){
     _kind("perm", arr(n, k), "integer");
     _nonnegative("perm", n);
@@ -356,8 +399,8 @@ func perm([int,longint,float] n, [int,longint,float] k){
     ret result;
 }
 
-// Ways to choose k of n items ignoring order; 0 when k > n. Each step divides
-// out common factors first, so intermediates stay as small as the result allows.
+// Each step divides out common factors first, so intermediates stay as small as the result allows.
+@Decorator.docstring("The number of ways to choose k of n items, ignoring order; 0 when k > n. Negative arguments raise RangeError.")
 func comb([int,longint,float] n, [int,longint,float] k){
     _kind("comb", arr(n, k), "integer");
     _nonnegative("comb", n);

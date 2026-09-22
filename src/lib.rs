@@ -64,7 +64,15 @@ pub fn symbols(source: &str, base: &std::path::Path) -> Result<String, String> {
     let mut loader = package::Loader::new(base);
     loader.load_imports(&mut program, None)?;
     package::apply_decorators(&mut program, &loader.markers())?;
-    Ok(symbols::describe(&program))
+    let imports: Vec<(String, &package::LoadedPackage)> = program.items.iter().filter_map(|item| match item {
+        ast::Item::Import(import) => {
+            let key = import.key.as_deref()?;
+            let package = loader.packages.iter().find(|package| package.key == key)?;
+            Some((import.alias.clone()?, package))
+        }
+        _ => None,
+    }).collect();
+    Ok(symbols::describe(&program, &imports))
 }
 
 /// Run a compiled program with the process's stdin/stdout.

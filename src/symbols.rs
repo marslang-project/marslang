@@ -7,19 +7,32 @@
 //! types while running, so an inferred type describes the first value only.
 //!
 //! The walk runs after parsing and decorators, before names are resolved, so
-//! names are exactly as written.
+//! names are exactly as written. Imported packages are described too, by the
+//! alias the program uses: their public functions, families, and values, so an
+//! editor can explain `math.sqrt` as well as the program's own names.
+
+use crate::package::{Export, LoadedPackage, Source};
 
 use std::collections::HashSet;
 use std::fmt::Write;
 
 use crate::ast::*;
 
-pub(crate) fn describe(program: &Program) -> String {
+/// `imports` are the program's imports as (alias, package) pairs.
+pub(crate) fn describe(program: &Program, imports: &[(String, &LoadedPackage)]) -> String {
     let families: HashSet<&str> = program.items.iter().filter_map(|item| match item {
         Item::Family(family) => Some(family.name.as_str()),
         _ => None,
     }).collect();
-    let mut walker = Walker { families, functions: Vec::new(), family_json: Vec::new(), variables: Vec::new() };
+    // `alias.Family` for every family an imported package exports, so that
+    // `s = containers.stack();` is known to hold a containers.stack.
+    let package_families: HashSet<String> = imports.iter().flat_map(|(alias, package)| {
+        package.exports.iter().filter_map(move |(name, export)| match export {
+            Export::Family(_) => Some(format!("{alias}.{name}")),
+            _ => None,
+        })
+    }).collect();
+    let mut walker = Walker { families, package_families, functions: Vec::new(), family_json: Vec::new(), variables: Vec::new() };
 
     let mut globals = HashSet::new();
     for item in &program.items {
@@ -53,12 +66,90 @@ pub(crate) fn describe(program: &Program) -> String {
             _ => {}
         }
     }
-    format!("{{\"functions\":[{}],\"families\":[{}],\"variables\":[{}]}}",
-        walker.functions.join(","), walker.family_json.join(","), walker.variables.join(","))
+    let packages: Vec<String> = imports.iter().filter_map(|(alias, package)| describe_package(alias, package)).collect();
+    format!("{{\"functions\":[{}],\"families\":[{}],\"variables\":[{}],\"packages\":[{}]}}",
+        walker.functions.join(","), walker.family_json.join(","), walker.variables.join(","), packages.join(","))
+}
+
+/// What a package exports, as JSON. Native packages have no source to describe.
+fn describe_package(alias: &str, package: &LoadedPackage) -> Option<String> {
+    let Source::Program(program) = &package.source else { return None };
+    let families: HashSet<&str> = program.items.iter().filter_map(|item| match item {
+        Item::Family(family) => Some(family.name.as_str()),
+        _ => None,
+    }).collect();
+    let walker = Walker { families, package_families: HashSet::new(), functions: Vec::new(), family_json: Vec::new(), variables: Vec::new() };
+    let (mut functions, mut family_json, mut values) = (Vec::new(), Vec::new(), Vec::new());
+    for (name, export) in &package.exports {
+        match export {
+            Export::Function(resolved) => {
+                let found = program.items.iter().find_map(|item| match item {
+                    Item::Func(function) if &function.name == resolved => Some(function),
+                    _ => None,
+                });
+                if let Some(function) = found { functions.push(exported_function(function, None)); }
+            }
+            Export::Family(resolved) => {
+                let found = program.items.iter().find_map(|item| match item {
+                    Item::Family(family) if &family.name == resolved => Some(family),
+                    _ => None,
+                });
+                if let Some(family) = found {
+                    let methods: Vec<String> = family.methods.iter()
+                        .filter(|method| method.access == Access::Public && !method.name.starts_with('_'))
+                        .map(|method| exported_function(method, Some(name)))
+                        .collect();
+                    family_json.push(format!(
+                        "{{\"name\":{},\"parent\":{},\"line\":{},\"end\":{},\"doc\":{},\"methods\":[{}]}}",
+                        string(name), optional(family.extends.as_deref()), family.line, family.end_line,
+                        optional(family.doc.as_deref()), methods.join(",")));
+                }
+            }
+            Export::Binding(resolved) => {
+                let found = program.items.iter().find_map(|item| match item {
+                    Item::Var(var) if &var.name == resolved => Some(var),
+                    _ => None,
+                });
+                if let Some(var) = found {
+                    let (ty, inferred) = match &var.ty {
+                        Some(ty) => (Some(ty.clone()), false),
+                        None => (walker.infer(&var.value), true),
+                    };
+                    let inferred = inferred && ty.is_some();
+                    values.push(format!("{{\"name\":{},\"kind\":{},\"type\":{},\"inferred\":{inferred}}}",
+                        string(name), string(var_kind(var)), optional(ty.as_deref())));
+                }
+            }
+        }
+    }
+    Some(format!("{{\"alias\":{},\"name\":{},\"functions\":[{}],\"families\":[{}],\"values\":[{}]}}",
+        string(alias), string(&package.name), functions.join(","), family_json.join(","), values.join(",")))
+}
+
+/// A package's function or method as JSON, with parameter names as written:
+/// resolving renames them (`__v12_x`), and the original is what readers know.
+fn exported_function(function: &FuncDecl, family: Option<&str>) -> String {
+    let params: Vec<String> = function.params.iter().map(|param| {
+        let ty = (!param.ty.is_empty()).then_some(param.ty.as_str());
+        format!("{{\"name\":{},\"type\":{}}}", string(written(&param.name)), optional(ty))
+    }).collect();
+    format!(
+        "{{\"name\":{},\"family\":{},\"line\":{},\"end\":{},\"params\":[{}],\"doc\":{},\"access\":\"public\"}}",
+        string(&function.name), optional(family), function.line, function.end_line,
+        params.join(","), optional(function.doc.as_deref()))
+}
+
+/// A resolved binding name (`__v12_x`) as it was written (`x`).
+fn written(name: &str) -> &str {
+    name.strip_prefix("__v")
+        .and_then(|rest| rest.split_once('_'))
+        .filter(|(digits, _)| digits.chars().all(|c| c.is_ascii_digit()))
+        .map_or(name, |(_, original)| original)
 }
 
 struct Walker<'a> {
     families: HashSet<&'a str>,
+    package_families: HashSet<String>,
     functions: Vec<String>,
     family_json: Vec<String>,
     variables: Vec<String>,
@@ -190,6 +281,11 @@ impl Walker<'_> {
                     "int" | "longint" | "float" | "string" => name.clone(),
                     "in" | "inln" => "string".into(),
                     family if self.families.contains(family) => family.to_string(),
+                    _ => return None,
+                },
+                // containers.stack(): a family from an imported package.
+                Expr::Member { object, field } => match object.as_ref() {
+                    Expr::Ident(alias) if self.package_families.contains(&format!("{alias}.{field}")) => format!("{alias}.{field}"),
                     _ => return None,
                 },
                 _ => return None,

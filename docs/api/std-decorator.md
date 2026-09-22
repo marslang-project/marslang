@@ -59,8 +59,10 @@ either end are dropped, so a docstring can be indented to match the code. It
 applies to the function, family, or method directly below it, alongside other
 decorators, and changes nothing when the program runs.
 
+Every public function, family, and method of the standard library has one.
 `marslang symbols file.mars` prints each function, family, and method with its
-parameters and docstring, and each variable with its type, as JSON; the
+parameters and docstring, each variable with its type, and the same for the
+packages the file imports, as JSON; the
 [VS Code extension](https://github.com/marslang-project/vscode-marslang) shows
 them when you hover a name.
 
