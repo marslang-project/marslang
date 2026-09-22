@@ -1,0 +1,43 @@
+# Run the tests on every push and pull request, so a broken change shows up
+# before a release is tagged rather than when the release workflow builds it.
+name: test
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+
+      - name: Test
+        run: cargo test --locked
+
+      - name: Check the documented examples compile
+        shell: bash
+        run: |
+          set -eu
+          cargo build --locked --quiet
+          binary=target/debug/marslang
+          [ -f "$binary.exe" ] && binary="$binary.exe"
+          "$binary" docs/api/examples/strings.mars

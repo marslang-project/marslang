@@ -56,13 +56,26 @@ pub fn lex(input: &str) -> Vec<Token> {
         if c == '"' || c == '\'' {
             let q = c;
             let start = i;
-            i += 1;
-            while i < chars.len() && chars[i] != q {
+            // """...""" spans lines and ends at the next three quotes.
+            let triple = q == '"' && chars.get(i + 1) == Some(&'"') && chars.get(i + 2) == Some(&'"');
+            i += if triple { 3 } else { 1 };
+            while i < chars.len() {
+                if chars[i] == '\\' {
+                    i += 2;
+                    continue;
+                }
+                let closes = if triple {
+                    chars[i] == '"' && chars.get(i + 1) == Some(&'"') && chars.get(i + 2) == Some(&'"')
+                } else {
+                    chars[i] == q
+                };
+                if closes {
+                    i += if triple { 3 } else { 1 };
+                    break;
+                }
                 i += 1;
             }
-            if i < chars.len() {
-                i += 1;
-            }
+            i = i.min(chars.len());
             out.push(Token {
                 kind: TokenKind::String(chars[start..i].iter().collect()),
                 pos: start,

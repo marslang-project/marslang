@@ -2,7 +2,8 @@
 
 Marslang is an interpreted language. This repository is its Rust implementation (**marslang rs-0.11.1**): it parses and checks a `.mars` program, then runs it directly. No JavaScript or Node is involved.
 
-See the [rs-0.11.1 release notes](docs/releases/rs-0.11.1.md) for the documented standard library, the [rs-0.11.0 release notes](docs/releases/rs-0.11.0.md) for docstrings and triple-quoted strings, the [rs-0.10.0 release notes](docs/releases/rs-0.10.0.md) for `std.Error`, the [rs-0.9.1 release notes](docs/releases/rs-0.9.1.md) for line numbers in compile errors, the [rs-0.9.0 release notes](docs/releases/rs-0.9.0.md) for installation and the user package directory, the [rs-0.8.1 release notes](docs/releases/rs-0.8.1.md) for access and type-check fixes, the [rs-0.8.0 release notes](docs/releases/rs-0.8.0.md) for private methods, the [rs-0.7.0 release notes](docs/releases/rs-0.7.0.md) for error handling and new standard packages, and the [rs-0.6.0 release notes](docs/releases/rs-0.6.0.md) for the Rust interpreter and package system.
+What each release changed is in [docs/releases/](docs/releases/) and on the
+[changelog](https://marslang.kevin-z.com/changelog.html).
 
 The development direction is to stabilize the Rust interpreter before self-hosting. Discussion documents under `docs/` stay local; `docs/api/` and `docs/releases/` are available to Git.
 
@@ -12,21 +13,12 @@ generator lives in [marslang-project/website](https://github.com/marslang-projec
 
 Run `cargo test` for current coverage. The execution tests run each program in the interpreter and assert its output or runtime error. Only Rust is required.
 
-This release installs without a Rust toolchain: `install.ps1` and `install.sh` download
-a released binary, and packages installed in `marslang_pkgs` are importable from every
-program. The previous release added private methods through `std.Decorator`
-(`@Decorator.private`, `@Decorator.subclass`). Earlier releases added error handling, cycle collection, and the
-standard packages `std.containers`, `std.strings`, `std.types`, and `std.time`.
-The remaining decorators, further standard
-libraries, complete module handling, and async remain pending. Maps, deep copies,
-and loop control are implemented. `:=` is excluded.
-
-Function parameters now use commas: `func add(int a, int b) => a + b;`. The parser accepts this form and rejects semicolons inside parameter lists, including after the last parameter. The decorator package is `std.Decorator`; `@Decorator.private` and `@Decorator.subclass` are implemented.
+Pending work is listed under [current limits](docs/api/README.md#current-limits).
 
 It includes:
 - a lexer (`src/lexer.rs`)
 - AST definitions (`src/ast.rs`)
-- a handwritten parser (`src/parser.rs`); `src/grammar.pest` is an unused reference grammar
+- a handwritten parser (`src/parser.rs`); the grammar it accepts is written out in [docs/api/grammar.md](docs/api/grammar.md)
 - a name resolver (`src/resolve.rs`)
 - a tree-walking interpreter (`src/interp.rs`), runtime values (`src/value.rs`), and the package loader (`src/package.rs`)
 - the standard library: Marslang packages in `std/*.mars` and native Rust packages in `std/rs/*.rs`, registered at build time by `build.rs`
@@ -101,11 +93,12 @@ Implemented:
 - `out`, `slout`, `in`, and `inln`
 - `fasle` accepted as `false`
 
-Still intentionally limited in this initial release:
-- no full static type checker yet
-- no bytecode or native backend yet (programs run in a tree-walking interpreter)
-- no complete `match`, hot functions, type aliases, or tagged-variant syntax yet
-- the statement parser still uses normalized source fragments; the standalone lexer is not yet the single compilation frontend
+Not yet:
+- no static type checker: annotations are checked as the program runs
+- no bytecode or native backend: programs run in a tree-walking interpreter
+- no `match`, hot functions, type aliases, or tagged variants
+- runtime errors do not report a source line yet; compile errors do
+- the parser works on normalized statement text; `marslang lex` uses a separate, simpler lexer
 
 ```mars
 func m{
@@ -172,10 +165,10 @@ The REPL keeps a source buffer and re-runs it after each line, showing only the 
 `takepkg` loads standard packages (`std.*`, built into `marslang`) and package files
 next to the main program; see [Packages](docs/api/language.md#packages).
 
-Planned (not implemented yet): a per-user package directory, such as
-`C:\Users\<user>\marslang_pkgs` on Windows, where an installer will put third-party
-packages so any program can `takepkg` them. The installer and the search order between
-that directory and the program's own directory are future work.
+A package the program's own folder does not have is looked for next in your
+package directory, `marslang_pkgs` in your home directory (or `MARSLANG_PKGS`),
+which the installers create; `marslang pkgs` prints where it is. See
+[your package directory](docs/api/language.md#your-package-directory).
 
 ## Building a Windows `.exe`
 
