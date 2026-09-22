@@ -352,15 +352,20 @@ impl<'o> Interp<'o> {
     fn exec_run(&mut self, body: &[Stmt], handlers: &[Handler], then_block: Option<&[Stmt]>, env: &mut Env) -> Exec {
         let mut outcome = self.exec_block(body, env);
         if let Err(error) = outcome {
-            let value = self.error_value(&error);
-            outcome = match self.find_handler(handlers, &value, env.unit) {
-                Ok(Some(handler)) => {
-                    self.last_error = Some(value.clone());
-                    if let Some(name) = &handler.name { self.declare(env, name, value); }
-                    self.exec_block(&handler.body, env)
+            outcome = if error.exit.is_some() {
+                // An exit request passes every handler; only `then` runs on its way out.
+                Err(error)
+            } else {
+                let value = self.error_value(&error);
+                match self.find_handler(handlers, &value, env.unit) {
+                    Ok(Some(handler)) => {
+                        self.last_error = Some(value.clone());
+                        if let Some(name) = &handler.name { self.declare(env, name, value); }
+                        self.exec_block(&handler.body, env)
+                    }
+                    Ok(None) => Err(self.propagate(error, value)),
+                    Err(problem) => Err(problem),
                 }
-                Ok(None) => Err(self.propagate(error, value)),
-                Err(problem) => Err(problem),
             };
         }
         if let Some(block) = then_block {
@@ -428,7 +433,7 @@ impl<'o> Interp<'o> {
         let kind = instance.family.error_kind.unwrap();
         let builtin = Rc::ptr_eq(&instance.family, &self.error_families[kind.name()]);
         let message = instance.fields.borrow().get("message").map(to_display_string).unwrap_or_default();
-        let error = RuntimeError { kind, message, family: (!builtin).then(|| instance.family.name.clone()), serial: 0 };
+        let error = RuntimeError { kind, message, family: (!builtin).then(|| instance.family.name.clone()), ..Default::default() };
         Err(self.propagate(error, value))
     }
 

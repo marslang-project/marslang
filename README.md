@@ -70,6 +70,8 @@ cargo run -- hello.mars
 cargo run -- run hello.mars
 ```
 
+Words after the file are the program's arguments, read with
+[std.cli](docs/api/std-cli.md): `marslang tool.mars --name Ada input.txt`.
 `marslang check file.mars` parses and resolves a program without running it.
 `marslang symbols file.mars` prints what it declares, and what the packages it
 imports export, with types and docstrings, as JSON for editors (`--stdin` reads

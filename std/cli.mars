@@ -1,0 +1,147 @@
+// std.cli: the program's command line, exit statuses, and a parser for
+// --flags, --options, and positional arguments.
+takepkg rs.cli = native;
+takepkg std.Decorator;
+takepkg std.strings;
+
+@Decorator.docstring("""
+    Raised by parse() for arguments it cannot accept: an unknown option, a
+    missing value or argument, or one too many. Its message says which.
+""")
+family UsageError(Error){}
+
+@Decorator.docstring("The words after the program's file, as an array of strings: marslang tool.mars a b gives [\"a\", \"b\"].")
+func args() => native.args();
+
+@Decorator.docstring("The path of the program's file, as it was given on the command line.")
+func program() => native.program();
+
+@Decorator.docstring("""
+    Stop the program now with an exit status, 0 for success. No handle block
+    catches it, but then blocks still run on the way out.
+""")
+func exit(int code){ native.exit(code); }
+
+@Decorator.docstring("""
+    Reads --flags, --options, and positional arguments, like Python's argparse.
+
+        p = cli.parser("greet", "Say hello to someone.");
+        p.flag("loud", "Shout the greeting");
+        p.option("name", "Who to greet", "world");
+        p.positional("file", "A file to read");
+        opts = p.parse();          // a map: loud, name, and file
+
+    --help or -h prints the usage and exits with status 0. Options are written
+    --name Ada or --name=Ada; a lone -- makes every later word positional.
+""")
+family parser{
+    @Decorator.docstring("A parser for the program called name, described by description in --help.")
+    func init(string name, string description){
+        me._name = name;
+        me._description = description;
+        me._flags = arr();
+        me._options = arr();
+        me._positionals = arr();
+    }
+
+    @Decorator.docstring("Accept --name, which sets name to true; it is false when absent. Returns the parser.")
+    func flag(string name, string help){
+        me._flags.add(arr(name, help));
+        ret me;
+    }
+
+    @Decorator.docstring("Accept --name VALUE or --name=VALUE; name is default when absent. Values are strings. Returns the parser.")
+    func option(string name, string help, string default){
+        me._options.add(arr(name, help, default));
+        ret me;
+    }
+
+    @Decorator.docstring("Require a word that is not an option, taken in the order positionals are declared. Returns the parser.")
+    func positional(string name, string help){
+        me._positionals.add(arr(name, help));
+        ret me;
+    }
+
+    @Decorator.docstring("The --help text: a usage line, the description, and every argument and option.")
+    func usage(){
+        text = "Usage: " + me._name;
+        for (f, me._flags){ text = text + " [--" + f[0] + "]"; }
+        for (o, me._options){ text = text + " [--" + o[0] + " " + o[0].upper() + "]"; }
+        for (p, me._positionals){ text = text + " " + p[0].upper(); }
+        text = text + "\n\n" + me._description;
+
+        rows = arr();
+        for (p, me._positionals){ rows.add(arr("  " + p[0].upper(), p[1])); }
+        arguments = rows.len();
+        for (f, me._flags){ rows.add(arr("  --" + f[0], f[1])); }
+        for (o, me._options){ rows.add(arr("  --" + o[0] + " " + o[0].upper(), o[1] + " (default: " + o[2] + ")")); }
+        rows.add(arr("  -h, --help", "Show this help and exit"));
+
+        width = 0;
+        for (row, rows){ if (row[0].len() > width){ width = row[0].len(); } }
+        for (i = 0, i < rows.len(), i++){
+            if (i == 0 and arguments > 0){ text = text + "\n\nArguments:"; }
+            if (i == arguments){ text = text + "\n\nOptions:"; }
+            text = text + "\n" + strings.pad_end(rows[i][0], width + 2, " ") + rows[i][1];
+        }
+        ret text;
+    }
+
+    @Decorator.docstring("Read the program's own arguments, cli.args(). Returns a map from each name to its value.")
+    func parse() => me.parse_args(native.args());
+
+    @Decorator.docstring("Read the given words as if they were the command line. Returns a map from each name to its value; raises UsageError for words it cannot accept.")
+    func parse_args(array words){
+        result = map();
+        for (f, me._flags){ result.set(f[0], false); }
+        for (o, me._options){ result.set(o[0], o[2]); }
+        next_positional = 0;
+        only_positional = false;
+        i = 0;
+        while (i < words.len()){
+            word = words[i];
+            if (not only_positional and word == "--"){
+                only_positional = true;
+            } elif (not only_positional and (word == "-h" or word == "--help")){
+                out(me.usage());
+                exit(0);
+            } elif (not only_positional and word.starts_with("--")){
+                name = word.slice(2, word.len());
+                value = null;
+                equals = name.find("=");
+                if (equals >= 0){
+                    value = name.slice(equals + 1, name.len());
+                    name = name.slice(0, equals);
+                }
+                if (me._declared(me._flags, name)){
+                    if (value != null){ err(UsageError, "--" + name + " is a flag and takes no value"); }
+                    result.set(name, true);
+                } elif (me._declared(me._options, name)){
+                    if (value == null){
+                        i = i + 1;
+                        if (i >= words.len()){ err(UsageError, "--" + name + " needs a value"); }
+                        value = words[i];
+                    }
+                    result.set(name, value);
+                } else {
+                    err(UsageError, "unknown option --" + name + "; run with --help to see the options");
+                }
+            } else {
+                if (next_positional >= me._positionals.len()){ err(UsageError, "unexpected argument " + word); }
+                result.set(me._positionals[next_positional][0], word);
+                next_positional = next_positional + 1;
+            }
+            i = i + 1;
+        }
+        if (next_positional < me._positionals.len()){
+            err(UsageError, "missing " + me._positionals[next_positional][0].upper() + "; run with --help to see the arguments");
+        }
+        ret result;
+    }
+
+    @Decorator.private
+    func _declared(array specs, string name){
+        for (spec, specs){ if (spec[0] == name){ ret true; } }
+        ret false;
+    }
+}

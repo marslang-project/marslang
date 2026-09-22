@@ -4,7 +4,7 @@ use std::io::{self, Write};
 use std::path::Path;
 use std::process::ExitCode;
 
-const USAGE: &str = "Usage: marslang <file.mars> | marslang run <file.mars> | marslang check <file.mars> | marslang lex <file.mars> | marslang repl | marslang pkgs | marslang symbols <file.mars> [--stdin] | marslang --version";
+const USAGE: &str = "Usage: marslang <file.mars> [args...] | marslang run <file.mars> [args...] | marslang check <file.mars> | marslang lex <file.mars> | marslang repl | marslang pkgs | marslang symbols <file.mars> [--stdin] | marslang --version";
 
 fn main() -> ExitCode {
     match run() {
@@ -28,7 +28,7 @@ fn run() -> Result<(), String> {
             println!("marslang {}", marslang::VERSION);
             Ok(())
         }
-        Some("run") => run_cmd(file(2)?),
+        Some("run") => run_cmd(file(2)?, &args[3.min(args.len())..]),
         Some("check") => {
             marslang::compile_file(file(2)?)?;
             println!("ok");
@@ -60,7 +60,7 @@ fn run() -> Result<(), String> {
             Ok(())
         }
         Some("repl") => repl_cmd(),
-        Some(path) => run_cmd(Path::new(path)),
+        Some(path) => run_cmd(Path::new(path), &args[2..]),
     }
 }
 
@@ -68,9 +68,14 @@ fn read(input: &Path) -> Result<String, String> {
     fs::read_to_string(input).map_err(|e| format!("failed to read source file {}: {e}", input.display()))
 }
 
-fn run_cmd(input: &Path) -> Result<(), String> {
+/// Run a program; the words after its file are its arguments (`std.cli.args()`).
+fn run_cmd(input: &Path, program_args: &[String]) -> Result<(), String> {
     let compiled = marslang::compile_file(input)?;
-    marslang::run(compiled).map_err(|e| e.to_string())
+    match marslang::run_with_args(compiled, input.display().to_string(), program_args.to_vec()) {
+        // cli.exit(code): output is already flushed, so stop with that status.
+        Err(error) if error.exit.is_some() => std::process::exit(error.exit.unwrap()),
+        result => result.map_err(|e| e.to_string()),
+    }
 }
 
 fn lex_cmd(input: &Path) -> Result<(), String> {

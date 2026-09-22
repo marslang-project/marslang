@@ -1448,6 +1448,65 @@ fn function_and_family_parameter_types() {
     }
 }
 
+fn run_with_args(source: &str, args: &[&str]) -> (String, Result<(), marslang::RuntimeError>) {
+    let compiled = marslang::compile(source).expect("compile failed");
+    let args = args.iter().map(|a| a.to_string()).collect();
+    marslang::run_captured_with_args(compiled, "", "tool.mars".into(), args)
+}
+
+const GREET: &str = r#"
+    takepkg std.cli;
+    func m{
+        p = cli.parser("greet", "Say hello to someone.");
+        p.flag("loud", "Shout the greeting");
+        p.option("name", "Who to greet", "world");
+        p.positional("file", "A file to read");
+        opts = p.parse();
+        out(opts.get("loud"), opts.get("name"), opts.get("file"));
+    }"#;
+
+#[test]
+fn std_cli_reads_arguments_and_options() {
+    let (out, result) = run_with_args("takepkg std.cli;\nfunc m{ out(cli.program(), cli.args(), cli.args().len()); }", &["a", "--b"]);
+    result.expect("runtime error");
+    assert_eq!(out, "tool.mars [\"a\", \"--b\"] 2\n");
+
+    for (args, expected) in [
+        (&["in.txt"][..], "false world in.txt\n"),
+        (&["--loud", "--name", "Ada", "in.txt"][..], "true Ada in.txt\n"),
+        (&["in.txt", "--name=Grace"][..], "false Grace in.txt\n"),
+        (&["--", "--loud"][..], "false world --loud\n"),
+    ] {
+        let (out, result) = run_with_args(GREET, args);
+        result.unwrap_or_else(|e| panic!("{args:?}: {e}"));
+        assert_eq!(out, expected, "{args:?}");
+    }
+    for (args, message) in [
+        (&["in.txt", "--nope"][..], "UsageError: unknown option --nope"),
+        (&[][..], "UsageError: missing FILE"),
+        (&["in.txt", "--name"][..], "UsageError: --name needs a value"),
+        (&["in.txt", "--loud=yes"][..], "UsageError: --loud is a flag and takes no value"),
+        (&["a.txt", "b.txt"][..], "UsageError: unexpected argument b.txt"),
+    ] {
+        let error = run_with_args(GREET, args).1.expect_err(&format!("{args:?}"));
+        assert!(error.to_string().contains(message), "{args:?}: {error}");
+    }
+}
+
+#[test]
+fn std_cli_help_and_exit() {
+    let (out, result) = run_with_args(GREET, &["--help"]);
+    assert_eq!(result.expect_err("--help exits").exit, Some(0));
+    assert!(out.starts_with("Usage: greet [--loud] [--name NAME] FILE\n\nSay hello to someone.\n\nArguments:\n  FILE"), "{out}");
+    assert!(out.contains("  --name NAME  Who to greet (default: world)\n  -h, --help   Show this help and exit"), "{out}");
+
+    // An exit passes every handler, but then blocks still run.
+    let (out, result) = run_with_args(
+        "takepkg std.cli;\nfunc m{ run{ cli.exit(3); } handle(Error e){ out(\"caught\"); } then{ out(\"then\"); } out(\"after\"); }", &[]);
+    assert_eq!(out, "then\n");
+    assert_eq!(result.expect_err("exit").exit, Some(3));
+}
+
 #[test]
 fn decorator_package_lists_the_available_markers() {
     executes("takepkg std.Decorator;\nfunc m{ out(Decorator.private, Decorator.subclass, Decorator.static); }",

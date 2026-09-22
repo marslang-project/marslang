@@ -77,7 +77,15 @@ pub fn symbols(source: &str, base: &std::path::Path) -> Result<String, String> {
 
 /// Run a compiled program with the process's stdin/stdout.
 pub fn run(compiled: Compiled) -> Result<(), RuntimeError> {
+    run_with_args(compiled, String::new(), Vec::new())
+}
+
+/// Run as `marslang PROGRAM ARGS...`: `program` is the path of the file as it
+/// was given and `args` the words after it, which `std.cli` reads. A program
+/// that calls `cli.exit(code)` ends with an error whose `exit` holds the code.
+pub fn run_with_args(compiled: Compiled, program: String, args: Vec<String>) -> Result<(), RuntimeError> {
     on_interpreter_thread(move || {
+        value::set_command_line(program, args);
         use std::io::{IsTerminal, Write};
         let stdout = std::io::stdout();
         // A terminal sees each `out` immediately; piped output is buffered.
@@ -92,8 +100,14 @@ pub fn run(compiled: Compiled) -> Result<(), RuntimeError> {
 /// Run a compiled program with the given standard input, capturing its output.
 /// Output written before a runtime error is kept.
 pub fn run_captured(compiled: Compiled, input: &str) -> (String, Result<(), RuntimeError>) {
+    run_captured_with_args(compiled, input, String::new(), Vec::new())
+}
+
+/// `run_captured`, with a command line for `std.cli` (see `run_with_args`).
+pub fn run_captured_with_args(compiled: Compiled, input: &str, program: String, args: Vec<String>) -> (String, Result<(), RuntimeError>) {
     let input = input.to_string();
     on_interpreter_thread(move || {
+        value::set_command_line(program, args);
         let mut out = Vec::new();
         let result = interp::Interp::new(&mut out, InputSource::Text(input), false).run(&compiled.program, &compiled.packages);
         (String::from_utf8_lossy(&out).into_owned(), result)

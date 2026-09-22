@@ -378,6 +378,32 @@ pub struct RuntimeError {
     pub family: Option<String>,
     /// Identifies the error value raised by `err` while it propagates (0 otherwise).
     pub(crate) serial: u64,
+    /// Set by `std.cli.exit(code)`: not an error but a request to stop with
+    /// that status. No handler catches it; `then` blocks still run.
+    pub exit: Option<i32>,
+}
+
+/// Stop the program with an exit status (`std.cli.exit`).
+pub fn exit_request(code: i32) -> RuntimeError {
+    RuntimeError { kind: ErrorKind::Error, message: format!("exit {code}"), exit: Some(code), ..Default::default() }
+}
+
+thread_local! {
+    /// The command line of the program running on this thread: the path of its
+    /// file as given, then the arguments after it. Each run has its own thread.
+    static COMMAND_LINE: RefCell<(String, Vec<String>)> = const { RefCell::new((String::new(), Vec::new())) };
+}
+
+pub(crate) fn set_command_line(program: String, args: Vec<String>) {
+    COMMAND_LINE.with(|line| *line.borrow_mut() = (program, args));
+}
+
+pub fn program_path() -> String {
+    COMMAND_LINE.with(|line| line.borrow().0.clone())
+}
+
+pub fn program_args() -> Vec<String> {
+    COMMAND_LINE.with(|line| line.borrow().1.clone())
 }
 
 impl RuntimeError {

@@ -20,6 +20,7 @@ notes elsewhere under `docs/` remain local.
 - [std.time](std-time.md): clocks and sleeping.
 - [std.Decorator](std-decorator.md): `@Decorator.docstring`, and `@Decorator.private` and `@Decorator.subclass` methods.
 - [std.Error](std-error.md): the built-in error families as `Error.TypeError`, `Error.RangeError`, and so on.
+- [std.cli](std-cli.md): command-line arguments, a parser for options, and exit statuses.
 
 ## Install
 
