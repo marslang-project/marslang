@@ -63,8 +63,6 @@ fn number(text: &str, negative: bool) -> Option<Expr> {
     Some(Expr::Float(if negative { -value } else { value }))
 }
 
-pub(crate) const MAX_SAFE: i128 = 9_007_199_254_740_991;
-
 impl Resolver {
     fn find(&self, name: &str) -> Option<Binding> {
         self.scopes.iter().rev().find_map(|s| s.get(name).cloned())
