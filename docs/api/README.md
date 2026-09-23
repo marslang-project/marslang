@@ -20,6 +20,7 @@ notes elsewhere under `docs/` remain local.
 - [std.stats](std-stats.md): mean, median, mode, quantiles, spread, and correlation.
 - [std.strings](std-strings.md): splitting, searching, trimming, case, and padding.
 - [std.types](std-types.md): a value's kind, family checks.
+- [std.memory](std-memory.md): addresses, object identity, and the cycle collector.
 - [std.time](std-time.md): clocks and sleeping.
 - [std.Decorator](std-decorator.md): `@Decorator.docstring`, and `@Decorator.private` and `@Decorator.subclass` methods.
 - [std.Error](std-error.md): the built-in error families as `Error.TypeError`, `Error.RangeError`, and so on.

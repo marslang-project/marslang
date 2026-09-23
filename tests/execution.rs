@@ -1638,6 +1638,42 @@ fn stats_match_python_statistics_and_numpy() {
 }
 
 #[test]
+fn std_memory_tells_objects_apart() {
+    // Addresses differ from run to run, so every check is a relation.
+    executes(r#"
+        takepkg std.memory;
+        family Task{ func init(string n){ me.n = n; } }
+        func m{
+            a = arr(1, 2); b = a; c = arr(1, 2);
+            out(memory.same(a, b), memory.same(a, c), memory.same(a, "x"));
+            out(memory.address(a) == memory.address(b), memory.address(a) == memory.address(c));
+            out(memory.pointer(a).starts_with("array@0x"), memory.pointer(Task("t")).starts_with("instance@0x"));
+            out(memory.same(1, 1), memory.same(1, 1.0), memory.same(null, null), memory.same("ab", "cd"));
+            held = memory.refs(a);
+            also = a;
+            out(memory.refs(a) > held, memory.refs(also) == memory.refs(a));
+        }"#,
+        "true false false\ntrue false\ntrue true\ntrue true true false\ntrue true\n");
+
+    // Only the collector can free a cycle, and it says how many objects it freed.
+    executes(r#"
+        takepkg std.memory;
+        func m{
+            memory.collect();
+            cycle = arr(); cycle.add(cycle); cycle = null;
+            out(memory.collect() >= 1, memory.collect());
+        }"#, "true 0\n");
+
+    for (source, message) in [
+        ("memory.address(5);", "a int is stored inside the value itself"),
+        ("memory.pointer(true);", "a bool is stored inside the value itself"),
+        ("memory.refs(null);", "a null is stored inside the value itself"),
+    ] {
+        runtime_error(&format!("takepkg std.memory;\nfunc m{{ {source} }}"), message);
+    }
+}
+
+#[test]
 fn decorator_package_lists_the_available_markers() {
     executes("takepkg std.Decorator;\nfunc m{ out(Decorator.private, Decorator.subclass, Decorator.static); }",
         "private subclass static\n");

@@ -1,0 +1,67 @@
+// std.memory: where a value lives and whether two names are one object.
+//
+// C's &x takes an address and *p reads what is there. Marslang has the first
+// half only: an address is for telling objects apart and for debugging output,
+// never for reaching back into memory. Values are freed automatically, so
+// nothing here is needed to write a correct program.
+takepkg rs.memory = native;
+takepkg std.Decorator;
+
+@Decorator.docstring("""
+    The address of a value, as a longint.
+
+        a = arr(1, 2);
+        out(memory.address(a));   // 2338294874432
+
+    Strings, arrays, sets, maps, pairs, instances, functions, and packages live
+    behind a pointer and have one. A number, a boolean, or null is stored
+    inside the value itself, like a C value held in a register, and raises
+    TypeError.
+
+    An address means nothing between two runs, and once an object is freed the
+    same number can come back for a different one. Never store it; to compare
+    identity use same().
+""")
+func address(any value) => native.address(value);
+
+@Decorator.docstring("""
+    The address of a value as text, for printing: the kind, @, and the address
+    in hexadecimal, as in array@0x22056ab1c40. Values without an address raise
+    TypeError, as with address().
+""")
+func pointer(any value) => native.pointer(value);
+
+@Decorator.docstring("""
+    Whether two names hold one object, rather than two that look alike.
+
+        a = arr(1, 2);
+        out(memory.same(a, a), memory.same(a, arr(1, 2)));   // true false
+        out(memory.same("ab", "ab"));   // whether that is one string or two
+
+    Numbers, booleans, and null have no identity to compare, so for them this
+    is ordinary equality, and comparing one with an object is false.
+""")
+func same(any a, any b) => native.same(a, b);
+
+@Decorator.docstring("""
+    How many references the interpreter holds to a value's object.
+
+        a = arr(1, 2);
+        b = a;
+        out(memory.refs(a));   // more than one: a and b share the array
+
+    This is why a value is still alive. The exact number counts references the
+    interpreter makes while running the call, so compare numbers rather than
+    reading one on its own. Values without an address raise TypeError.
+""")
+func refs(any value) => native.refs(value);
+
+@Decorator.docstring("""
+    Free objects that only refer to each other and return how many were freed.
+
+    Marslang frees a value as soon as nothing refers to it; a cycle, such as an
+    array holding itself, needs this collector, which also runs on its own as a
+    program allocates. Calling it is a diagnostic, not something a correct
+    program needs.
+""")
+func collect() => native.collect();
