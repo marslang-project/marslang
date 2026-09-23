@@ -1,6 +1,6 @@
 [package]
 name = "marslang"
-version = "0.12.0"
+version = "0.13.0"
 edition = "2021"
 description = "The Marslang interpreter."
 homepage = "https://marslang.kevin-z.com"
