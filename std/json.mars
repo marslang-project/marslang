@@ -1,0 +1,38 @@
+// std.json: reading and writing JSON. The reading and writing are native
+// (std/rs/json.rs); this file is the documented surface.
+takepkg rs.json = native;
+takepkg std.Decorator;
+
+@Decorator.docstring("""
+    Read JSON text into Marslang values.
+
+        data = json.parse("{\"name\": \"Ada\", \"tags\": [\"math\", \"code\"]}");
+        out(data.get("name"), data.get("tags")[1]);   // Ada code
+
+    Objects become maps, keeping their key order; arrays become arrays;
+    true, false, and null stay themselves. A whole number is an int when it
+    fits in 32 bits and a longint when it fits in 64; one with a fraction or
+    exponent is a float. Text that is not JSON raises SyntaxError with the line
+    and column; a number beyond longint raises RangeError.
+""")
+func parse(string text) => native.parse(text);
+
+@Decorator.docstring("""
+    Write a value as JSON on one line, with no spaces.
+
+        out(json.stringify(arr(1, "two", null)));   // [1,"two",null]
+
+    Maps need string keys. Sets, pairs, family instances, functions, infinity,
+    NaN, and a container that holds itself cannot be written and raise
+    TypeError or RangeError, saying which.
+""")
+func stringify(any value) => native.stringify(value, 0);
+
+@Decorator.docstring("""
+    Write a value as JSON across lines, indenting each level by two spaces,
+    for files that people read. Accepts what stringify accepts.
+""")
+func pretty(any value) => native.stringify(value, 2);
+
+@Decorator.docstring("As pretty, indenting each level by spaces, from 1 to 16; 0 is the same as stringify.")
+func indented(any value, int spaces) => native.stringify(value, spaces);

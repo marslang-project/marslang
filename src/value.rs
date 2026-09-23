@@ -275,7 +275,7 @@ impl Family {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Builtin {
-    Out, Slout, In, Inln, Arr, Set, Pair, Map, Int, Long, Float, String, Err, LastErr,
+    Out, Slout, In, Inln, Arr, Set, Pair, Map, Int, Long, Float, String, Err, LastErr, Ord, Chr,
 }
 
 impl Builtin {
@@ -286,6 +286,7 @@ impl Builtin {
             "map" | "dict" => Builtin::Map, "int" => Builtin::Int, "longint" => Builtin::Long,
             "float" => Builtin::Float, "string" => Builtin::String,
             "err" => Builtin::Err, "lasterr" => Builtin::LastErr,
+            "ord" => Builtin::Ord, "chr" => Builtin::Chr,
             _ => return None,
         })
     }

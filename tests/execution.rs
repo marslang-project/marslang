@@ -1674,6 +1674,111 @@ fn std_memory_tells_objects_apart() {
 }
 
 #[test]
+fn ord_and_chr_convert_code_points() {
+    executes(r#"func m{ out(ord("a"), ord("中"), ord("😀"), chr(97), chr(20013), chr(128512), chr(ord("A") + 2), chr(longint(66))); }"#,
+        "97 20013 128512 a 中 😀 C B\n");
+    for (source, message) in [
+        (r#"ord("")"#, "ord needs one character, got an empty string"),
+        (r#"ord("ab")"#, "ord needs one character, got 2 characters"),
+        ("ord(\"e\u{301}\")", "ord needs one code point, but \"e\u{301}\" is 2 (U+0065 U+0301)"),
+        ("ord(5)", "ord expects a one-character string, got int"),
+        ("chr(-1)", "chr needs a code point from 0 to 1114111 (0x10FFFF), got -1"),
+        ("chr(1114112)", "got 1114112"),
+        ("chr(55296)", "chr(55296) is a surrogate half, U+D800"),
+        (r#"chr("a")"#, "chr expects a whole number, got string"),
+    ] {
+        runtime_error(&format!("func m{{ {source}; }}"), message);
+    }
+}
+
+#[test]
+fn std_os_and_std_sys_describe_the_machine_and_interpreter() {
+    let platform = std::env::consts::OS;
+    executes(r#"
+        takepkg std.os;
+        func m{
+            out(os.platform(), os.arch() != "", os.SEP.len(), os.pid() > 0);
+            out(os.env("PATH") != null, os.env("MARSLANG_SURELY_UNSET_VARIABLE"), os.env_or("MARSLANG_SURELY_UNSET_VARIABLE", "fallback"));
+            out(os.cwd() != "", os.environment().has("PATH"));
+        }"#, &format!("{platform} true 1 true\ntrue null fallback\ntrue true\n"));
+    runtime_error("takepkg std.os;\nfunc m{ os.env(\"A=B\"); }", "os.env needs a variable name without '=' or NUL");
+
+    executes(r#"
+        takepkg std.sys;
+        func m{
+            out(sys.INT_MIN, sys.INT_MAX, sys.LONGINT_MIN, sys.LONGINT_MAX, sys.MAX_SAFE);
+            out(sys.standard_packages().len() > 10, sys.standard_packages()[0], sys.executable() != null);
+        }"#,
+        "-2147483648 2147483647 -9223372036854775808 9223372036854775807 9007199254740991\ntrue std.algorithms true\n");
+    executes("takepkg std.sys;\nfunc m{ out(sys.VERSION); }", &format!("{}\n", marslang::VERSION));
+    runtime_error("takepkg std.sys;\nfunc m{ out(sys.INT_MAX + 1); }", "int overflow");
+}
+
+#[test]
+fn std_json_reads_and_writes_values() {
+    executes(r#"
+        takepkg std.json;
+        func m{
+            data = json.parse("{\"name\": \"Ada\", \"tags\": [\"math\", \"code\"], \"age\": 36, \"big\": 3000000000, \"pi\": 3.14, \"one\": 1.0, \"ok\": true, \"none\": null}");
+            out(data.get("name"), data.get("tags")[1], data.get("age"), data.get("big"), data.get("pi"), data.get("ok"), data.get("none"));
+            out(json.stringify(data));
+            out(json.stringify(json.parse(json.stringify(data))) == json.stringify(data));
+            out(json.pretty(json.parse("{\"a\": [1, {}], \"b\": []}")));
+            out(json.parse("\"\\u00e9\\ud83d\\ude00\\t\""), json.stringify("q\" b\\ n\n c" + chr(1)));
+            out(json.stringify(json.parse(" [ -0 , -0.0 , 1e21, 1E-7, 2.5e+3 ] ")), json.indented(arr(1), 4));
+            shared = arr(1);
+            out(json.stringify(arr(shared, shared)), json.stringify(map()), json.pretty(arr()));
+        }"#,
+        concat!(
+            "Ada code 36 3000000000 3.14 true null\n",
+            "{\"name\":\"Ada\",\"tags\":[\"math\",\"code\"],\"age\":36,\"big\":3000000000,\"pi\":3.14,\"one\":1.0,\"ok\":true,\"none\":null}\n",
+            "true\n",
+            "{\n  \"a\": [\n    1,\n    {}\n  ],\n  \"b\": []\n}\n",
+            "é😀\t \"q\\\" b\\\\ n\\n c\\u0001\"\n",
+            "[0,-0.0,1e21,1e-7,2500.0] [\n    1\n]\n",
+            "[[1],[1]] {} []\n",
+        ));
+
+    // Kinds: the same rule as literals, and floats stay floats when read back.
+    executes(r#"
+        takepkg std.json;
+        takepkg std.types;
+        func m{ for (v, json.parse("[1, 3000000000, 1.0, 2e0]")){ slout(types.kind(v) + " "); } out(""); }"#,
+        "int longint float float \n");
+
+    for (text, message) in [
+        (r#"{\"a\":1,}"#, "JSON line 1, column 7: a comma before '}': JSON allows no trailing comma"),
+        ("[1,2", "column 5: expected ',' or ']', found the end of the text"),
+        ("{a:1}", "expected a key in double quotes, found 'a'"),
+        ("01", "a number cannot start with 0 followed by more digits"),
+        ("tru", "expected true"),
+        (r#"\"\\x\""#, "\\x is not a JSON escape"),
+        ("[1] x", "expected the end of the text after the value, found 'x'"),
+        ("NaN", "expected a value, found 'N'"),
+        (r#"\"a\nb\""#, "U+000A must be written as an escape inside a string"),
+        (r#"\"\\ud800\""#, "\\uD800 is the first half of a surrogate pair"),
+        (r#"[1,\n  2,\n  oops]"#, "JSON line 3, column 3: expected a value, found 'o'"),
+    ] {
+        runtime_error(&format!("takepkg std.json;\nfunc m{{ json.parse(\"{text}\"); }}"), message);
+    }
+    runtime_error("takepkg std.json;\nfunc m{ json.parse(\"123456789012345678901234\"); }", "is beyond longint");
+    runtime_error(&format!("takepkg std.json;\nfunc m{{ json.parse(\"{}1{}\"); }}", "[".repeat(600), "]".repeat(600)), "nested more than 512 levels deep");
+
+    for (value, message) in [
+        ("set(1)", "JSON has no sets"),
+        ("pair(1, 2)", "JSON has no pairs"),
+        ("float(\"inf\")", "JSON has no infinity or NaN"),
+        ("cyc", "this array contains itself"),
+        ("keyed", "JSON object keys are strings; this map has the key 1 (int)"),
+        ("Box()", "a Box instance cannot be written as JSON"),
+        ("m", "a function cannot be written as JSON"),
+    ] {
+        runtime_error(&format!("takepkg std.json;\nfamily Box{{ func init(){{ me.x = 1; }} }}\n\
+            func m{{ cyc = arr(); cyc.add(cyc); keyed = map(); keyed.set(1, \"x\"); json.stringify({value}); }}"), message);
+    }
+}
+
+#[test]
 fn decorator_package_lists_the_available_markers() {
     executes("takepkg std.Decorator;\nfunc m{ out(Decorator.private, Decorator.subclass, Decorator.static); }",
         "private subclass static\n");

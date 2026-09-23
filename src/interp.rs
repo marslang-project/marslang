@@ -760,6 +760,8 @@ impl<'o> Interp<'o> {
                 self.raise(args)
             }
             Builtin::LastErr => { arity(0)?; Ok(self.last_error.clone().unwrap_or(Value::Null)) }
+            Builtin::Ord => { arity(1)?; ord(&args[0]) }
+            Builtin::Chr => { arity(1)?; chr(&args[0]) }
         }
     }
 
@@ -1419,6 +1421,41 @@ fn sort_order(a: &Value, b: &Value) -> Ordering {
     match (a, b) {
         (Value::Str(x), Value::Str(y)) => x.encode_utf16().cmp(y.encode_utf16()),
         _ => compare_numbers(&number(a), &number(b)).unwrap_or(Ordering::Equal),
+    }
+}
+
+/// `ord("a")`: the Unicode code point of a one-code-point string. A character
+/// built from several code points, such as `e` plus a combining accent, has no
+/// single number, so it is refused with the code points it is made of.
+fn ord(value: &Value) -> RResult<Value> {
+    let Value::Str(text) = value else {
+        return type_err(format!("ord expects a one-character string, got {}", value.type_name()));
+    };
+    let mut points = text.chars();
+    match (points.next(), points.next()) {
+        (Some(point), None) => Ok(Value::Int(point as i64)),
+        (None, _) => range_err("ord needs one character, got an empty string"),
+        _ if text.graphemes(true).count() == 1 => {
+            let parts: Vec<String> = text.chars().map(|c| format!("U+{:04X}", c as u32)).collect();
+            range_err(format!("ord needs one code point, but \"{text}\" is {} ({}); take ord of each part", parts.len(), parts.join(" ")))
+        }
+        _ => range_err(format!("ord needs one character, got {} characters", text.graphemes(true).count())),
+    }
+}
+
+/// `chr(97)`: the one-character string for a Unicode code point.
+fn chr(value: &Value) -> RResult<Value> {
+    let point = match value {
+        Value::Int(n) | Value::Long(n) => *n,
+        Value::Float(f) if f.fract() == 0.0 && f.is_finite() => *f as i64,
+        other => return type_err(format!("chr expects a whole number, got {}", other.type_name())),
+    };
+    if (0xD800..=0xDFFF).contains(&point) {
+        return range_err(format!("chr({point}) is a surrogate half, U+{point:04X}, which is not a character on its own"));
+    }
+    match u32::try_from(point).ok().and_then(char::from_u32) {
+        Some(c) => Ok(Value::str(c.encode_utf8(&mut [0; 4]))),
+        None => range_err(format!("chr needs a code point from 0 to 1114111 (0x10FFFF), got {point}")),
     }
 }
 

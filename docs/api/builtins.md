@@ -40,6 +40,34 @@ classification helpers; its arithmetic functions require finite inputs/results.
 Constructors `arr`, `set`, `pair`, `map`, and `dict` are documented in
 [Collections](collections.md).
 
+## Characters and code points
+
+| Call | Behavior |
+| --- | --- |
+| `ord(text)` | The Unicode code point of a one-character string, as an `int` |
+| `chr(number)` | The one-character string for a code point |
+
+```mars
+out(ord("a"), ord("中"), ord("😀"));   // 97 20013 128512
+out(chr(97), chr(ord("A") + 2));      // a C
+```
+
+A code point is the number Unicode gives a character, from `0` to `1114111`
+(`0x10FFFF`). Most characters are one code point, but some that look like one
+character are several: `é` can be written as `e` followed by a combining accent,
+and a family emoji joins several people. Marslang's strings count those as one
+character, so `ord` of one raises `RangeError` and lists the code points it is
+made of:
+
+```text
+RangeError: ord needs one code point, but "é" is 2 (U+0065 U+0301); take ord of each part
+```
+
+`chr` raises `RangeError` for a number outside that range and for `55296` to
+`57343` (`U+D800` to `U+DFFF`), the surrogate halves, which UTF-16 uses in pairs
+and which are not characters on their own. It accepts an `int`, a `longint`, or
+a whole-number `float`.
+
 ## Runtime errors
 
 Errors are families. `Error` is the base family; the built-in kinds below inherit

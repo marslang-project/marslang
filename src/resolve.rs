@@ -187,7 +187,7 @@ impl Resolver {
                 if let Some(binding) = self.find(name) {
                     *e = binding.hot.unwrap_or(Expr::Ident(binding.name));
                 } else if !matches!(name.as_str(), "me" | "out" | "slout" | "in" | "inln" | "arr" | "set" | "pair" | "map" | "dict" | "a" | "s" | "p" | "int" | "longint" | "float" | "string"
-                    | "err" | "lasterr" | "Error" | "TypeError" | "RangeError" | "OutOfBoundsError" | "SyntaxError") {
+                    | "err" | "lasterr" | "ord" | "chr" | "Error" | "TypeError" | "RangeError" | "OutOfBoundsError" | "SyntaxError") {
                     return Err(format!("unknown name '{name}'"));
                 }
             }

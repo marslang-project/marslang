@@ -1,0 +1,47 @@
+// std.os: the machine and process a program runs in: environment variables,
+// the working directory, the home directory, and which platform this is.
+// Reading and writing files is std.file, which is planned.
+takepkg rs.os = native;
+takepkg std.Decorator;
+
+// The path separator, "\" on Windows and "/" elsewhere.
+fixed SEP (string) = native.separator();
+
+@Decorator.docstring("""
+    The value of the environment variable name, or null when it is not set.
+
+        editor = os.env("EDITOR");
+        if (editor == null){ editor = "nano"; }
+
+    Names are case-sensitive except on Windows. A name that is empty or holds
+    = raises RangeError.
+""")
+func env(string name) => native.env(name);
+
+@Decorator.docstring("The value of the environment variable name, or fallback when it is not set.")
+func env_or(string name, string fallback){
+    value = native.env(name);
+    if (value == null){ ret fallback; }
+    ret value;
+}
+
+@Decorator.docstring("Every environment variable, as a map from name to value, sorted by name.")
+func environment() => native.environment();
+
+@Decorator.docstring("The directory the program was started in, the one relative paths are read from.")
+func cwd() => native.cwd();
+
+@Decorator.docstring("The user's home directory, or null when the environment does not say.")
+func home() => native.home();
+
+@Decorator.docstring("""
+    The operating system: "windows", "linux", or "macos", and otherwise the
+    name Rust gives it, such as "freebsd".
+""")
+func platform() => native.platform();
+
+@Decorator.docstring("The processor architecture, such as \"x86_64\" or \"aarch64\".")
+func arch() => native.arch();
+
+@Decorator.docstring("The process ID of the running program.")
+func pid() => native.pid();

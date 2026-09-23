@@ -1,0 +1,34 @@
+// std.sys: the interpreter running the program: its version, where it is,
+// where installed packages come from, and the limits of its number kinds.
+// The program's own arguments and exit status are std.cli; the machine it
+// runs on is std.os.
+takepkg rs.sys = native;
+takepkg std.Decorator;
+
+// The interpreter's version, such as "rs-0.14.0", as marslang --version prints it.
+fixed VERSION (string) = native.version();
+
+// The range of int: signed 32-bit.
+fixed INT_MIN (int) = -2147483648;
+fixed INT_MAX (int) = 2147483647;
+
+// The range of longint: signed 64-bit.
+fixed LONGINT_MIN (longint) = -9223372036854775808;
+fixed LONGINT_MAX (longint) = 9223372036854775807;
+
+// The largest whole number a float holds exactly, 2^53 - 1. Above it, int
+// arithmetic that would lose digits raises RangeError instead.
+fixed MAX_SAFE (longint) = 9007199254740991;
+
+@Decorator.docstring("The path of the marslang executable running this program, or null when the system does not say.")
+func executable() => native.executable();
+
+@Decorator.docstring("""
+    The directory installed packages are imported from: MARSLANG_PKGS when it
+    is set, otherwise marslang_pkgs in the home directory. The same path
+    marslang pkgs prints. null when there is no home directory to use.
+""")
+func package_dir() => native.package_dir();
+
+@Decorator.docstring("The name of every standard package, such as \"std.math\", as an array of strings.")
+func standard_packages() => native.standard_packages();

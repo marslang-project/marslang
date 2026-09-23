@@ -92,7 +92,8 @@ Implemented:
 - `takepkg` packages (similar to Python's): bundled standard packages (`takepkg std.math;`), package directories with `init.mars`, module files (`takepkg shapes.circle;`), relative imports (`takepkg .sibling;`, `takepkg ..parent;`), and optional aliases
 - built-in `arr`, `set`, `pair`, `map`/`dict`; legacy `a`/`s`/`p` remain compatibility spellings
 - array operations, collection `.len()`/`.is_empty()`/`.has()`, insertion-ordered map keys and snapshot iteration
-- `out`, `slout`, `in`, and `inln`
+- `out`, `slout`, `in`, and `inln`; `ord` and `chr` for code points
+- standard packages for math, strings, containers, algorithms, statistics, JSON, the command line, the environment (`std.os`, `std.sys`), and object identity (`std.memory`); see [docs/api](docs/api/README.md)
 - `fasle` accepted as `false`
 
 Not yet:
