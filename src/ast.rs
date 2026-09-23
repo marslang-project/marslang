@@ -62,7 +62,9 @@ pub struct Decorator {
     pub arg: Option<Expr>,
 }
 
-/// Method access set by `@Decorator.private` / `@Decorator.subclass`.
+/// Method access set by `@Decorator.private` / `@Decorator.subclass`. On a
+/// function declared outside a family, `Private` means the package does not
+/// export it; there is nothing to restrict at runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Access {
     #[default]
@@ -91,6 +93,8 @@ pub struct FamilyDecl {
     pub extends: Option<String>,
     pub methods: Vec<FuncDecl>,
     pub decorators: Vec<Decorator>,
+    /// `@Decorator.private`: the package keeps this family to itself.
+    pub private: bool,
     /// Documentation from `@Decorator.docstring(...)`, with indentation removed.
     pub doc: Option<String>,
     /// Source lines of the header and of the closing brace.

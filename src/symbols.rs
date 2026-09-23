@@ -134,9 +134,17 @@ fn exported_function(function: &FuncDecl, family: Option<&str>) -> String {
         format!("{{\"name\":{},\"type\":{}}}", string(written(&param.name)), optional(ty))
     }).collect();
     format!(
-        "{{\"name\":{},\"family\":{},\"line\":{},\"end\":{},\"params\":[{}],\"doc\":{},\"access\":\"public\"}}",
+        "{{\"name\":{},\"family\":{},\"line\":{},\"end\":{},\"params\":[{}],\"doc\":{},\"access\":{}}}",
         string(&function.name), optional(family), function.line, function.end_line,
-        params.join(","), optional(function.doc.as_deref()))
+        params.join(","), optional(function.doc.as_deref()), string(access_name(function.access)))
+}
+
+pub(crate) fn access_name(access: Access) -> &'static str {
+    match access {
+        Access::Public => "public",
+        Access::Private => "private",
+        Access::Subclass => "subclass",
+    }
 }
 
 /// A resolved binding name (`__v12_x`) as it was written (`x`).
@@ -171,11 +179,7 @@ impl Walker<'_> {
             format!("{{\"name\":{},\"type\":{}}}", string(&param.name), optional(ty.as_deref()))
         }).collect();
         if let FuncBody::Block(body) = &function.body { self.block(body, &scope, &mut known); }
-        let access = match function.access {
-            Access::Public => "public",
-            Access::Private => "private",
-            Access::Subclass => "subclass",
-        };
+        let access = access_name(function.access);
         format!(
             "{{\"name\":{},\"family\":{},\"line\":{},\"end\":{},\"params\":[{}],\"doc\":{},\"access\":{}}}",
             string(&function.name), optional(family), function.line, function.end_line,

@@ -707,6 +707,31 @@ fn takepkg_loads_marslang_package_files() {
 }
 
 #[test]
+fn private_declarations_stay_inside_their_package() {
+    let dir = package_dir("private", &[
+        ("main.mars", "takepkg tools;\nfunc m{ out(tools.twice(21), tools.Open().x); }"),
+        ("tools.mars", "takepkg std.Decorator;\n\
+            @Decorator.private\nfunc helper(int x) => x;\n\
+            func twice(int x) => helper(x) + helper(x);\n\
+            @Decorator.private\nfamily Secret{ func init(){ me.x = 1; } }\n\
+            family Open{ func init(){ me.x = 2; } }"),
+    ]);
+    // A private helper is still callable inside its own package.
+    let (out, result) = run_file(&dir.join("main.mars"));
+    result.expect("runtime error");
+    assert_eq!(out, "42 2\n");
+
+    for (body, message) in [
+        ("tools.helper(1);", "tools has no member 'helper'"),
+        ("tools.Secret();", "tools has no member 'Secret'"),
+    ] {
+        std::fs::write(dir.join("main.mars"), format!("takepkg tools;\nfunc m{{ {body} }}")).unwrap();
+        let error = run_file(&dir.join("main.mars")).1.expect_err(body).to_string();
+        assert!(error.contains(message), "{body}: {error}");
+    }
+}
+
+#[test]
 fn takepkg_reports_missing_circular_and_native_packages() {
     let dir = package_dir("package-errors", &[
         ("a.mars", "takepkg b;\nfunc f => 1;"),
@@ -1182,7 +1207,7 @@ fn decorators_need_the_package_and_a_known_marker() {
         ("takepkg std.Decorator;\nfamily Box{\n @Decorator.static\n func x() => 1;\n}", "@Decorator.static is not implemented yet"),
         ("takepkg std.Decorator;\nfamily Box{\n @Decorator.private @Decorator.subclass\n func x() => 1;\n}", "cannot be both private and subclass"),
         ("takepkg std.Decorator;\nfamily Box{\n @Decorator.private\n func init(){}\n}", "constructors are always public"),
-        ("takepkg std.Decorator;\n@Decorator.private\nfunc x() => 1;", "line 3: @Decorator.private applies to family methods, not to func x"),
+        ("takepkg std.Decorator;\n@Decorator.subclass\nfunc x() => 1;", "line 3: @Decorator.subclass applies to family methods, not to func x"),
         ("takepkg std.Decorator;\nfamily Box{\n @Decorator.private\n}", "must be followed by a func"),
         ("takepkg std.Decorator;\nfamily Box{\n @private\n func x() => 1;\n}", "invalid decorator"),
     ] {
@@ -1297,7 +1322,8 @@ fn docstrings_describe_functions_families_and_methods() {
     for (source, message) in [
         ("takepkg std.Decorator;\n@Decorator.docstring(42)\nfunc f() => 1;", "@Decorator.docstring needs one string"),
         ("takepkg std.Decorator;\n@Decorator.docstring(\"a\")\n@Decorator.docstring(\"b\")\nfunc f() => 1;", "func f has more than one @Decorator.docstring"),
-        ("takepkg std.Decorator;\n@Decorator.private\nfamily Box{}", "@Decorator.private applies to family methods, not to family Box"),
+        ("takepkg std.Decorator;\n@Decorator.subclass\nfamily Box{}", "@Decorator.subclass applies to family methods, not to family Box"),
+        ("takepkg std.Decorator;\n@Decorator.private(\"x\")\nfunc f() => 1;", "@Decorator.private takes no argument"),
         ("takepkg std.Decorator;\nfamily Box{\n @Decorator.private(\"x\")\n func x() => 1;\n}", "@Decorator.private takes no argument"),
         ("takepkg std.Decorator;\n@Decorator.docstring(\"a\")\nx = 1;", "line 3: decorators must be followed by a func or family"),
         ("@Decorator.docstring(\"a\")\nfunc f() => 1;", "needs `takepkg std.Decorator;`"),

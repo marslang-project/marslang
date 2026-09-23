@@ -129,9 +129,9 @@ families inheriting from it. `Function` and `Family` are for parameters only.
   to report where an error is.
 - **Comments** are `// to the end of the line` and `/* ... */`, which do not nest.
 - **Names** start with an ASCII letter or `_`, then letters, digits, and `_`.
-  A name starting with `_` is private to its package, and a method name
-  starting with `_` is only a convention; privacy for methods is
-  `@Decorator.private`.
+  A name starting with `_` is private to its package, as is a function or
+  family marked `@Decorator.private`. A method name starting with `_` is only a
+  convention; privacy for methods is `@Decorator.private` as well.
 - **Keywords**: `func` `family` `takepkg` `ret` `if` `elif` `else` `while`
   `repeat` `for` `break` `continue` `run` `handle` `then` `fixed` `hot` `cold`
   `and` `or` `not` `also` `true` `false` `fasle` `null` `me`.

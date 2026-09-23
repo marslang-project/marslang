@@ -342,6 +342,7 @@ fn parse_family_from(header: &str, lines: &[Line], start: usize) -> PResult<(Fam
                     extends,
                     methods,
                     decorators: Vec::new(),
+                    private: false,
                     doc: None,
                     line: lines[start].number,
                     end_line: lines[i].number,

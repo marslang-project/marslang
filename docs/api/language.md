@@ -328,7 +328,8 @@ looked for, in both places.
 Each package is loaded once under its absolute name, however it is written or however
 many files import it; its top-level statements run once, before the importing file's.
 A package exports its functions, families, and `fixed`/`hot` top-level bindings.
-Names that start with `_` are private to the package. A package's `m` function is not
+Names that start with `_` are private to the package, and so is a function or
+family marked [`@Decorator.private`](std-decorator.md#private-declarations). A package's `m` function is not
 run. Circular imports are rejected. `takepkg package = *;` is planned and currently rejected.
 
 Standard packages are written in Marslang under `std/`. The few primitives Marslang

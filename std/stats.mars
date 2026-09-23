@@ -11,6 +11,7 @@ takepkg std.Decorator;
 takepkg std.math;
 takepkg std.types;
 
+@Decorator.private
 func _numbers(string name, array values){
     if (values.is_empty()){ core.raise(RangeError, "std.stats." + name + " needs at least one number"); }
     result = arr();
@@ -24,6 +25,7 @@ func _numbers(string name, array values){
 }
 
 // Neumaier summation: carry the digits each addition drops.
+@Decorator.private
 func _sum(array values){
     total = 0.0;
     lost = 0.0;
@@ -108,6 +110,7 @@ func pvariance(array values){
 }
 
 // Two passes: the mean, then the squared distances from it.
+@Decorator.private
 func _squares(array numbers){
     middle = _sum(numbers) / float(numbers.len());
     squares = arr();
@@ -121,6 +124,7 @@ func stdev(array values) => _root(variance(values));
 @Decorator.docstring("The standard deviation of a whole population: the square root of pvariance.")
 func pstdev(array values) => _root(pvariance(values));
 
+@Decorator.private
 func _root(float x){
     if (x <= 0.0){ ret 0.0; }
     ret math.sqrt(x);

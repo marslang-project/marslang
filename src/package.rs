@@ -213,6 +213,10 @@ impl Loader {
         }
         for item in &program.items {
             match item {
+                // @Decorator.private, like a leading underscore, keeps a
+                // declaration inside its own package.
+                Item::Func(f) if f.access == Access::Private => {}
+                Item::Family(f) if f.private => {}
                 Item::Func(f) => exports.push((f.name.clone(), Export::Function(f.name.clone()))),
                 Item::Family(f) => exports.push((f.name.clone(), Export::Family(f.name.clone()))),
                 _ => {}
@@ -276,13 +280,17 @@ pub(crate) fn apply_decorators(program: &mut Program, markers: &[String]) -> Res
         match item {
             Item::Func(function) => {
                 let line = function.line;
-                function.doc = check.docstring(&function.decorators, &format!("func {}", function.name), false)
+                let (doc, private) = check.docstring(&function.decorators, &format!("func {}", function.name), false)
                     .map_err(|e| crate::parser::at_line(line, e))?;
+                function.doc = doc;
+                if private { function.access = Access::Private; }
             }
             Item::Family(family) => {
                 let line = family.line;
-                family.doc = check.docstring(&family.decorators, &format!("family {}", family.name), false)
+                let (doc, private) = check.docstring(&family.decorators, &format!("family {}", family.name), false)
                     .map_err(|e| crate::parser::at_line(line, e))?;
+                family.doc = doc;
+                family.private = private;
                 for method in &mut family.methods {
                     let line = method.line;
                     check.method(&family.name, method).map_err(|e| crate::parser::at_line(line, e))?;
@@ -313,10 +321,12 @@ impl Decorators<'_> {
         Ok(name)
     }
 
-    /// Apply the decorators of a function or family that is not a method: only
-    /// `@Decorator.docstring` applies there. Returns the docstring, if any.
-    fn docstring(&self, decorators: &[Decorator], what: &str, method: bool) -> Result<Option<String>, String> {
+    /// Apply the decorators of a function or family that is not a method:
+    /// `@Decorator.docstring` and `@Decorator.private` apply there. Returns the
+    /// docstring, if any, and whether the declaration is private to its package.
+    fn docstring(&self, decorators: &[Decorator], what: &str, method: bool) -> Result<(Option<String>, bool), String> {
         let mut doc = None;
+        let mut private = false;
         for decorator in decorators {
             let name = self.marker(decorator)?;
             match name {
@@ -327,18 +337,24 @@ impl Decorators<'_> {
                     if doc.is_some() { return Err(format!("{what} has more than one @{}", decorator.name)); }
                     doc = Some(clean_doc(text));
                 }
-                "private" | "subclass" if !method => {
+                // Outside a family there is no caller to check, so private
+                // means one thing: the package does not export it.
+                "private" if !method => {
+                    if decorator.arg.is_some() { return Err(format!("@{} takes no argument", decorator.name)); }
+                    private = true;
+                }
+                "subclass" if !method => {
                     return Err(format!("@{} applies to family methods, not to {what}", decorator.name));
                 }
                 "private" | "subclass" => {}
                 _ => return Err(format!("@{} is not implemented yet", decorator.name)),
             }
         }
-        Ok(doc)
+        Ok((doc, private))
     }
 
     fn method(&self, family: &str, method: &mut FuncDecl) -> Result<(), String> {
-        method.doc = self.docstring(&method.decorators, &format!("{family}.{}", method.name), true)?;
+        method.doc = self.docstring(&method.decorators, &format!("{family}.{}", method.name), true)?.0;
         for decorator in &method.decorators {
             let access = match self.marker(decorator)? {
                 "private" => Access::Private,

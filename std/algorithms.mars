@@ -55,6 +55,7 @@ func sort_by(array items, Function key){
     ret result;
 }
 
+@Decorator.private
 func _key_kind(any k){
     if (types.is_number(k)){ ret "number"; }
     if (core.kind(k) == "string"){ ret "string"; }
@@ -93,6 +94,7 @@ func sort_with(array items, Function compare){
 
 // Cut items into ordered runs: take the ascending run that is already there,
 // then extend it to _RUN items by insertion, which is what Timsort does.
+@Decorator.private
 func _runs(array items, Function compare){
     runs = arr();
     start = 0;
@@ -109,6 +111,7 @@ func _runs(array items, Function compare){
     ret runs;
 }
 
+@Decorator.private
 func _insertion(array items, Function compare){
     for (i = 1, i < items.len(), i++){
         value = items.iget(i);
@@ -122,6 +125,7 @@ func _insertion(array items, Function compare){
     ret items;
 }
 
+@Decorator.private
 func _merge(array left, array right, Function compare){
     result = arr();
     i = 0;
