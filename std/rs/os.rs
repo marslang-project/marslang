@@ -28,9 +28,16 @@ pub fn package() -> Value {
             Ok(std::env::var_os(&name).map_or(Value::Null, |value| Value::str(&value.to_string_lossy())))
         })
         // Every environment variable as a map, sorted by name so output is stable.
+        // Windows ignores case in names (Path and PATH are one variable), so
+        // there the names are upper-cased, as Python's os.environ does, and
+        // environment().get("PATH") works on every platform.
         .function("environment", 0, |_| {
             let mut pairs: Vec<(String, String)> = std::env::vars_os()
-                .map(|(k, v)| (k.to_string_lossy().into_owned(), v.to_string_lossy().into_owned()))
+                .map(|(k, v)| {
+                    let name = k.to_string_lossy().into_owned();
+                    let name = if cfg!(windows) { name.to_uppercase() } else { name };
+                    (name, v.to_string_lossy().into_owned())
+                })
                 .collect();
             pairs.sort();
             let mut items = indexmap::IndexMap::new();

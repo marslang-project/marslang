@@ -25,8 +25,11 @@ func m{
 | `pid()` | The process ID of the running program |
 | `SEP` | The path separator: `"\\"` on Windows, `"/"` elsewhere |
 
-Environment variable names are case-sensitive, except on Windows. A name that is
-empty or contains `=` raises `RangeError`. A value that is not valid Unicode is
+Environment variable names are case-sensitive, except on Windows, where `Path`
+and `PATH` are one variable. `env` follows the platform's rule, and on Windows
+`environment()` spells every name in upper case, as Python's `os.environ` does,
+so `os.environment().get("PATH")` works everywhere. A name that is empty or
+contains `=` raises `RangeError`. A value that is not valid Unicode is
 read with replacement characters rather than raising.
 
 `std.os` reads the environment and does not change it. Files and directories

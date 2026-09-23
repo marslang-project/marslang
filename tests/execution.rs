@@ -1703,6 +1703,12 @@ fn std_os_and_std_sys_describe_the_machine_and_interpreter() {
         }"#, &format!("{platform} true 1 true\ntrue null fallback\ntrue true\n"));
     runtime_error("takepkg std.os;\nfunc m{ os.env(\"A=B\"); }", "os.env needs a variable name without '=' or NUL");
 
+    // Windows ignores case in names, so environment() upper-cases them there;
+    // elsewhere a name keeps its spelling. os.env follows the platform's rule.
+    std::env::set_var("Marslang_Mixed_Case", "set");
+    let listed = if cfg!(windows) { "MARSLANG_MIXED_CASE" } else { "Marslang_Mixed_Case" };
+    executes(&format!("takepkg std.os;\nfunc m{{ out(os.environment().get(\"{listed}\"), os.env(\"Marslang_Mixed_Case\")); }}"), "set set\n");
+
     executes(r#"
         takepkg std.sys;
         func m{

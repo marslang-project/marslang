@@ -25,7 +25,11 @@ func env_or(string name, string fallback){
     ret value;
 }
 
-@Decorator.docstring("Every environment variable, as a map from name to value, sorted by name.")
+@Decorator.docstring("""
+    Every environment variable, as a map from name to value, sorted by name.
+    Windows ignores case in names, so there they are upper case, as in PATH,
+    however the system spells them.
+""")
 func environment() => native.environment();
 
 @Decorator.docstring("The directory the program was started in, the one relative paths are read from.")
