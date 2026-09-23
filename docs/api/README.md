@@ -16,6 +16,8 @@ notes elsewhere under `docs/` remain local.
 - [Built-ins and errors](builtins.md): input/output, conversions, and runtime errors.
 - [std.math](std-math.md): 51 math functions and six constants, written in Marslang on native float primitives.
 - [std.containers](std-containers.md): stack, queue, deque, and priority queue.
+- [std.algorithms](std-algorithms.md): sorting by a key or a comparison, binary search, and the usual collection passes.
+- [std.stats](std-stats.md): mean, median, mode, quantiles, spread, and correlation.
 - [std.strings](std-strings.md): splitting, searching, trimming, case, and padding.
 - [std.types](std-types.md): a value's kind, family checks.
 - [std.time](std-time.md): clocks and sleeping.

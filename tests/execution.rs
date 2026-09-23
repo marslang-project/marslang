@@ -1523,6 +1523,95 @@ fn std_cli_help_and_exit() {
 }
 
 #[test]
+fn algorithms_sort_by_key_and_by_comparator() {
+    // sort_by regroups around the interpreter's own sort; sort_with merges runs.
+    executes(r#"
+        takepkg std.algorithms;
+        func m{
+            ps = arr(pair(1,"a"), pair(0,"b"), pair(1,"c"), pair(0,"d"));
+            for (p, algorithms.sort_by(ps, func(any p) => p.first)){ slout(p.second); }
+            out("");
+            for (p, algorithms.sort_with(ps, func(any a, any b) => b.first - a.first)){ slout(p.second); }
+            out("");
+            out(algorithms.sorted(arr(3,1,2)), algorithms.sort_by(arr("bb","a"), func(string s) => s.len()));
+            out(algorithms.sort_with(arr(), func(any a, any b) => 0).len());
+        }"#,
+        "bdac\nacbd\n[1, 2, 3] [\"a\", \"bb\"]\n0\n");
+
+    // Long enough to pass the insertion-sort threshold and merge several runs.
+    executes(r#"
+        takepkg std.algorithms;
+        func m{
+            xs = arr(); seed = longint(7);
+            repeat 300 { seed = (seed * longint(1103515245) + longint(12345)) % longint(2147483648); xs.add(int(seed % longint(100))); }
+            merged = algorithms.sort_with(xs, func(any a, any b) => a - b);
+            keyed = algorithms.sort_by(xs, func(int x) => x);
+            native = algorithms.sorted(xs);
+            ordered = true;
+            for (i = 0, i < native.len(), i++){
+                if (merged.iget(i) != native.iget(i) or keyed.iget(i) != native.iget(i)){ ordered = false; }
+            }
+            out(ordered, merged.len());
+        }"#, "true 300\n");
+
+    runtime_error("takepkg std.algorithms;\nfunc m{ algorithms.sort_by(arr(1,\"a\"), func(any x) => x); }",
+        "keys must all be numbers or all be strings");
+    runtime_error("takepkg std.algorithms;\nfunc m{ algorithms.sort_by(arr(arr()), func(any x) => x); }",
+        "keys must be numbers or strings, not array");
+}
+
+#[test]
+fn algorithms_search_and_collection_passes() {
+    executes(r#"
+        takepkg std.algorithms;
+        func m{
+            sorted = arr(1, 3, 3, 7);
+            out(algorithms.binary_search(sorted, 7), algorithms.binary_search(sorted, 4));
+            out(algorithms.lower_bound(sorted, 3), algorithms.upper_bound(sorted, 3), algorithms.lower_bound(sorted, 9));
+            out(algorithms.transform(arr(1,2,3), func(int x) => x * x));
+            out(algorithms.keep(arr(1,2,3,4), func(int x) => x % 2 == 0));
+            out(algorithms.fold(arr(1,2,3), 0, func(int a, int b) => a + b));
+            out(algorithms.min_by(arr("aaa","a","b"), func(string s) => s.len()), algorithms.max_by(arr(), func(any x) => x));
+            out(algorithms.any_of(arr(1,2), func(int x) => x > 1), algorithms.all_of(arr(1,2), func(int x) => x > 1), algorithms.all_of(arr(), func(any x) => false));
+            out(algorithms.unique(arr(1,2,1,3)), algorithms.counts(arr("a","b","a")));
+            out(algorithms.group_by(arr(1,2,3,4), func(int x) => x % 2));
+        }"#,
+        "3 -1\n1 3 4\n[1, 4, 9]\n[2, 4]\n6\na null\ntrue false true\n[1, 2, 3] {\"a\": 2, \"b\": 1}\n{1: [1, 3], 0: [2, 4]}\n");
+}
+
+#[test]
+fn stats_match_python_statistics_and_numpy() {
+    // Checked against Python's statistics module and numpy.percentile.
+    executes(r#"
+        takepkg std.stats;
+        func m{
+            xs = arr(2, 4, 4, 4, 5, 5, 7, 9);
+            out(stats.mean(xs), stats.median(xs), stats.mode(xs));
+            out(stats.variance(xs), stats.pvariance(xs));
+            out(stats.stdev(xs), stats.pstdev(xs));
+            out(stats.quantile(xs, 0.25), stats.quantile(xs, 0.75), stats.quantile(xs, 0.1));
+            ys = arr(1.0, 2.0, 3.0, 4.0); zs = arr(2.0, 4.0, 7.0, 8.0);
+            out(stats.correlation(ys, zs), stats.covariance(ys, zs));
+            out(stats.sum(arr()), stats.mean(arr(longint(3), 4)), stats.quantile(arr(5), 0.9));
+        }"#,
+        "5 4.5 4\n4.571428571428571 4\n2.138089935299395 2\n4 5.5 3.4000000000000004\n0.9844951849708403 3.5\n0 3.5 5\n");
+
+    // Compensated summation: adding these left to right gives 0.6000000000000001.
+    executes("takepkg std.stats;\nfunc m{ out(stats.sum(arr(0.1, 0.2, 0.3))); }", "0.6\n");
+
+    for (source, message) in [
+        ("stats.mean(arr());", "needs at least one number"),
+        ("stats.mean(arr(1, \"a\"));", "needs numbers, not string"),
+        ("stats.quantile(arr(1, 2), 1.5);", "needs q between 0.0 and 1.0"),
+        ("stats.variance(arr(1));", "needs at least two numbers"),
+        ("stats.covariance(arr(1, 2), arr(1));", "arrays of the same length"),
+        ("stats.correlation(arr(1, 1), arr(1, 2));", "numbers that are not all the same"),
+    ] {
+        runtime_error(&format!("takepkg std.stats;\nfunc m{{ {source} }}"), message);
+    }
+}
+
+#[test]
 fn decorator_package_lists_the_available_markers() {
     executes("takepkg std.Decorator;\nfunc m{ out(Decorator.private, Decorator.subclass, Decorator.static); }",
         "private subclass static\n");

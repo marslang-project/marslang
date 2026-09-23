@@ -1,0 +1,158 @@
+// std.stats: descriptive statistics over arrays of numbers, written in
+// Marslang. Results are floats, because an average is rarely whole.
+//
+// Sums are compensated (Neumaier's improvement on Kahan summation), so adding
+// many numbers does not drift. Variance is the two-pass form, which stays
+// accurate when the numbers are large and close together, where summing
+// squares and subtracting the square of the sum loses every digit.
+// Quantiles interpolate between neighbours, the rule NumPy and R call type 7.
+takepkg rs.core;
+takepkg std.Decorator;
+takepkg std.math;
+takepkg std.types;
+
+func _numbers(string name, array values){
+    if (values.is_empty()){ core.raise(RangeError, "std.stats." + name + " needs at least one number"); }
+    result = arr();
+    for (value, values){
+        if (not types.is_number(value)){
+            core.raise(TypeError, "std.stats." + name + " needs numbers, not " + core.kind(value));
+        }
+        result.add(float(value));
+    }
+    ret result;
+}
+
+// Neumaier summation: carry the digits each addition drops.
+func _sum(array values){
+    total = 0.0;
+    lost = 0.0;
+    for (value, values){
+        running = total + value;
+        if (math.abs(total) >= math.abs(value)){
+            lost = lost + ((total - running) + value);
+        } else {
+            lost = lost + ((value - running) + total);
+        }
+        total = running;
+    }
+    ret total + lost;
+}
+
+@Decorator.docstring("The sum of the numbers, as a float. Compensated, so a long array of floats does not drift.")
+func sum(array values){
+    if (values.is_empty()){ ret 0.0; }
+    ret _sum(_numbers("sum", values));
+}
+
+@Decorator.docstring("The average of the numbers, as a float. An empty array raises RangeError.")
+func mean(array values){
+    numbers = _numbers("mean", values);
+    ret _sum(numbers) / float(numbers.len());
+}
+
+@Decorator.docstring("The middle number once sorted; the average of the middle two when there is an even count. An empty array raises RangeError.")
+func median(array values) => quantile(values, 0.5);
+
+@Decorator.docstring("""
+    The value at fraction q of the sorted numbers, between 0.0 and 1.0:
+    quantile(values, 0.5) is the median and quantile(values, 0.25) the first
+    quartile. Between two neighbours the result is interpolated, the rule
+    NumPy and R call type 7.
+""")
+func quantile(array values, float q){
+    if (q < 0.0 or q > 1.0 or q != q){
+        core.raise(RangeError, "std.stats.quantile needs q between 0.0 and 1.0");
+    }
+    numbers = _numbers("quantile", values);
+    numbers.asort();
+    if (numbers.len() == 1){ ret numbers.iget(0); }
+    position = q * float(numbers.len() - 1);
+    below = math.floor(position);
+    above = below + 1.0;
+    if (above >= float(numbers.len())){ ret numbers.iget(below); }
+    share = position - below;
+    ret numbers.iget(below) + share * (numbers.iget(above) - numbers.iget(below));
+}
+
+@Decorator.docstring("The most common value, keeping its own kind. The first one wins when several tie. An empty array raises RangeError.")
+func mode(array values){
+    if (values.is_empty()){ core.raise(RangeError, "std.stats.mode needs at least one value"); }
+    seen = map();
+    best = null;
+    best_count = 0;
+    for (value, values){
+        count = 1;
+        if (seen.has(value)){ count = seen.get(value) + 1; }
+        seen.set(value, count);
+        if (count > best_count){ best = value; best_count = count; }
+    }
+    ret best;
+}
+
+@Decorator.docstring("""
+    The sample variance: how far the numbers spread around their mean,
+    dividing by len - 1 because the numbers are a sample of something larger.
+    Needs at least two numbers. For a whole population use pvariance.
+""")
+func variance(array values){
+    numbers = _numbers("variance", values);
+    if (numbers.len() < 2){ core.raise(RangeError, "std.stats.variance needs at least two numbers"); }
+    ret _squares(numbers) / float(numbers.len() - 1);
+}
+
+@Decorator.docstring("The variance of a whole population, dividing by len. An empty array raises RangeError.")
+func pvariance(array values){
+    numbers = _numbers("pvariance", values);
+    ret _squares(numbers) / float(numbers.len());
+}
+
+// Two passes: the mean, then the squared distances from it.
+func _squares(array numbers){
+    middle = _sum(numbers) / float(numbers.len());
+    squares = arr();
+    for (value, numbers){ squares.add((value - middle) * (value - middle)); }
+    ret _sum(squares);
+}
+
+@Decorator.docstring("The sample standard deviation: the square root of variance, in the same unit as the numbers. Needs at least two numbers.")
+func stdev(array values) => _root(variance(values));
+
+@Decorator.docstring("The standard deviation of a whole population: the square root of pvariance.")
+func pstdev(array values) => _root(pvariance(values));
+
+func _root(float x){
+    if (x <= 0.0){ ret 0.0; }
+    ret math.sqrt(x);
+}
+
+@Decorator.docstring("""
+    How much two arrays vary together, the sample covariance. Both must be the
+    same length and hold at least two numbers. Positive means they rise
+    together, negative that one falls as the other rises.
+""")
+func covariance(array xs, array ys){
+    a = _numbers("covariance", xs);
+    b = _numbers("covariance", ys);
+    if (a.len() != b.len()){ core.raise(RangeError, "std.stats.covariance needs two arrays of the same length"); }
+    if (a.len() < 2){ core.raise(RangeError, "std.stats.covariance needs at least two numbers"); }
+    mean_a = _sum(a) / float(a.len());
+    mean_b = _sum(b) / float(b.len());
+    products = arr();
+    for (i = 0, i < a.len(), i++){
+        products.add((a.iget(i) - mean_a) * (b.iget(i) - mean_b));
+    }
+    ret _sum(products) / float(a.len() - 1);
+}
+
+@Decorator.docstring("""
+    Pearson's correlation between two arrays, from -1.0 to 1.0: 1.0 when one
+    rises exactly as the other does, -1.0 when one falls as the other rises,
+    and near 0.0 when they are unrelated. Needs two arrays of the same length,
+    each with at least two different numbers.
+""")
+func correlation(array xs, array ys){
+    spread = stdev(xs) * stdev(ys);
+    if (spread == 0.0){ core.raise(RangeError, "std.stats.correlation needs numbers that are not all the same"); }
+    ret covariance(xs, ys) / spread;
+}

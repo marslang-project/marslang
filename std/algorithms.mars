@@ -1,0 +1,266 @@
+// std.algorithms: sorting, searching, and the usual collection passes,
+// written in Marslang.
+//
+// Sorting is O(n log n) in every case. sort_by sorts the keys with the
+// interpreter's own sort and regroups, so the heavy work stays native.
+// sort_with must call the comparison for every pair it looks at, so it uses a
+// merge sort that finds runs that are already ordered, like Timsort, and
+// insertion sort below _RUN items, the threshold pdqsort and introsort use.
+takepkg rs.core;
+takepkg std.Decorator;
+takepkg std.types;
+
+// Short runs are cheaper to insert than to split and merge again.
+fixed _RUN (int) = 16;
+
+// ----- sorting -----
+
+@Decorator.docstring("A sorted copy of items, smallest first, leaving items unchanged.")
+func sorted(array items){
+    copy = items.slice(0, items.len());
+    copy.asort();
+    ret copy;
+}
+
+@Decorator.docstring("""
+    A copy of items sorted by what key returns for each one, smallest first.
+    Items with an equal key keep the order they had.
+
+        algorithms.sort_by(people, func(Person p) => p.age);
+
+    Every key must be a number, or every key a string; anything else raises
+    TypeError.
+""")
+func sort_by(array items, Function key){
+    buckets = map();
+    keys = arr();
+    kind = null;
+    for (item, items){
+        k = key(item);
+        if (kind == null){ kind = _key_kind(k); } elif (_key_kind(k) != kind){
+            core.raise(TypeError, "std.algorithms.sort_by keys must all be numbers or all be strings");
+        }
+        if (buckets.has(k)){
+            buckets.get(k).add(item);
+        } else {
+            buckets.set(k, arr(item));
+            keys.add(k);
+        }
+    }
+    keys.asort();
+    result = arr();
+    for (k, keys){
+        for (item, buckets.get(k)){ result.add(item); }
+    }
+    ret result;
+}
+
+func _key_kind(any k){
+    if (types.is_number(k)){ ret "number"; }
+    if (core.kind(k) == "string"){ ret "string"; }
+    core.raise(TypeError, "std.algorithms.sort_by keys must be numbers or strings, not " + core.kind(k));
+}
+
+@Decorator.docstring("""
+    A copy of items sorted by compare, which takes two items and returns a
+    negative number when the first comes first, 0 when they tie, and a positive
+    number when the second comes first.
+
+        algorithms.sort_with(tasks, func(any a, any b) => a.cost - b.cost);
+
+    Items that tie keep the order they had. Already sorted input is sorted in
+    one pass.
+""")
+func sort_with(array items, Function compare){
+    copy = items.slice(0, items.len());
+    if (copy.len() < 2){ ret copy; }
+    runs = _runs(copy, compare);
+    while (runs.len() > 1){
+        merged = arr();
+        i = 0;
+        while (i < runs.len()){
+            if (i + 1 < runs.len()){
+                merged.add(_merge(runs.iget(i), runs.iget(i + 1), compare));
+            } else {
+                merged.add(runs.iget(i));
+            }
+            i = i + 2;
+        }
+        runs = merged;
+    }
+    ret runs.iget(0);
+}
+
+// Cut items into ordered runs: take the ascending run that is already there,
+// then extend it to _RUN items by insertion, which is what Timsort does.
+func _runs(array items, Function compare){
+    runs = arr();
+    start = 0;
+    while (start < items.len()){
+        stop = start + 1;
+        while (stop < items.len() and compare(items.iget(stop - 1), items.iget(stop)) <= 0){ stop = stop + 1; }
+        if (stop - start < _RUN){
+            stop = start + _RUN;
+            if (stop > items.len()){ stop = items.len(); }
+        }
+        runs.add(_insertion(items.slice(start, stop), compare));
+        start = stop;
+    }
+    ret runs;
+}
+
+func _insertion(array items, Function compare){
+    for (i = 1, i < items.len(), i++){
+        value = items.iget(i);
+        j = i - 1;
+        while (j >= 0 and compare(items.iget(j), value) > 0){
+            items.modify(j + 1, items.iget(j));
+            j = j - 1;
+        }
+        items.modify(j + 1, value);
+    }
+    ret items;
+}
+
+func _merge(array left, array right, Function compare){
+    result = arr();
+    i = 0;
+    j = 0;
+    while (i < left.len() and j < right.len()){
+        // <= 0 keeps equal items in their original order.
+        if (compare(left.iget(i), right.iget(j)) <= 0){
+            result.add(left.iget(i));
+            i = i + 1;
+        } else {
+            result.add(right.iget(j));
+            j = j + 1;
+        }
+    }
+    while (i < left.len()){ result.add(left.iget(i)); i = i + 1; }
+    while (j < right.len()){ result.add(right.iget(j)); j = j + 1; }
+    ret result;
+}
+
+// ----- searching a sorted array -----
+
+@Decorator.docstring("The index of value in a sorted array, or -1 when it is not there. Halves the range each step, so it looks at about log2(n) items.")
+func binary_search(array items, any value){
+    at = lower_bound(items, value);
+    if (at < items.len() and items.iget(at) == value){ ret at; }
+    ret -1;
+}
+
+@Decorator.docstring("The first index of a sorted array where value could be inserted and keep it sorted: the index of the first item that is not smaller than value.")
+func lower_bound(array items, any value){
+    low = 0;
+    high = items.len();
+    while (low < high){
+        // Exact division: both are whole numbers, so subtract the remainder first.
+        middle = (low + high - (low + high) % 2) / 2;
+        if (items.iget(middle) < value){ low = middle + 1; } else { high = middle; }
+    }
+    ret low;
+}
+
+@Decorator.docstring("The last index of a sorted array where value could be inserted and keep it sorted: the index of the first item greater than value.")
+func upper_bound(array items, any value){
+    low = 0;
+    high = items.len();
+    while (low < high){
+        // Exact division: both are whole numbers, so subtract the remainder first.
+        middle = (low + high - (low + high) % 2) / 2;
+        if (items.iget(middle) > value){ high = middle; } else { low = middle + 1; }
+    }
+    ret low;
+}
+
+// ----- passes over a collection -----
+
+@Decorator.docstring("An array of what f returns for each item, in order. Python's map.")
+func transform(array items, Function f){
+    result = arr();
+    for (item, items){ result.add(f(item)); }
+    ret result;
+}
+
+@Decorator.docstring("The items that keep is true for, in order. Python's filter.")
+func keep(array items, Function test){
+    result = arr();
+    for (item, items){ if (test(item)){ result.add(item); } }
+    ret result;
+}
+
+@Decorator.docstring("""
+    Combine the items into one value: start, then f(carried, item) for each
+    item in turn. Python's reduce.
+
+        algorithms.fold(arr(1, 2, 3), 0, func(int a, int b) => a + b);   // 6
+""")
+func fold(array items, any start, Function f){
+    carried = start;
+    for (item, items){ carried = f(carried, item); }
+    ret carried;
+}
+
+@Decorator.docstring("The item with the smallest key, or null when items is empty. The first of equal keys wins.")
+func min_by(array items, Function key){
+    best = null;
+    best_key = null;
+    for (item, items){
+        k = key(item);
+        if (best_key == null or k < best_key){ best = item; best_key = k; }
+    }
+    ret best;
+}
+
+@Decorator.docstring("The item with the largest key, or null when items is empty. The first of equal keys wins.")
+func max_by(array items, Function key){
+    best = null;
+    best_key = null;
+    for (item, items){
+        k = key(item);
+        if (best_key == null or k > best_key){ best = item; best_key = k; }
+    }
+    ret best;
+}
+
+@Decorator.docstring("Whether test is true for at least one item. Stops at the first one.")
+func any_of(array items, Function test){
+    for (item, items){ if (test(item)){ ret true; } }
+    ret false;
+}
+
+@Decorator.docstring("Whether test is true for every item. Stops at the first one it is false for. True for an empty array.")
+func all_of(array items, Function test){
+    for (item, items){ if (not test(item)){ ret false; } }
+    ret true;
+}
+
+@Decorator.docstring("The items without repeats, keeping the first of each. Uses a set, so it makes one pass.")
+func unique(array items){
+    seen = set();
+    result = arr();
+    for (item, items){
+        if (not seen.has(item)){ seen.add(item); result.add(item); }
+    }
+    ret result;
+}
+
+@Decorator.docstring("A map from each item to how many times it appears.")
+func counts(array items){
+    result = map();
+    for (item, items){
+        if (result.has(item)){ result.set(item, result.get(item) + 1); } else { result.set(item, 1); }
+    }
+    ret result;
+}
+
+@Decorator.docstring("A map from what key returns to the array of items it returned that key for, each in the order they appear.")
+func group_by(array items, Function key){
+    result = map();
+    for (item, items){
+        k = key(item);
+        if (result.has(k)){ result.get(k).add(item); } else { result.set(k, arr(item)); }
+    }
+    ret result;
+}
