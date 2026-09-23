@@ -1,5 +1,8 @@
 # rs-0.14.0 — JSON, the environment, and code points
 
+> No binaries were published for rs-0.14.0: its Windows build failed a test.
+> Everything below shipped in [rs-0.14.1](rs-0.14.1.md).
+
 Programs can now read and write JSON with [std.json](../api/std-json.md), look
 at the machine they run on with [std.os](../api/std-os.md) and at the
 interpreter running them with [std.sys](../api/std-sys.md), and convert between
