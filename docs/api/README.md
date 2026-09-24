@@ -13,6 +13,7 @@ notes elsewhere under `docs/` remain local.
 - [Grammar](grammar.md): exactly what may be written, and operator precedence.
 - [Strings and slicing](strings.md): Unicode characters, reversal, and strict bounds.
 - [Collections](collections.md): arrays, sets, pairs, maps, and copying.
+- [Dates and times](dates.md): `date`, `datetime`, and `duration`, with time zones.
 - [Built-ins and errors](builtins.md): input/output, conversions, and runtime errors.
 - [std.math](std-math.md): 51 math functions and six constants, written in Marslang on native float primitives.
 - [std.containers](std-containers.md): stack, queue, deque, and priority queue.
@@ -30,7 +31,7 @@ notes elsewhere under `docs/` remain local.
 - [std.json](std-json.md): reading and writing JSON, as text and as files.
 - [std.os](std-os.md): environment variables, the working and home directories, and the platform.
 - [std.sys](std-sys.md): the interpreter's version, number limits, and package directory.
-- [std.time](std-time.md): clocks and sleeping.
+- [std.time](std-time.md): clocks, today's date, sleeping, and lengths of time.
 - [std.Decorator](std-decorator.md): `@Decorator.docstring`, and `@Decorator.private` and `@Decorator.subclass` methods.
 - [std.Error](std-error.md): the built-in error families as `Error.TypeError`, `Error.RangeError`, and so on.
 - [std.cli](std-cli.md): command-line arguments, a parser for options, and exit statuses.

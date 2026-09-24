@@ -675,6 +675,7 @@ fn csv_field(value: &Value, out: &mut String, separator: char) -> RResult<()> {
         Value::Str(text) => text.to_string(),
         Value::Null => String::new(),
         Value::Int(_) | Value::Long(_) | Value::Float(_) | Value::Bool(_) => to_display_string(value),
+        Value::Date(_) | Value::DateTime(_) | Value::Duration(_) => to_display_string(value),
         other => {
             let kind = other.type_name();
             let article = if kind.starts_with(['a', 'e', 'i', 'o', 'u']) { "an" } else { "a" };

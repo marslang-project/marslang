@@ -328,6 +328,11 @@ impl Writer {
             }
             Value::Float(_) => return range_err("JSON has no infinity or NaN; write it as a string or null"),
             Value::Str(text) => self.string(text),
+            // JSON has no dates, so they are written as ISO 8601 strings, which
+            // date(), datetime(), and duration() read back.
+            Value::Date(d) => self.string(&crate::date::show_date(d)),
+            Value::DateTime(t) => self.string(&crate::date::show_datetime(t)),
+            Value::Duration(d) => self.string(&crate::date::iso_duration(d)),
             Value::Array(array) => {
                 let items = array.items.borrow().clone();
                 self.enter(value)?;

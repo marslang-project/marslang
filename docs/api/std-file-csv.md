@@ -51,8 +51,9 @@ SyntaxError: CSV line 2: a quote inside an unquoted field; quote the whole field
 
 ## Writing
 
-Strings are written as they are, and quoted only when they must be. Numbers and
-booleans are written as `out` prints them, and `null` as an empty field. Arrays,
+Strings are written as they are, and quoted only when they must be. Numbers,
+booleans, and dates are written as `out` prints them, and `null` as an empty
+field. Arrays,
 maps, and other containers raise `TypeError`, since a field holds one value.
 Each row ends in `\n`, which every spreadsheet and CSV reader accepts.
 

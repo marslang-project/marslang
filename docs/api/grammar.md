@@ -112,6 +112,7 @@ A lambda's body is a whole expression, so it extends as far as it can:
 ```text
 type         = simple | "[" type { "," type } "]" | collection ;
 simple       = "int" | "longint" | "float" | "string" | "bool" | "any"
+             | "date" | "datetime" | "duration"
              | "Function" | "Family" | NAME | NAME "." NAME ;
 collection   = ( "array" | "set" ) [ "[" type "]" ]
              | "pair" [ "[" type "," type "]" ]

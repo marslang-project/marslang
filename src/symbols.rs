@@ -294,6 +294,7 @@ impl Walker<'_> {
                     "int" | "longint" | "float" | "string" => name.clone(),
                     "in" | "inln" | "chr" => "string".into(),
                     "ord" => "int".into(),
+                    "date" | "datetime" | "duration" => name.clone(),
                     family if self.families.contains(family) => family.to_string(),
                     _ => return None,
                 },

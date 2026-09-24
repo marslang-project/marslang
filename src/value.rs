@@ -30,6 +30,12 @@ pub enum Value {
     Instance(Rc<Instance>),
     Func(Rc<Callable>),
     Package(Rc<Package>),
+    /// `date`: a calendar day.
+    Date(jiff::civil::Date),
+    /// `datetime`: a moment and the time zone it is seen in.
+    DateTime(Rc<jiff::Zoned>),
+    /// `duration`: an exact length of time.
+    Duration(jiff::SignedDuration),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -63,6 +69,7 @@ impl Value {
             Value::Null | Value::Bool(false) => false,
             Value::Int(0) | Value::Long(0) => false,
             Value::Float(f) => *f != 0.0,
+            Value::Duration(d) => !d.is_zero(),
             _ => true,
         }
     }
@@ -73,7 +80,8 @@ impl Value {
             Value::Long(_) => "longint", Value::Float(_) => "float", Value::Str(_) => "string",
             Value::Array(_) => "array", Value::Set(_) => "set", Value::Map(_) => "map",
             Value::Pair(_) => "pair", Value::Instance(_) => "instance", Value::Func(_) => "function",
-            Value::Package(_) => "package",
+            Value::Package(_) => "package", Value::Date(_) => "date", Value::DateTime(_) => "datetime",
+            Value::Duration(_) => "duration",
         }
     }
 
@@ -108,6 +116,9 @@ pub fn equal(a: &Value, b: &Value) -> bool {
         (Value::Null, Value::Null) => true,
         (Value::Bool(x), Value::Bool(y)) => x == y,
         (Value::Str(x), Value::Str(y)) => x == y,
+        (Value::Date(_) | Value::DateTime(_) | Value::Duration(_), _) | (_, Value::Date(_) | Value::DateTime(_) | Value::Duration(_)) => {
+            crate::date::order(a, b) == Some(std::cmp::Ordering::Equal)
+        }
         _ if a.num_kind().is_some() && b.num_kind().is_some() => compare_numbers(a, b) == Some(std::cmp::Ordering::Equal),
         _ => match (a.object_id(), b.object_id()) {
             (Some(x), Some(y)) => x == y,
@@ -140,7 +151,11 @@ fn compare_integer_float(i: i64, f: f64) -> Option<std::cmp::Ordering> {
 /// Hash key consistent with `equal`: equal numbers of any kind share a key,
 /// -0 equals 0, and NaN keys equal each other.
 #[derive(Clone, PartialEq, Eq, Hash)]
-pub enum Key { Null, Bool(bool), Integer(i64), Num(u64), Str(Rc<str>), Obj(usize) }
+pub enum Key {
+    Null, Bool(bool), Integer(i64), Num(u64), Str(Rc<str>), Obj(usize),
+    /// A day as year * 10000 + month * 100 + day; a moment and a length in nanoseconds.
+    Date(i32), Moment(i128), Length(i128),
+}
 
 impl Key {
     pub fn of(value: &Value) -> Key {
@@ -153,6 +168,9 @@ impl Key {
             }
             Value::Float(f) => Key::Num(if f.is_nan() { f64::NAN.to_bits() } else { f.to_bits() }),
             Value::Str(s) => Key::Str(s.clone()),
+            Value::Date(d) => Key::Date(d.year() as i32 * 10_000 + d.month() as i32 * 100 + d.day() as i32),
+            Value::DateTime(t) => Key::Moment(t.timestamp().as_nanosecond()),
+            Value::Duration(d) => Key::Length(d.as_nanos()),
             other => Key::Obj(other.object_id().unwrap_or(0)),
         }
     }
@@ -276,6 +294,7 @@ impl Family {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Builtin {
     Out, Slout, In, Inln, Arr, Set, Pair, Map, Int, Long, Float, String, Err, LastErr, Ord, Chr,
+    Date, DateTime, Duration,
 }
 
 impl Builtin {
@@ -287,6 +306,7 @@ impl Builtin {
             "float" => Builtin::Float, "string" => Builtin::String,
             "err" => Builtin::Err, "lasterr" => Builtin::LastErr,
             "ord" => Builtin::Ord, "chr" => Builtin::Chr,
+            "date" => Builtin::Date, "datetime" => Builtin::DateTime, "duration" => Builtin::Duration,
             _ => return None,
         })
     }
@@ -505,6 +525,9 @@ fn write_value(value: &Value, out: &mut String, seen: &mut Vec<usize>, nested: b
         Value::Int(i) | Value::Long(i) => { let _ = write!(out, "{i}"); }
         Value::Float(f) if *f == 0.0 && f.is_sign_negative() => out.push_str("-0"),
         Value::Float(f) => out.push_str(&format_float(*f)),
+        Value::Date(d) => out.push_str(&crate::date::show_date(d)),
+        Value::DateTime(t) => out.push_str(&crate::date::show_datetime(t)),
+        Value::Duration(d) => out.push_str(&crate::date::show_duration(d)),
         Value::Str(s) if nested => { let _ = write!(out, "{:?}", s.as_ref()); }
         Value::Str(s) => out.push_str(s),
         Value::Array(a) => {

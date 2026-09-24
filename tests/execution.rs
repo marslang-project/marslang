@@ -1062,8 +1062,8 @@ fn std_file_env_ini_and_toml_read_and_write_configuration() {
             out(t);
             out(toml.format(t));
         }"#, concat!(
-            "{\"title\": \"demo\", \"package\": {\"name\": \"x\", \"big\": 3000000000, \"pi\": 3.14, \"when\": \"1979-05-27T07:32:00Z\"}, \"bin\": [{\"name\": \"a\"}, {\"name\": \"b\"}]}\n",
-            "title = \"demo\"\n\n[package]\nname = \"x\"\nbig = 3000000000\npi = 3.14\nwhen = \"1979-05-27T07:32:00Z\"\n\n[[bin]]\nname = \"a\"\n\n[[bin]]\nname = \"b\"\n\n"));
+            "{\"title\": \"demo\", \"package\": {\"name\": \"x\", \"big\": 3000000000, \"pi\": 3.14, \"when\": 1979-05-27T07:32:00+00:00[UTC]}, \"bin\": [{\"name\": \"a\"}, {\"name\": \"b\"}]}\n",
+            "title = \"demo\"\n\n[package]\nname = \"x\"\nbig = 3000000000\npi = 3.14\nwhen = 1979-05-27T07:32:00+00:00\n\n[[bin]]\nname = \"a\"\n\n[[bin]]\nname = \"b\"\n\n"));
 
     for (package, source, message) in [
         ("env", r#"env.parse("1BAD=x");"#, "env line 1: \"1BAD\" is not a variable name"),
@@ -2162,6 +2162,131 @@ fn std_json_reads_and_writes_values() {
     ] {
         runtime_error(&format!("takepkg std.json;\nfamily Box{{ func init(){{ me.x = 1; }} }}\n\
             func m{{ cyc = arr(); cyc.add(cyc); keyed = map(); keyed.set(1, \"x\"); json.stringify({value}); }}"), message);
+    }
+}
+
+#[test]
+fn dates_compare_key_and_step_by_value() {
+    executes(r#"
+        takepkg std.time;
+        takepkg std.types;
+        func m{
+            a = date(2026, 9, 24);
+            b = date("2026-09-24");
+            out(a, a == b, a != date(2026, 9, 25), a < date(2027, 1, 1), types.kind(a));
+            d = map(); d.set(a, "x"); out(d.get(b), set(a, b).len());
+            out(a + time.days(3), a - time.days(30), date(2027, 1, 1) - a, (date(2027, 1, 1) - a).days());
+            out(date(2026, 1, 31).add_months(1), date(2024, 2, 29).add_years(1), date(2026, 12, 31).add_days(1));
+            out(a.year(), a.month(), a.day(), a.weekday(), a.day_of_year(), a.days_in_month(), a.is_leap_year());
+            out(a.format("%d %B %Y"), a.format("%A"), date("24/09/2026", "%d/%m/%Y"));
+            out(arr(date(2026, 3, 1), date(2025, 12, 31), a).asort());
+            x (date) = a;
+            out(x);
+        }"#,
+        concat!(
+            "2026-09-24 true true true date\n",
+            "x 1\n",
+            "2026-09-27 2026-08-25 99d 99\n",
+            "2026-02-28 2025-02-28 2027-01-01\n",
+            "2026 9 24 4 267 30 false\n",
+            "24 September 2026 Thursday 2026-09-24\n",
+            "[2025-12-31, 2026-03-01, 2026-09-24]\n",
+            "2026-09-24\n"));
+}
+
+#[test]
+fn datetimes_are_moments_in_a_zone() {
+    executes(r#"
+        takepkg std.time;
+        func m{
+            t = datetime("2026-09-24T14:30:00+08:00");
+            z = datetime(2026, 9, 24, 14, 30, 0, "Asia/Shanghai");
+            out(t, z, t == z);
+            out(z.in_zone("America/New_York"), z.in_zone("UTC"), z.in_zone("+05:30"));
+            out(z + time.hours(2), z - t, datetime("2026-09-24T09:00:00Z") - t);
+            out(z.hour(), z.minute(), z.second(), z.zone(), z.offset(), t.zone(), z.date(), date(z), z.timestamp());
+            out(z.format("%Y-%m-%d %H:%M %Z"), datetime("2026-09-24 14:30 +0800", "%Y-%m-%d %H:%M %z"));
+            ny = datetime(2026, 3, 7, 12, 0, 0, "America/New_York");
+            out(ny + time.days(1), ny.add_days(1), ny.add_months(1));
+            out(date(2026, 9, 24).at(9, 0, 0, "Europe/London"), datetime("2026-09-24T14:30:00+08:00[Asia/Shanghai]"));
+            d = map(); d.set(t, 1); out(d.get(z), arr(z + time.hours(1), t).asort());
+        }"#,
+        concat!(
+            "2026-09-24T14:30:00+08:00 2026-09-24T14:30:00+08:00[Asia/Shanghai] true\n",
+            "2026-09-24T02:30:00-04:00[America/New_York] 2026-09-24T06:30:00+00:00[UTC] 2026-09-24T12:00:00+05:30\n",
+            "2026-09-24T16:30:00+08:00[Asia/Shanghai] 0s 2h 30m\n",
+            "14 30 0 Asia/Shanghai 8h +08:00 2026-09-24 2026-09-24 1790231400\n",
+            "2026-09-24 14:30 CST 2026-09-24T14:30:00+08:00\n",
+            "2026-03-08T13:00:00-04:00[America/New_York] 2026-03-08T12:00:00-04:00[America/New_York] 2026-04-07T12:00:00-04:00[America/New_York]\n",
+            "2026-09-24T09:00:00+01:00[Europe/London] 2026-09-24T14:30:00+08:00[Asia/Shanghai]\n",
+            "1 [2026-09-24T14:30:00+08:00, 2026-09-24T15:30:00+08:00[Asia/Shanghai]]\n"));
+}
+
+#[test]
+fn durations_are_exact_lengths() {
+    executes(r#"
+        takepkg std.time;
+        func m{
+            h = time.hours(2) + time.minutes(30);
+            out(h, h * 2, 2 * h, h / 2, h / time.minutes(30), -h, h.minutes(), h.hours(), h.seconds());
+            out(duration("1d 2h"), duration("PT90M"), duration(90), duration(1.5), time.milliseconds(250), duration("-2h"), time.seconds(0));
+            out(duration(0) == time.seconds(0), time.days(1) > time.hours(23), (-h).abs(), duration("2 hours, 5 minutes"));
+            if (time.seconds(0)){ out("zero is true"); } else { out("zero is false"); }
+            time.sleep(time.milliseconds(5));
+            time.sleep(0.005);
+        }"#,
+        concat!(
+            "2h 30m 5h 5h 1h 15m 5 -2h 30m 150 2.5 9000\n",
+            "1d 2h 1h 30m 1m 30s 1.5s 0.25s -2h 0s\n",
+            "true true 2h 30m 2h 5m\n",
+            "zero is false\n"));
+}
+
+#[test]
+fn dates_in_json_toml_and_csv() {
+    executes(r#"
+        takepkg std.json;
+        takepkg std.file.toml;
+        takepkg std.file.csv;
+        takepkg std.time;
+        takepkg std.types;
+        func m{
+            a = date(2026, 9, 24);
+            z = datetime(2026, 9, 24, 14, 30, 0, "Asia/Shanghai");
+            out(json.stringify(arr(a, z, time.hours(2) + time.minutes(30))));
+            t = toml.parse("day = 2026-09-24\nat = 2026-09-24T14:30:00+08:00\nlocal = 2026-09-24T14:30:00\n");
+            out(types.kind(t.get("day")), types.kind(t.get("at")), types.kind(t.get("local")));
+            out(toml.format(t));
+            out(csv.format(arr(arr(a, z))));
+        }"#,
+        concat!(
+            "[\"2026-09-24\",\"2026-09-24T14:30:00+08:00[Asia/Shanghai]\",\"PT2H30M\"]\n",
+            "date datetime string\n",
+            "day = 2026-09-24\nat = 2026-09-24T14:30:00+08:00\nlocal = \"2026-09-24T14:30:00\"\n\n",
+            "2026-09-24,2026-09-24T14:30:00+08:00[Asia/Shanghai]\n\n"));
+}
+
+#[test]
+fn date_mistakes_are_explained() {
+    for (source, message) in [
+        ("date(2026, 2, 30);", "2026-02 has days 1 to 28, not 30"),
+        ("date(2026, 13, 1);", "the month 13 is not from 1 to 12"),
+        ("date(\"tomorrow\");", "\"tomorrow\" is not a date"),
+        ("date(\"1/2\", \"%Y\");", "does not match the format"),
+        ("datetime(\"2026-09-24T14:30:00\");", "does not say which time zone it is in"),
+        ("datetime(2026, 9, 24, 14, 30, 0, \"Mars/Olympus\");", "unknown time zone \"Mars/Olympus\""),
+        ("datetime(2026, 9, 24, 25, 0, 0, \"UTC\");", "25:00:00 is not a time of day"),
+        ("date(2026, 9, 24) + time.hours(3);", "a date moves by whole days, and 3h is not"),
+        ("date(2026, 9, 24) + 1;", "cannot add a date and an int; add a duration"),
+        ("date(2026, 9, 24) < datetime(\"2026-09-24T00:00:00Z\");", "comparison requires matching types"),
+        ("date(2026, 9, 24) - datetime(\"2026-09-24T00:00:00Z\");", "convert with date(a_datetime)"),
+        ("duration(\"soon\");", "\"soon\" is not a duration"),
+        ("time.hours(1) / time.seconds(0);", "division by a zero duration"),
+        ("date(2026, 9, 24).format(\"%Q\");", "cannot format with \"%Q\""),
+        ("date(2026, 9, 24).nope();", "date has no method 'nope'"),
+        ("x (date) = 5;", "expected date, got int"),
+    ] {
+        runtime_error(&format!("takepkg std.time;\nfunc m{{ {source} }}"), message);
     }
 }
 

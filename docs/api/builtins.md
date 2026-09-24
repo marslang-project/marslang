@@ -40,6 +40,9 @@ classification helpers; its arithmetic functions require finite inputs/results.
 Constructors `arr`, `set`, `pair`, `map`, and `dict` are documented in
 [Collections](collections.md).
 
+`date`, `datetime`, and `duration` build the calendar kinds; see
+[dates and times](dates.md).
+
 ## Characters and code points
 
 | Call | Behavior |

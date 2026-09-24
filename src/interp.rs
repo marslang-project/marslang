@@ -524,6 +524,9 @@ impl<'o> Interp<'o> {
                         Value::Array(array) => self.array_method(&object, array, field, args),
                         Value::Set(set) => self.set_method(&object, set, field, args),
                         Value::Map(map) => self.map_method(&object, map, field, args),
+                        Value::Date(date) => crate::date::date_method(date, field, &args),
+                        Value::DateTime(moment) => crate::date::datetime_method(moment, field, &args),
+                        Value::Duration(length) => crate::date::duration_method(length, field, &args),
                         _ => unreachable!("method_target resolves every other receiver"),
                     },
                 }
@@ -632,6 +635,7 @@ impl<'o> Interp<'o> {
             }
             Value::Package(_) | Value::Pair(_) => MethodTarget::Value(self.get_member(object, name, caller)?),
             Value::Str(_) | Value::Array(_) | Value::Set(_) | Value::Map(_) => return Ok(None),
+            Value::Date(_) | Value::DateTime(_) | Value::Duration(_) => return Ok(None),
             other => return type_err(format!("{} has no method '{name}'", other.type_name())),
         }))
     }
@@ -761,6 +765,9 @@ impl<'o> Interp<'o> {
             }
             Builtin::LastErr => { arity(0)?; Ok(self.last_error.clone().unwrap_or(Value::Null)) }
             Builtin::Ord => { arity(1)?; ord(&args[0]) }
+            Builtin::Date => crate::date::make_date(&args),
+            Builtin::DateTime => crate::date::make_datetime(&args),
+            Builtin::Duration => crate::date::make_duration(&args),
             Builtin::Chr => { arity(1)?; chr(&args[0]) }
         }
     }
@@ -1028,6 +1035,9 @@ impl<'o> Interp<'o> {
                 _ => type_err("expected float"),
             },
             "string" => match value { Value::Str(_) => Ok(value), _ => type_err("expected string") },
+            "date" => match value { Value::Date(_) => Ok(value), _ => type_err(format!("expected date, got {}", value.type_name())) },
+            "datetime" => match value { Value::DateTime(_) => Ok(value), _ => type_err(format!("expected datetime, got {}", value.type_name())) },
+            "duration" => match value { Value::Duration(_) => Ok(value), _ => type_err(format!("expected duration, got {}", value.type_name())) },
             "any" => Ok(value),
             // Parameter types for passing code around: func apply(Function f).
             "Function" => match &value {
@@ -1198,6 +1208,7 @@ impl<'o> Interp<'o> {
             joined.push_str(y);
             return Ok(Value::str(&joined));
         }
+        if let Some(result) = crate::date::arithmetic(op, &a, &b) { return result; }
         if a.num_kind().is_none() || b.num_kind().is_none() { return type_err("arithmetic requires numbers"); }
         let floating = matches!(a, Value::Float(_)) || matches!(b, Value::Float(_));
         let long = matches!(a, Value::Long(_)) || matches!(b, Value::Long(_));
@@ -1384,6 +1395,8 @@ fn long_arithmetic(op: &str, x: i128, y: i128) -> RResult<Value> {
 
 fn unary(op: &str, value: Value) -> RResult<Value> {
     let negate = op == "-";
+    if negate { if let Some(result) = crate::date::negate(&value) { return result; } }
+    if !negate && crate::date::is_calendar(&value) { return Ok(value); }
     match value {
         Value::Int(i) => int_in_range(if negate { -(i as i128) } else { i as i128 }),
         Value::Long(l) => long_in_range(if negate { -(l as i128) } else { l as i128 }),
@@ -1400,6 +1413,7 @@ fn compare(op: &str, a: &Value, b: &Value) -> RResult<Value> {
         (Value::Str(x), Value::Str(y)) => Some(x.encode_utf16().cmp(y.encode_utf16())),
         (Value::Bool(x), Value::Bool(y)) => Some(x.cmp(y)),
         (Value::Null, Value::Null) => Some(Ordering::Equal),
+        _ if crate::date::order(a, b).is_some() => crate::date::order(a, b),
         _ => return type_err("comparison requires matching types"),
     };
     Ok(Value::Bool(match (op, order) {
@@ -1420,6 +1434,7 @@ fn sort_order(a: &Value, b: &Value) -> Ordering {
     };
     match (a, b) {
         (Value::Str(x), Value::Str(y)) => x.encode_utf16().cmp(y.encode_utf16()),
+        _ if crate::date::order(a, b).is_some() => crate::date::order(a, b).unwrap(),
         _ => compare_numbers(&number(a), &number(b)).unwrap_or(Ordering::Equal),
     }
 }

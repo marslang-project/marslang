@@ -48,6 +48,7 @@ fn scalar(value: &Value, what: &str) -> RResult<String> {
     match value {
         Value::Str(text) => Ok(text.to_string()),
         Value::Int(_) | Value::Long(_) | Value::Float(_) | Value::Bool(_) => Ok(to_display_string(value)),
+        Value::Date(_) | Value::DateTime(_) | Value::Duration(_) => Ok(to_display_string(value)),
         other => type_err(format!("{what} values are text, numbers, or booleans, not {} {}", article(other.type_name()), other.type_name())),
     }
 }
@@ -271,8 +272,8 @@ fn ini_format(value: &Value) -> RResult<Value> {
 
 // ----- TOML -----
 
-/// A TOML document as a map. Dates and times become their text, such as
-/// "1979-05-27T07:32:00Z", since Marslang has no date kind yet.
+/// A TOML document as a map; dates become `date` and `datetime` values
+/// (see `from_toml_datetime`).
 fn toml_parse(text: &str, source: &str) -> RResult<Value> {
     match text.parse::<toml::Table>() {
         Ok(table) => Ok(from_toml(toml::Value::Table(table))),
@@ -295,14 +296,46 @@ fn from_toml(value: toml::Value) -> Value {
         toml::Value::Integer(n) => if i32::try_from(n).is_ok() { Value::Int(n) } else { Value::Long(n) },
         toml::Value::Float(f) => Value::Float(f),
         toml::Value::Boolean(b) => Value::Bool(b),
-        toml::Value::Datetime(when) => Value::str(&when.to_string()),
+        toml::Value::Datetime(when) => from_toml_datetime(when),
         toml::Value::Array(items) => Value::array(items.into_iter().map(from_toml).collect()),
         toml::Value::Table(table) => new_map(table.into_iter().map(|(k, v)| (k, from_toml(v))).collect()),
     }
 }
 
+/// A TOML date becomes a date, and a date and time with an offset a
+/// datetime at that offset. A local date and time, or a time alone, names no
+/// moment, so it stays text.
+fn from_toml_datetime(when: toml::value::Datetime) -> Value {
+    match (&when.date, &when.time, &when.offset) {
+        (Some(date), None, None) => match jiff::civil::Date::new(date.year as i16, date.month as i8, date.day as i8) {
+            Ok(date) => crate::date::date_value(date),
+            Err(_) => Value::str(&when.to_string()),
+        },
+        (Some(_), Some(_), Some(_)) => match crate::date::make_datetime(&[Value::str(&when.to_string())]) {
+            Ok(moment) => moment,
+            Err(_) => Value::str(&when.to_string()),
+        },
+        _ => Value::str(&when.to_string()),
+    }
+}
+
 fn to_toml(value: &Value, open: &mut HashSet<usize>) -> RResult<toml::Value> {
     Ok(match value {
+        Value::Date(date) if date.year() < 0 => return type_err(format!("TOML dates have four-digit years; {} cannot be written", crate::date::show_date(date))),
+        Value::Date(date) => toml::Value::Datetime(toml::value::Datetime {
+            date: Some(toml::value::Date { year: date.year() as u16, month: date.month() as u8, day: date.day() as u8 }),
+            time: None,
+            offset: None,
+        }),
+        // TOML has no zone names, so a datetime is written with its offset.
+        Value::DateTime(moment) => {
+            let text = format!("{}{}", moment.datetime(), crate::date::show_offset(moment.offset()));
+            match text.parse::<toml::value::Datetime>() {
+                Ok(when) => toml::Value::Datetime(when),
+                Err(_) => return type_err(format!("the datetime {} cannot be written as TOML", crate::date::show_datetime(moment))),
+            }
+        }
+        Value::Duration(_) => return type_err("TOML has no durations; write the number of seconds or the text instead"),
         Value::Str(text) => toml::Value::String(text.to_string()),
         Value::Int(n) | Value::Long(n) => toml::Value::Integer(*n),
         Value::Float(f) => toml::Value::Float(*f),

@@ -1,4 +1,7 @@
-// std.time: clocks and sleeping. Times are float seconds.
+// std.time: clocks, sleeping, and lengths of time. now() and monotonic()
+// are float seconds; today() and now_datetime() are the calendar kinds date
+// and datetime, and days(), hours(), and the others make durations.
+takepkg rs.core;
 takepkg rs.time = native;
 takepkg std.Decorator;
 
@@ -8,5 +11,36 @@ func now() => native.now();
 @Decorator.docstring("Seconds from a fixed starting point. It never goes backwards, so use it to measure elapsed time.")
 func monotonic() => native.monotonic();
 
-@Decorator.docstring("Pause the program for seconds, of any numeric kind. Negative or non-finite values raise RangeError.")
-func sleep([int,longint,float] seconds){ native.sleep(float(seconds)); }
+@Decorator.docstring("""
+    Pause the program: for a duration, such as time.seconds(2), or for a number
+    of seconds of any numeric kind. Negative or non-finite values raise
+    RangeError.
+""")
+func sleep([int,longint,float,duration] length){
+    if (core.kind(length) == "duration"){ native.sleep(length.seconds()); } else { native.sleep(float(length)); }
+}
+
+@Decorator.docstring("Today's date where this machine is, as a date.")
+func today() => native.today();
+
+@Decorator.docstring("""
+    This moment, as a datetime in this machine's time zone.
+
+        meeting = time.now_datetime().in_zone("Asia/Tokyo");
+""")
+func now_datetime() => native.now_datetime();
+
+@Decorator.docstring("A duration of n days of 24 hours each: time.days(3). For calendar months or years, use add_months or add_years.")
+func days([int,longint,float] n) => native.length(n, 86400.0);
+
+@Decorator.docstring("A duration of n hours: time.hours(2).")
+func hours([int,longint,float] n) => native.length(n, 3600.0);
+
+@Decorator.docstring("A duration of n minutes: time.minutes(30).")
+func minutes([int,longint,float] n) => native.length(n, 60.0);
+
+@Decorator.docstring("A duration of n seconds, which may have a fraction: time.seconds(1.5).")
+func seconds([int,longint,float] n) => native.length(n, 1.0);
+
+@Decorator.docstring("A duration of n milliseconds: time.milliseconds(250).")
+func milliseconds([int,longint,float] n) => native.length(n, 0.001);

@@ -89,6 +89,10 @@ Some values have no JSON form and raise instead of being guessed at:
 The same array can appear twice in a value; only one that contains itself is
 refused.
 
+JSON has no dates, so a `date`, `datetime`, or `duration` is written as an ISO
+8601 string, such as `"2026-09-24"` or `"PT2H30M"`. Reading gives the string
+back; pass it to `date()`, `datetime()`, or `duration()`.
+
 ## Files
 
 ```mars

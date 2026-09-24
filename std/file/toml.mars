@@ -12,9 +12,9 @@ takepkg std.file;
 
     Tables become maps, arrays become arrays, and integers, floats, strings, and
     booleans become themselves; an integer is an int when it fits in 32 bits
-    and a longint otherwise. Dates and times become their text, such as
-    "1979-05-27T07:32:00Z", since Marslang has no date kind. Mistakes raise
-    SyntaxError with the line and column.
+    and a longint otherwise. A date becomes a date and a date and time with an
+    offset a datetime; a local date and time, or a time alone, names no moment
+    and stays text. Mistakes raise SyntaxError with the line and column.
 """)
 func parse(string text) => native.toml_parse(text, "");
 

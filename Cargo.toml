@@ -10,5 +10,14 @@ license-file = "LICENSE.md"
 [dependencies]
 indexmap = "2.14.2"
 unicode-segmentation = "1.13.3"
+# date, datetime, and duration: the calendar, time zones, and daylight saving.
+# Everything but reading the system time zone, which on Windows links through
+# raw-dylib and so needs a 64-bit dlltool that windows-gnu setups often lack;
+# src/date.rs reads the Windows zone itself.
+jiff = { version = "0.2.37", default-features = false, features = ["std", "tz-fat", "tzdb-bundle-platform", "tzdb-zoneinfo", "tzdb-concatenated", "perf-inline"] }
 # std.file.toml: TOML 1.1 reading and writing, keeping key order.
 toml = { version = "1.1.6", features = ["preserve_order"] }
+
+[target.'cfg(not(windows))'.dependencies]
+# Elsewhere jiff reads the system time zone itself (TZ, /etc/localtime).
+jiff = { version = "0.2.37", default-features = false, features = ["tz-system"] }

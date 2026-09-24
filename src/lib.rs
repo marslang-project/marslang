@@ -1,4 +1,5 @@
 pub mod ast;
+mod date;
 mod expression;
 mod gc;
 mod interp;
@@ -8,6 +9,8 @@ pub mod parser;
 mod resolve;
 mod symbols;
 pub mod value;
+#[cfg(windows)]
+mod windows_zones;
 
 pub use interp::InputSource;
 pub use package::user_packages;

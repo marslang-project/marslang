@@ -37,10 +37,14 @@ version = "1.1"
 | integer | `int` when it fits in 32 bits, otherwise `longint` |
 | float, `inf`, `nan` | `float` |
 | boolean | `bool` |
-| date, time, or date and time | `string`, such as `"1979-05-27T07:32:00Z"` |
+| date | [`date`](dates.md) |
+| date and time with an offset | [`datetime`](dates.md) at that offset |
+| local date and time, or a time alone | `string`, such as `"07:32:00"` |
 
-Marslang has no date kind yet, so dates and times are their text. Written
-back, they become quoted strings, not TOML dates.
+A local date and time has no offset, so it names no moment; it stays text, as
+does a time alone. Dates and datetimes are written back as TOML dates; a
+datetime in a named zone is written with its offset, since TOML has no zone
+names. A duration raises `TypeError`, since TOML has none.
 
 The whole of TOML 1.1 is read: dotted keys, multi-line and literal strings,
 hexadecimal, octal, and binary integers, and `_` between digits. Mistakes raise

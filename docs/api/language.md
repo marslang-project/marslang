@@ -34,7 +34,8 @@ Place `fixed` before `hot` or `cold` when combining modifiers. The keyword is
 fixed status. `.copy()` creates a mutable deep copy of a container.
 
 Supported runtime types include `int` (signed 32-bit), `longint` (signed 64-bit),
-`float`, `string`, `array`, `set`, `pair`, and `map`/`dict`. `any` accepts every
+`float`, `string`, `array`, `set`, `pair`, `map`/`dict`, and the calendar kinds
+`date`, `datetime`, and `duration` ([dates and times](dates.md)). `any` accepts every
 value, for parameters that work with anything, such as `func push(any item)`. Collection restrictions
 use forms such as `array[int]`, `pair[string,int]`, and `map[string,int]`.
 This is runtime checking, not a complete static type system.
