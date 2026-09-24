@@ -23,7 +23,10 @@ notes elsewhere under `docs/` remain local.
 - [std.memory](std-memory.md): addresses, object identity, and the cycle collector.
 - [std.file](std-file.md): reading, writing, listing, copying, moving, and removing files and directories.
   - [std.file.path](std-file-path.md): joining and splitting paths, names, and extensions.
-  - [std.file.csv](std-file-csv.md): reading and writing CSV tables.
+  - [std.file.csv](std-file-csv.md): reading and writing CSV tables, with any separator.
+  - [std.file.env](std-file-env.md): `.env` files of `KEY=value` lines.
+  - [std.file.ini](std-file-ini.md): INI files of `[sections]` and `key = value` lines.
+  - [std.file.toml](std-file-toml.md): TOML files, as Cargo and Python projects use them.
 - [std.json](std-json.md): reading and writing JSON, as text and as files.
 - [std.os](std-os.md): environment variables, the working and home directories, and the platform.
 - [std.sys](std-sys.md): the interpreter's version, number limits, and package directory.

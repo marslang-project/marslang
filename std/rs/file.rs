@@ -346,7 +346,251 @@ fn here(name: &str) -> RResult<Value> {
     })
 }
 
+// ----- more operations -----
+
+/// Copy a directory and everything in it. `to` must not exist yet; if the copy
+/// fails partway, what was made is removed again, so there is never half a copy.
+fn copy_all(from: &str, to: &str) -> RResult<Value> {
+    match metadata(from) {
+        Ok(m) if !m.is_dir() => return fail("NotDirectory", format!("{from}: is a file; file.copy copies files")),
+        Ok(_) => {}
+        Err(failure) => return failure,
+    }
+    if Path::new(to).exists() {
+        return fail("Exists", format!("{to}: already exists; file.copy_all makes a new directory"));
+    }
+    if let Some(failure) = check_parent(to) { return failure; }
+    let inside = std::path::absolute(to).ok().zip(std::path::absolute(from).ok())
+        .is_some_and(|(to, from)| lexical(&to).starts_with(lexical(&from)));
+    if inside { return fail("File", format!("{to}: is inside {from}, so copying it there would never end")); }
+    let copied = copy_tree(Path::new(from), Path::new(to));
+    if copied.is_err() { let _ = fs::remove_dir_all(to); }
+    match copied { Ok(()) => ok(Value::Null), Err((kind, message)) => fail(kind, message) }
+}
+
+fn copy_tree(from: &Path, to: &Path) -> Result<(), (&'static str, String)> {
+    let shown = |p: &Path| p.to_string_lossy().into_owned();
+    let io = |p: &Path, e: io::Error| ("File", format!("{}: {e}", shown(p)));
+    fs::create_dir(to).map_err(|e| io(to, e))?;
+    for entry in fs::read_dir(from).map_err(|e| io(from, e))? {
+        let entry = entry.map_err(|e| io(from, e))?;
+        let (source, target) = (entry.path(), to.join(entry.file_name()));
+        let kind = entry.file_type().map_err(|e| io(&source, e))?;
+        if kind.is_dir() {
+            copy_tree(&source, &target)?;
+        } else if kind.is_symlink() && fs::metadata(&source).is_ok_and(|m| m.is_dir()) {
+            return Err(("File", format!("{}: is a link to a directory, which file.copy_all does not follow", shown(&source))));
+        } else {
+            fs::copy(&source, &target).map_err(|e| io(&source, e))?;
+        }
+    }
+    Ok(())
+}
+
+/// Facts about a file or directory, as one map.
+fn info(path: &str) -> RResult<Value> {
+    let link = attempt!(path, fs::symlink_metadata(path)).file_type().is_symlink();
+    let m = match fs::metadata(path) {
+        Ok(m) => m,
+        Err(_) if link => return fail("NotFound", format!("{path}: a link to something that is not there")),
+        Err(e) => return io_fail(path, e),
+    };
+    let seconds = |time: io::Result<std::time::SystemTime>| match time {
+        Ok(t) => Value::Float(match t.duration_since(std::time::UNIX_EPOCH) {
+            Ok(after) => after.as_secs_f64(),
+            Err(before) => -before.duration().as_secs_f64(),
+        }),
+        Err(_) => Value::Null,
+    };
+    let kind = if m.is_file() { "file" } else if m.is_dir() { "directory" } else { "other" };
+    let entries = [
+        ("kind", Value::str(kind)),
+        ("link", Value::Bool(link)),
+        ("size", if m.is_dir() { Value::Null } else { number(m.len()) }),
+        ("modified", seconds(m.modified())),
+        ("created", seconds(m.created())),
+        ("readonly", Value::Bool(m.permissions().readonly())),
+    ];
+    let mut items = indexmap::IndexMap::new();
+    for (key, value) in entries {
+        let key = Value::str(key);
+        items.insert(Key::of(&key), (key, value));
+    }
+    ok(Value::new_map(items, Meta::default()))
+}
+
+/// Whether two paths name one file or directory, once links, `.`, and `..`
+/// are resolved.
+fn same(a: &str, b: &str) -> RResult<Value> {
+    let a_real = attempt!(a, fs::canonicalize(a));
+    let b_real = attempt!(b, fs::canonicalize(b));
+    ok(Value::Bool(a_real == b_real))
+}
+
+/// A new, empty directory under the system's temporary directory.
+fn make_temp_dir() -> RResult<Value> {
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(0);
+    let dir = std::env::temp_dir().join(format!(
+        "marslang-{}-{}-{nanos}", std::process::id(), TEMPORARY.fetch_add(1, Ordering::Relaxed)
+    ));
+    let shown = dir.to_string_lossy().into_owned();
+    attempt!(&shown, fs::create_dir(&dir));
+    ok(Value::str(&shown))
+}
+
+// ----- matching names against patterns -----
+
+/// Whether a name matches one part of a pattern: `*` is any run of
+/// characters, `?` one character, and `[abc]`, `[a-z]`, `[!abc]` one of a set.
+fn name_matches(pattern: &[char], name: &[char]) -> bool {
+    let fold = |c: char| if cfg!(windows) { c.to_lowercase().next().unwrap_or(c) } else { c };
+    match pattern.first() {
+        None => name.is_empty(),
+        Some('*') => (0..=name.len()).any(|skip| name_matches(&pattern[1..], &name[skip..])),
+        Some('?') => !name.is_empty() && name_matches(&pattern[1..], &name[1..]),
+        Some('[') if pattern.contains(&']') => {
+            let Some(&c) = name.first() else { return false };
+            let close = pattern.iter().skip(2).position(|&p| p == ']').map(|at| at + 2).unwrap_or(1);
+            let mut set = &pattern[1..close];
+            let negate = set.first() == Some(&'!');
+            if negate { set = &set[1..]; }
+            let mut found = false;
+            let mut i = 0;
+            while i < set.len() {
+                if i + 2 < set.len() && set[i + 1] == '-' {
+                    if (fold(set[i])..=fold(set[i + 2])).contains(&fold(c)) { found = true; }
+                    i += 3;
+                } else {
+                    if fold(set[i]) == fold(c) { found = true; }
+                    i += 1;
+                }
+            }
+            found != negate && name_matches(&pattern[close + 1..], &name[1..])
+        }
+        Some(&p) => name.first().is_some_and(|&c| fold(c) == fold(p)) && name_matches(&pattern[1..], &name[1..]),
+    }
+}
+
+/// A name starting with a dot is matched only by a pattern part that starts
+/// with one, as in a shell, so `*` does not reach into `.git`.
+fn part_matches(pattern: &str, name: &str) -> bool {
+    if name.starts_with('.') && !pattern.starts_with('.') { return false; }
+    name_matches(&pattern.chars().collect::<Vec<_>>(), &name.chars().collect::<Vec<_>>())
+}
+
+/// Whether the path parts match the pattern parts, where `**` is any number
+/// of directories, none included.
+fn parts_match(pattern: &[String], path: &[String]) -> bool {
+    match pattern.first().map(String::as_str) {
+        None => path.is_empty(),
+        Some("**") => parts_match(&pattern[1..], path)
+            || (!path.is_empty() && !path[0].starts_with('.') && parts_match(pattern, &path[1..])),
+        Some(part) => !path.is_empty() && part_matches(part, &path[0]) && parts_match(&pattern[1..], &path[1..]),
+    }
+}
+
+/// Whether anything below the path parts could still match, so a directory
+/// that cannot is not searched.
+fn could_match_below(pattern: &[String], path: &[String]) -> bool {
+    if path.is_empty() { return true; }
+    match pattern.first().map(String::as_str) {
+        None => false,
+        Some("**") => could_match_below(&pattern[1..], path) || (!path[0].starts_with('.') && could_match_below(pattern, &path[1..])),
+        Some(part) => part_matches(part, &path[0]) && could_match_below(&pattern[1..], &path[1..]),
+    }
+}
+
+fn matching(dir: &str, pattern: &str) -> RResult<Value> {
+    let separators: &[char] = if cfg!(windows) { &['/', '\\'] } else { &['/'] };
+    if pattern.is_empty() { return range_err("file.matching needs a pattern, such as \"*.txt\""); }
+    if Path::new(pattern).is_absolute() || pattern.starts_with(separators) {
+        return range_err(format!("file.matching takes a pattern relative to the directory, not \"{pattern}\""));
+    }
+    let parts: Vec<String> = pattern.split(separators).filter(|p| !p.is_empty() && *p != ".").map(String::from).collect();
+    if parts.iter().any(|p| p == "..") {
+        return range_err(format!("file.matching patterns stay inside the directory; \"{pattern}\" goes above it with .."));
+    }
+    match metadata(dir) {
+        Ok(m) if !m.is_dir() => return fail("NotDirectory", format!("{dir}: is a file, not a directory")),
+        Ok(_) => {}
+        Err(failure) => return failure,
+    }
+    let mut found = Vec::new();
+    let mut pending: Vec<(PathBuf, Vec<String>)> = vec![(PathBuf::from(dir), Vec::new())];
+    while let Some((at, relative)) = pending.pop() {
+        let shown = at.to_string_lossy().into_owned();
+        for entry in attempt!(&shown, fs::read_dir(&at)) {
+            let entry = attempt!(&shown, entry);
+            let mut here = relative.clone();
+            here.push(entry.file_name().to_string_lossy().into_owned());
+            if parts_match(&parts, &here) { found.push(entry.path()); }
+            // Links to directories are not entered, as in walk.
+            if attempt!(&shown, entry.file_type()).is_dir() && could_match_below(&parts, &here) {
+                pending.push((entry.path(), here));
+            }
+        }
+    }
+    found.sort();
+    ok(Value::array(found.iter().map(|p| display(p)).collect()))
+}
+
 // ----- path text -----
+
+/// `.` removed and `..` taken back against the part before it, without
+/// looking at the disk: `a/./b/../c` is `a/c`. `..` at a root stays at the root.
+fn lexical(path: &Path) -> PathBuf {
+    let mut out: Vec<Component> = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => match out.last() {
+                Some(Component::Normal(_)) => { out.pop(); }
+                Some(Component::RootDir | Component::Prefix(_)) => {}
+                _ => out.push(component),
+            },
+            other => out.push(other),
+        }
+    }
+    let joined: PathBuf = out.iter().collect();
+    if joined.as_os_str().is_empty() { PathBuf::from(".") } else { joined }
+}
+
+fn same_part(a: &Component, b: &Component) -> bool {
+    if cfg!(windows) {
+        a.as_os_str().to_string_lossy().to_lowercase() == b.as_os_str().to_string_lossy().to_lowercase()
+    } else {
+        a == b
+    }
+}
+
+/// The path that leads from `base` to `path`: `relative("docs/api/x.md", "docs")`
+/// is `api/x.md`, and from `docs/api` to `docs/guide` is `../guide`.
+fn relative(path: &str, base: &str) -> RResult<Value> {
+    let (mut to, mut from) = (lexical(Path::new(path)), lexical(Path::new(base)));
+    if to.is_absolute() != from.is_absolute() {
+        let absolute = |p: &Path| std::path::absolute(p).map(|p| lexical(&p));
+        match (absolute(&to), absolute(&from)) {
+            (Ok(a), Ok(b)) => { to = a; from = b; }
+            _ => return err(ErrorKind::Error, "the working directory cannot be read"),
+        }
+    }
+    let to_parts: Vec<Component> = to.components().filter(|c| *c != Component::CurDir).collect();
+    let from_parts: Vec<Component> = from.components().filter(|c| *c != Component::CurDir).collect();
+    let rooted = |parts: &[Component]| parts.iter().take_while(|c| matches!(c, Component::Prefix(_) | Component::RootDir)).count();
+    let (to_root, from_root) = (rooted(&to_parts), rooted(&from_parts));
+    if to_root != from_root || !to_parts[..to_root].iter().zip(&from_parts[..from_root]).all(|(a, b)| same_part(a, b)) {
+        return range_err(format!("\"{path}\" and \"{base}\" start from different roots or drives, so no relative path joins them"));
+    }
+    let common = to_parts.iter().zip(&from_parts).take_while(|(a, b)| same_part(a, b)).count();
+    if from_parts[common..].iter().any(|c| *c == Component::ParentDir) {
+        return range_err(format!("\"{base}\" goes above where it starts with .., so the way back to \"{path}\" is unknown"));
+    }
+    let mut result = PathBuf::new();
+    for _ in common..from_parts.len() { result.push(".."); }
+    for part in &to_parts[common..] { result.push(part.as_os_str()); }
+    Ok(if result.as_os_str().is_empty() { Value::str(".") } else { display(&result) })
+}
+
 
 fn parts(path: &str) -> Value {
     let mut parts: Vec<String> = Vec::new();
@@ -372,7 +616,7 @@ fn optional(text: Option<&std::ffi::OsStr>) -> Value {
 
 /// Rows of fields, and the line each row starts on, for later errors.
 /// `source` names where the text came from.
-fn csv_parse(text: &str, source: &str) -> RResult<Value> {
+fn csv_parse(text: &str, source: &str, separator: char) -> RResult<Value> {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let place = |line: usize| if source.is_empty() { format!("CSV line {line}") } else { format!("{source}: CSV line {line}") };
     let (mut rows, mut starts) = (Vec::new(), Vec::new());
@@ -402,7 +646,7 @@ fn csv_parse(text: &str, source: &str) -> RResult<Value> {
                         Some(other) => field.push(other),
                     }
                 }
-                if let Some(&other) = chars.peek().filter(|c| !matches!(c, ',' | '\n' | '\r')) {
+                if let Some(&other) = chars.peek().filter(|&&c| c != separator && c != '\n' && c != '\r') {
                     return err(ErrorKind::SyntaxError, format!(
                         "{}: '{other}' after a closing quote; a quote inside a quoted field is written twice", place(line)
                     ));
@@ -411,7 +655,7 @@ fn csv_parse(text: &str, source: &str) -> RResult<Value> {
             '"' => return err(ErrorKind::SyntaxError, format!(
                 "{}: a quote inside an unquoted field; quote the whole field and write the quote twice", place(line)
             )),
-            ',' => { row.push(Value::str(&std::mem::take(&mut field))); quoted_from = 0; }
+            c if c == separator => { row.push(Value::str(&std::mem::take(&mut field))); quoted_from = 0; }
             '\r' if chars.peek() == Some(&'\n') => {}
             '\n' | '\r' => {
                 end_row(&mut row, &mut field, quoted_from != 0, row_line);
@@ -426,7 +670,7 @@ fn csv_parse(text: &str, source: &str) -> RResult<Value> {
     Ok(Value::array(vec![Value::array(rows), Value::array(starts)]))
 }
 
-fn csv_field(value: &Value, out: &mut String) -> RResult<()> {
+fn csv_field(value: &Value, out: &mut String, separator: char) -> RResult<()> {
     let text = match value {
         Value::Str(text) => text.to_string(),
         Value::Null => String::new(),
@@ -437,7 +681,7 @@ fn csv_field(value: &Value, out: &mut String) -> RResult<()> {
             return type_err(format!("a CSV field holds text or a number, not {article} {kind}"));
         }
     };
-    if text.contains([',', '"', '\n', '\r']) {
+    if text.contains([separator, '"', '\n', '\r']) {
         out.push('"');
         out.push_str(&text.replace('"', "\"\""));
         out.push('"');
@@ -447,7 +691,7 @@ fn csv_field(value: &Value, out: &mut String) -> RResult<()> {
     Ok(())
 }
 
-fn csv_format(rows: &Value) -> RResult<Value> {
+fn csv_format(rows: &Value, separator: char) -> RResult<Value> {
     let Value::Array(rows) = rows else { return type_err("csv.format expects an array of rows") };
     let mut out = String::new();
     for row in rows.items.borrow().iter() {
@@ -455,12 +699,23 @@ fn csv_format(rows: &Value) -> RResult<Value> {
             return type_err(format!("each CSV row is an array of fields, not a {}", row.type_name()));
         };
         for (i, field) in fields.items.borrow().iter().enumerate() {
-            if i > 0 { out.push(','); }
-            csv_field(field, &mut out)?;
+            if i > 0 { out.push(separator); }
+            csv_field(field, &mut out, separator)?;
         }
         out.push('\n');
     }
     Ok(Value::str(&out))
+}
+
+/// The one character that separates CSV fields.
+fn separator(value: &Value) -> RResult<char> {
+    let text = text(value, "csv.with_separator")?;
+    let mut chars = text.chars();
+    match (chars.next(), chars.next()) {
+        (Some(c), None) if !matches!(c, '"' | '\n' | '\r') => Ok(c),
+        (Some(_), None) => range_err("a CSV separator cannot be a quote or a line break"),
+        _ => range_err(format!("a CSV separator is one character, such as \";\" or \"\\t\", not \"{text}\"")),
+    }
 }
 
 // ----- the package -----
@@ -517,7 +772,16 @@ pub fn package() -> Value {
         .function("is_absolute", 1, |a| Ok(Value::Bool(Path::new(text(&a[0], "path.is_absolute")?).is_absolute())))
         .function("parts", 1, |a| Ok(parts(text(&a[0], "path.parts")?)))
         // CSV text: std.file.csv.
-        .function("csv_parse", 2, |a| csv_parse(text(&a[0], "csv.parse")?, text(&a[1], "csv.parse")?))
-        .function("csv_format", 1, |a| csv_format(&a[0]))
+        .function("csv_parse", 3, |a| csv_parse(text(&a[0], "csv.parse")?, text(&a[1], "csv.parse")?, separator(&a[2])?))
+        .function("csv_format", 2, |a| csv_format(&a[0], separator(&a[1])?))
+        .function("csv_separator", 1, |a| separator(&a[0]).map(|c| Value::str(c.encode_utf8(&mut [0; 4]))))
+        // More operations.
+        .function("copy_all", 2, |a| copy_all(text(&a[0], "file.copy_all")?, text(&a[1], "file.copy_all")?))
+        .function("info", 1, |a| info(text(&a[0], "file.info")?))
+        .function("same", 2, |a| same(text(&a[0], "file.same")?, text(&a[1], "file.same")?))
+        .function("make_temp_dir", 0, |_| make_temp_dir())
+        .function("matching", 2, |a| matching(text(&a[0], "file.matching")?, text(&a[1], "file.matching")?))
+        .function("normalize", 1, |a| Ok(display(&lexical(Path::new(text(&a[0], "path.normalize")?)))))
+        .function("relative", 2, |a| relative(text(&a[0], "path.relative")?, text(&a[1], "path.relative")?))
         .build()
 }

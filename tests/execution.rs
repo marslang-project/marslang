@@ -941,6 +941,169 @@ fn std_json_loads_and_saves_files() {
 }
 
 #[test]
+fn std_file_matches_copies_and_describes() {
+    let sep = std::path::MAIN_SEPARATOR;
+    let (out, result, _) = run_in_dir("file-more", r#"
+        takepkg std.file;
+        takepkg std.file.path;
+        func show(array paths, string dir){ for (p, paths){ slout(path.relative(p, dir) + " "); } out(""); }
+        func m{
+            out(file.read_or(file.here("nothing.json"), "{}"), file.read_or(file.here("main.mars"), "").len() > 0);
+            func work(string dir){
+                file.make_dir(path.join(dir, "src/deep"));
+                file.make_dir(path.join(dir, ".git"));
+                for (name, arr("a.mars", "b.txt", "src/c.mars", "src/deep/d.mars", ".git/e.mars")){ file.write(path.join(dir, name), "x"); }
+                show(file.matching(dir, "*.mars"), dir);
+                show(file.matching(dir, "**/*.mars"), dir);
+                show(file.matching(dir, "src/*"), dir);
+                show(file.matching(dir, ".git/*"), dir);
+                show(file.matching(dir, "[ab].*"), dir);
+                show(file.matching(dir, "?.txt"), dir);
+                file.copy_all(path.join(dir, "src"), path.join(dir, "copy"));
+                out(file.list(path.join(dir, "copy")), file.list(path.join(dir, "copy/deep")));
+                info = file.info(path.join(dir, "a.mars"));
+                out(info.get("kind"), info.get("link"), info.get("size"), info.get("readonly"), info.get("modified") > 0.0);
+                out(file.info(dir).get("kind"), file.info(dir).get("size"));
+                out(file.same(path.join(dir, "a.mars"), path.join(dir, "src/../a.mars")), file.same(path.join(dir, "a.mars"), path.join(dir, "b.txt")));
+                ret "done";
+            }
+            out(file.with_temp_dir(work));
+            kept = "";
+            func fails(string dir){ kept = dir; file.write(path.join(dir, "x"), "x"); err(RangeError, "boom"); }
+            run{ file.with_temp_dir(fails); } handle(RangeError e){ out("raised and removed:", not file.exists(kept)); }
+        }"#);
+    result.expect("runtime error");
+    assert_eq!(out, format!(concat!(
+        "{{}} true\n",
+        "a.mars \n",
+        "a.mars src{s}c.mars src{s}deep{s}d.mars \n",
+        "src{s}c.mars src{s}deep \n",
+        ".git{s}e.mars \n",
+        "a.mars b.txt \n",
+        "b.txt \n",
+        "[\"c.mars\", \"deep\"] [\"d.mars\"]\n",
+        "file false 1 false true\n",
+        "directory null\n",
+        "true false\n",
+        "done\n",
+        "raised and removed: true\n"), s = sep));
+
+    for (body, message) in [
+        ("file.matching(\".\", \"\");", "needs a pattern"),
+        ("file.matching(\".\", \"../*\");", "goes above it with .."),
+        ("file.matching(\".\", \"/etc/*\");", "relative to the directory"),
+        ("file.copy_all(file.here(\"main.mars\"), file.here(\"x\"));", "is a file; file.copy copies files"),
+        ("file.copy_all(file.here(\"\"), file.here(\"main.mars\"));", "already exists; file.copy_all makes a new directory"),
+        ("file.make_dir(file.here(\"d\")); file.copy_all(file.here(\"d\"), file.here(\"d/inner\"));", "would never end"),
+        ("file.same(file.here(\"main.mars\"), file.here(\"none\"));", "none: no such file or directory"),
+    ] {
+        let (out, result, _) = run_in_dir("file-more-errors", &format!("takepkg std.file;\nfunc m{{ run{{ {body} }} handle(Error e){{ out(lasterr().message); }} }}"));
+        result.unwrap_or_else(|e| panic!("{body}: {e}"));
+        assert!(out.contains(message), "{body}: {out}");
+    }
+}
+
+#[test]
+fn std_file_path_normalizes_and_relates_paths() {
+    let s = std::path::MAIN_SEPARATOR;
+    executes(r#"
+        takepkg std.file.path;
+        func m{
+            out(path.normalize("a/./b/../c"), path.normalize("../x/./y"), path.normalize("a/.."), path.normalize("/a/../../b"));
+            out(path.relative("docs/api/x.md", "docs"), path.relative("docs/guide", "docs/api"), path.relative("a", "a"));
+            out(path.relative(path.absolute("docs/x.md"), "docs"));
+        }"#, &format!("a{s}c ..{s}x{s}y . {s}b\napi{s}x.md ..{s}guide .\nx.md\n"));
+    runtime_error("takepkg std.file.path;\nfunc m{ path.relative(\"x\", \"../y\"); }", "goes above where it starts with ..");
+}
+
+#[test]
+fn std_file_csv_takes_other_separators() {
+    executes(r#"
+        takepkg std.file.csv;
+        func m{
+            semi = csv.with_separator(";");
+            out(semi.parse("a;b\n\"x;y\";2\n"), semi.format(arr(arr("1;2", 3, "a,b"))));
+            tsv = csv.with_separator("\t");
+            out(tsv.format(arr(arr("a", "b"))) == "a\tb\n", tsv.parse_records("x\ty\n1\t2\n")[0].get("y"));
+        }"#, "[[\"a\", \"b\"], [\"x;y\", \"2\"]] \"1;2\";3;a,b\n\ntrue 2\n");
+    for (separator, message) in [(";;", "is one character"), ("\\\"", "cannot be a quote"), ("", "is one character")] {
+        runtime_error(&format!("takepkg std.file.csv;\nfunc m{{ csv.with_separator(\"{separator}\"); }}"), message);
+    }
+}
+
+#[test]
+fn std_file_env_ini_and_toml_read_and_write_configuration() {
+    executes(r##"
+        takepkg std.file.env;
+        func m{
+            e = env.parse("# comment\nexport PORT=8080\nNAME=\"My App\"  # title\nPATHS='a:$b' \nEMPTY=\nURL=http://x/#frag\nMULTI=\"one\ntwo\"\nPORT=9090\n");
+            out(e);
+            out(env.format(e));
+            out(env.format(env.parse(env.format(e))) == env.format(e));
+        }"##, concat!(
+            "{\"PORT\": \"9090\", \"NAME\": \"My App\", \"PATHS\": \"a:$b\", \"EMPTY\": \"\", \"URL\": \"http://x/#frag\", \"MULTI\": \"one\\ntwo\"}\n",
+            "PORT=9090\nNAME='My App'\nPATHS='a:$b'\nEMPTY=\nURL='http://x/#frag'\nMULTI=\"one\\ntwo\"\n\n",
+            "true\n"));
+
+    executes(r#"
+        takepkg std.file.ini;
+        func m{
+            i = ini.parse("; top\nname = demo\n[server]\nport = 8080\nhost: example.com\n\n# more\n[paths]\nhome = C:\\Users\n");
+            out(i);
+            out(ini.format(i));
+        }"#, concat!(
+            "{\"name\": \"demo\", \"server\": {\"port\": \"8080\", \"host\": \"example.com\"}, \"paths\": {\"home\": \"C:\\\\Users\"}}\n",
+            "name = demo\n\n[server]\nport = 8080\nhost = example.com\n\n[paths]\nhome = C:\\Users\n\n"));
+
+    executes(r#"
+        takepkg std.file.toml;
+        func m{
+            t = toml.parse("title = \"demo\"\n[package]\nname = \"x\"\nbig = 3000000000\npi = 3.14\nwhen = 1979-05-27T07:32:00Z\n[[bin]]\nname = \"a\"\n[[bin]]\nname = \"b\"\n");
+            out(t);
+            out(toml.format(t));
+        }"#, concat!(
+            "{\"title\": \"demo\", \"package\": {\"name\": \"x\", \"big\": 3000000000, \"pi\": 3.14, \"when\": \"1979-05-27T07:32:00Z\"}, \"bin\": [{\"name\": \"a\"}, {\"name\": \"b\"}]}\n",
+            "title = \"demo\"\n\n[package]\nname = \"x\"\nbig = 3000000000\npi = 3.14\nwhen = \"1979-05-27T07:32:00Z\"\n\n[[bin]]\nname = \"a\"\n\n[[bin]]\nname = \"b\"\n\n"));
+
+    for (package, source, message) in [
+        ("env", r#"env.parse("1BAD=x");"#, "env line 1: \"1BAD\" is not a variable name"),
+        ("env", r#"env.parse("A=1\nNOEQUALS\n");"#, "env line 2: expected KEY=value"),
+        ("env", r#"env.parse("A=\"open\n");"#, "opens a \" quote that is never closed"),
+        ("env", r#"env.parse("A=\"x\" y\n");"#, "'y' after the closing quote of A"),
+        ("env", "m1 = map(); m1.set(\"bad key\", 1); env.format(m1);", "is not a variable name"),
+        ("ini", r#"ini.parse("[a]\nx=1\nx=2\n");"#, "INI line 3: the key x appears twice in [a]"),
+        ("ini", r#"ini.parse("[a]\n[a]\n");"#, "INI line 2: the section [a] appears twice"),
+        ("ini", r#"ini.parse("just words\n");"#, "INI line 1: expected key = value"),
+        ("ini", "m1 = map(); m2 = map(); m2.set(\"deep\", map()); m1.set(\"s\", m2); ini.format(m1);", "INI has one level of sections"),
+        ("toml", r#"toml.parse("a = \nb = 1");"#, "TOML line 1, column 5:"),
+        ("toml", "m1 = map(); m1.set(\"x\", null); toml.format(m1);", "TOML has no null"),
+        ("toml", "toml.format(arr());", "map"),
+    ] {
+        runtime_error(&format!("takepkg std.file.{package};\nfunc m{{ {source} }}"), message);
+    }
+
+    // Files: errors name them.
+    let (out, result, _) = run_in_dir("config-files", r#"
+        takepkg std.file;
+        takepkg std.file.env;
+        takepkg std.file.ini;
+        takepkg std.file.toml;
+        func m{
+            settings = map(); settings.set("PORT", 8080); settings.set("DEBUG", true);
+            env.write(file.here(".env"), settings);
+            out(file.read(file.here(".env")), env.read(file.here(".env")));
+            ini.write(file.here("app.ini"), ini.parse("[s]\nk = v\n"));
+            out(ini.read(file.here("app.ini")));
+            toml.write(file.here("app.toml"), toml.parse("n = 1\n"));
+            out(toml.read(file.here("app.toml")));
+            file.write(file.here("bad.toml"), "x = 1\ny = [1,\n");
+            run{ toml.read(file.here("bad.toml")); } handle(SyntaxError e){ out(lasterr().message.contains("bad.toml: TOML line ")); }
+        }"#);
+    result.expect("runtime error");
+    assert_eq!(out, "PORT=8080\nDEBUG=true\n {\"PORT\": \"8080\", \"DEBUG\": \"true\"}\n{\"s\": {\"k\": \"v\"}}\n{\"n\": 1}\ntrue\n");
+}
+
+#[test]
 fn takepkg_reports_missing_circular_and_native_packages() {
     let dir = package_dir("package-errors", &[
         ("a.mars", "takepkg b;\nfunc f => 1;"),

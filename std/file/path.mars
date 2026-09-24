@@ -33,6 +33,21 @@ func absolute(string p) => native.absolute(p);
 func is_absolute(string p) => native.is_absolute(p);
 
 @Decorator.docstring("""
+    The path with . removed and each .. taken back against the name before it,
+    without looking at the disk: a/./b/../c is a/c. A .. at the start of a
+    relative path is kept; one at a root stays at the root. An empty result is ".".
+""")
+func normalize(string p) => native.normalize(p);
+
+@Decorator.docstring("""
+    The path that leads from base to p: path.relative("docs/api/x.md", "docs")
+    is api/x.md, and from docs/api to docs/guide is ../guide. When one is
+    absolute and the other is not, both are taken from the working directory.
+    Paths on different drives raise RangeError.
+""")
+func relative(string p, string base) => native.relative(p, base);
+
+@Decorator.docstring("""
     Every part of the path, as an array: ["docs", "api", "std.md"]. A root is
     its own first part: "/" elsewhere, and "C:\\" on Windows.
 """)

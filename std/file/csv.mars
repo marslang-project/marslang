@@ -17,20 +17,20 @@ takepkg std.file;
     start is ignored, and both \\n and \\r\\n end a row. Malformed quoting raises
     SyntaxError with the line.
 """)
-func parse(string text) => native.csv_parse(text, "")[0];
+func parse(string text) => native.csv_parse(text, "", ",")[0];
 
 @Decorator.docstring("""
     Rows as CSV text: an array of arrays, one line per row, each ending in \\n.
     Strings are written as they are, numbers and booleans as out prints them,
     and null as an empty field. Other values raise TypeError.
 """)
-func format(array rows) => native.csv_format(rows);
+func format(array rows) => native.csv_format(rows, ",");
 
 @Decorator.docstring("The rows of a CSV file, as an array of arrays of strings, as parse gives them.")
-func read(string path) => native.csv_parse(file.read(path), path)[0];
+func read(string path) => native.csv_parse(file.read(path), path, ",")[0];
 
 @Decorator.docstring("Write rows to a CSV file, as format writes them. All or nothing, like file.write. Returns null.")
-func write(string path, array rows) => file.write(path, native.csv_format(rows));
+func write(string path, array rows) => file.write(path, native.csv_format(rows, ","));
 
 @Decorator.docstring("""
     The rows of CSV text as maps, keyed by the first row.
@@ -41,20 +41,54 @@ func write(string path, array rows) => file.write(path, native.csv_format(rows))
     A row with more or fewer fields than the header raises SyntaxError with its
     line, and so does a header that names a column twice.
 """)
-func parse_records(string text) => _records(native.csv_parse(text, ""), "");
+func parse_records(string text) => _records(native.csv_parse(text, "", ","), "");
 
 @Decorator.docstring("The rows of a CSV file as maps keyed by its first row, as parse_records gives them.")
-func read_records(string path) => _records(native.csv_parse(file.read(path), path), path);
+func read_records(string path) => _records(native.csv_parse(file.read(path), path, ","), path);
 
 @Decorator.docstring("""
     Maps as CSV text, with a header row from the first map's keys. A later map
     without one of those keys gets an empty field; one with a key the first
     does not have raises RangeError, since it would be lost.
 """)
-func format_records(array records) => native.csv_format(_rows(records));
+func format_records(array records) => native.csv_format(_rows(records), ",");
 
 @Decorator.docstring("Write maps to a CSV file, as format_records writes them. All or nothing, like file.write. Returns null.")
-func write_records(string path, array records) => file.write(path, native.csv_format(_rows(records)));
+func write_records(string path, array records) => file.write(path, native.csv_format(_rows(records), ","));
+
+@Decorator.docstring("""
+    The same eight functions for tables whose fields are separated by another
+    character, such as ; from many European spreadsheets or a tab in TSV files.
+
+        tsv = csv.with_separator("\\t");
+        rows = tsv.read("table.tsv");
+        tsv.write("copy.tsv", rows);
+
+    The separator is one character, and not a quote or a line break.
+""")
+func with_separator(string separator) => Separated(separator);
+
+@Decorator.docstring("CSV with a separator other than a comma; make one with csv.with_separator. Its methods are those of std.file.csv.")
+family Separated{
+    @Decorator.docstring("Tables separated by separator, one character that is not a quote or a line break.")
+    func init(string separator){ me.separator = native.csv_separator(separator); }
+    @Decorator.docstring("The rows of the text, as csv.parse gives them.")
+    func parse(string text) => native.csv_parse(text, "", me.separator)[0];
+    @Decorator.docstring("Rows as text, as csv.format writes them.")
+    func format(array rows) => native.csv_format(rows, me.separator);
+    @Decorator.docstring("The rows of a file, as csv.read gives them.")
+    func read(string path) => native.csv_parse(file.read(path), path, me.separator)[0];
+    @Decorator.docstring("Write rows to a file, as csv.write does.")
+    func write(string path, array rows) => file.write(path, native.csv_format(rows, me.separator));
+    @Decorator.docstring("The rows of the text as maps keyed by the first row.")
+    func parse_records(string text) => _records(native.csv_parse(text, "", me.separator), "");
+    @Decorator.docstring("The rows of a file as maps keyed by its first row.")
+    func read_records(string path) => _records(native.csv_parse(file.read(path), path, me.separator), path);
+    @Decorator.docstring("Maps as text, with a header row from the first map's keys.")
+    func format_records(array records) => native.csv_format(_rows(records), me.separator);
+    @Decorator.docstring("Write maps to a file, with a header row from the first map's keys.")
+    func write_records(string path, array records) => file.write(path, native.csv_format(_rows(records), me.separator));
+}
 
 @Decorator.private
 func _records(array parsed, string source){

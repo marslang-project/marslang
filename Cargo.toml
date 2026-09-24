@@ -10,3 +10,5 @@ license-file = "LICENSE.md"
 [dependencies]
 indexmap = "2.14.2"
 unicode-segmentation = "1.13.3"
+# std.file.toml: TOML 1.1 reading and writing, keeping key order.
+toml = { version = "1.1.6", features = ["preserve_order"] }

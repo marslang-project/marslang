@@ -60,5 +60,21 @@ Each row ends in `\n`, which every spreadsheet and CSV reader accepts.
 later record without one of those keys gets an empty field; a record with a key
 the first does not have raises `RangeError`, since its value would be lost.
 
+## Other separators
+
+Many European spreadsheets separate fields with `;`, and TSV files use a tab.
+`csv.with_separator` gives the same eight functions for any one character:
+
+```mars
+semi = csv.with_separator(";");
+rows = semi.read("export.csv");
+
+tsv = csv.with_separator("\t");
+tsv.write("table.tsv", rows);
+```
+
+The separator cannot be a quote or a line break. Quoting works the same way,
+so a field holding the separator is quoted.
+
 The wrapper is written in Marslang ([std/file/csv.mars](../../std/file/csv.mars));
 reading and writing CSV text is native, in [std/rs/file.rs](../../std/rs/file.rs).

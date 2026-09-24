@@ -4,6 +4,8 @@ Reading, writing, checking, listing, copying, moving, and removing files and
 directories. Text is UTF-8. Working with path text is
 [std.file.path](std-file-path.md), CSV tables are [std.file.csv](std-file-csv.md),
 and JSON files are [`json.load` and `json.save`](std-json.md#files).
+Configuration files are [std.file.env](std-file-env.md),
+[std.file.ini](std-file-ini.md), and [std.file.toml](std-file-toml.md).
 
 ```mars
 takepkg std.file;
@@ -21,8 +23,14 @@ func m{
 | Function | Result |
 | --- | --- |
 | `read(path)` | The whole file as a string |
+| `read_or(path, fallback)` | The whole file, or `fallback` when there is no such file |
 | `read_lines(path)` | The lines, as an array, without their line endings |
 | `each_line(path, f)` | Calls `f(line)` for each line, reading as it goes |
+
+`read_or` covers the most common case of a missing file in one line, such as
+settings that have not been saved yet: `file.read_or("settings.json", "{}")`.
+Only a missing file gives the fallback; one that exists but cannot be read
+still raises.
 
 `read` keeps line endings exactly as the file has them. `read_lines` and
 `each_line` remove `\n` and `\r\n`, and a line ending at the very end adds no
@@ -76,6 +84,18 @@ NotFoundError: reports/june.txt: the directory reports does not exist; file.make
 | `is_file(path)`, `is_dir(path)` | Whether a file, or a directory, is there |
 | `size(path)` | The size in bytes: an `int`, or a `longint` beyond 2 GB |
 | `modified(path)` | When it last changed, in seconds since 1970, as `time.now()` gives |
+| `info(path)` | All of these facts at once, as a map |
+| `same(a, b)` | Whether two paths name the same file or directory |
+
+`info` gives `kind` (`"file"`, `"directory"`, or `"other"`), `link` (whether the
+path itself is a link), `size` (`null` for a directory), `modified`, `created`
+(`null` where the system does not record it), and `readonly`. A link is
+followed, so `kind` describes what it points to.
+
+`same` resolves links, `.`, and `..` before comparing, so
+`file.same("a.txt", "./sub/../a.txt")` is `true` when `sub` is a directory beside
+`a.txt`. Both paths must exist; on Linux and macOS that includes every directory
+named on the way, even one that `..` leaves again.
 
 ## Directories
 
@@ -83,6 +103,7 @@ NotFoundError: reports/june.txt: the directory reports does not exist; file.make
 | --- | --- |
 | `list(dir)` | The names directly inside, sorted |
 | `walk(dir)` | The path of every file below, at any depth, sorted |
+| `matching(dir, pattern)` | The paths below `dir` that match a pattern, sorted |
 | `make_dir(path)` | Creates the directory and any missing parents |
 
 `list` gives names, and `walk` gives paths that start with `dir`, so they can be
@@ -90,11 +111,33 @@ passed straight to `read`. `walk` lists files only, and does not follow a link
 to a directory, so a link back up the tree cannot loop. `make_dir` does nothing
 when the directory is already there.
 
+### Patterns
+
+```mars
+file.matching("logs", "*.txt");       // text files directly in logs
+file.matching("src", "**/*.mars");    // .mars files at any depth
+file.matching(".", "report-202?.csv");
+```
+
+| In a pattern | Matches |
+| --- | --- |
+| `*` | Any run of characters within one name |
+| `?` | One character |
+| `[abc]`, `[a-z]`, `[!abc]` | One character of the set, or not of it |
+| `**` | Any number of directories, none included |
+
+Patterns use `/` between names on every platform; `\` works too on Windows.
+Files and directories both match. A name starting with a dot is matched only by
+a pattern part that starts with one, as in a shell, so `**/*.mars` does not
+reach into `.git`. Case is ignored on Windows, where file names ignore it too.
+A pattern is relative to `dir` and cannot leave it with `..`.
+
 ## Copying, moving, and removing
 
 | Function | Result |
 | --- | --- |
 | `copy(from, to)` | Copies a file, replacing one at `to` |
+| `copy_all(from, to)` | Copies a directory and everything in it to a new directory `to` |
 | `move(from, to)` | Moves or renames a file or a directory |
 | `remove(path)` | Removes a file |
 | `remove_dir(path)` | Removes an empty directory |
@@ -102,6 +145,11 @@ when the directory is already there.
 
 `to` is the full path of the result, not the directory to put it in. `move`
 works across drives for files, by copying and then removing.
+
+`copy_all` makes `to`, which must not exist yet, so it never merges into an
+existing directory. If it fails partway, what it made is removed again. It
+refuses to copy a directory into itself, and a link to a directory inside,
+since following one could copy far more than was asked.
 
 `remove_all` cannot be undone, so it refuses the targets nobody means: the root
 of a drive or file system, the home directory, and the working directory or any
@@ -113,11 +161,29 @@ directory that contains it. Each raises `PermissionError`.
 | --- | --- |
 | `here(name)` | `name` beside the running program's own file |
 | `temp_dir()` | The system's directory for temporary files |
+| `with_temp_dir(f)` | Calls `f` with a new, empty directory, then removes it |
 
 A relative path such as `"data.json"` is read from the directory the program
 was started in. That changes when someone runs `marslang tools/report.mars`
 from elsewhere, and the program stops finding its files. `file.here("data.json")`
 is the file next to `report.mars` wherever it is started from.
+
+`with_temp_dir` is for scratch work and tests: the directory is removed with
+everything in it after `f` returns, and also when `f` raises, and it returns
+what `f` returns.
+
+```mars
+takepkg std.file;
+takepkg std.file.path;
+
+func m{
+    func work(string dir){
+        file.write(path.join(dir, "draft.txt"), "...");
+        ret file.list(dir);
+    }
+    out(file.with_temp_dir(work));   // ["draft.txt"]
+}
+```
 
 ## Errors
 
@@ -134,11 +200,10 @@ the path:
 | `file.NotDirectoryError` | An operation on directories was given a file |
 
 ```mars
-settings = "{}";
 run{
-    settings = file.read("settings.json");
+    file.remove(file.here("old.log"));
 } handle(file.NotFoundError e){
-    out("no settings.json yet, so the defaults are used");
+    out("nothing to clean up");
 }
 ```
 

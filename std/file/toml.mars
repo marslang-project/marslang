@@ -1,0 +1,32 @@
+// std.file.toml: TOML files, as Cargo and Python projects use them. Reading and writing the text are native
+// (std/rs/config.rs); files go through std.file, so writes are all or nothing.
+takepkg rs.config = native;
+takepkg std.Decorator;
+takepkg std.file;
+
+@Decorator.docstring("""
+    TOML text as a map, keeping the order of its keys.
+
+        project = toml.parse('[package]\\nname = "demo"\\nversion = "1.0"\\n');
+        out(project.get("package").get("name"));   // demo
+
+    Tables become maps, arrays become arrays, and integers, floats, strings, and
+    booleans become themselves; an integer is an int when it fits in 32 bits
+    and a longint otherwise. Dates and times become their text, such as
+    "1979-05-27T07:32:00Z", since Marslang has no date kind. Mistakes raise
+    SyntaxError with the line and column.
+""")
+func parse(string text) => native.toml_parse(text, "");
+
+@Decorator.docstring("Read a TOML file into a map, as parse does. Mistakes raise SyntaxError naming the file and line.")
+func read(string path) => native.toml_parse(file.read(path), path);
+
+@Decorator.docstring("""
+    A map as TOML text. Maps inside become [tables], and arrays of maps become
+    [[arrays of tables]]. TOML has no null, so a null value raises TypeError;
+    leave the key out instead.
+""")
+func format(map values) => native.toml_format(values);
+
+@Decorator.docstring("Write values to a file, as format writes them. All or nothing, like file.write. Returns null.")
+func write(string path, map values) => file.write(path, native.toml_format(values));

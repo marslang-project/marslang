@@ -54,6 +54,20 @@ func _result(array result){
 """)
 func read(string path) => _result(native.read(path));
 
+@Decorator.docstring("""
+    The whole file as a string, or fallback when there is no such file.
+
+        settings = file.read_or("settings.json", "{}");
+
+    Only a missing file gives fallback; a file that cannot be read for another
+    reason, such as permissions, still raises.
+""")
+func read_or(string path, string fallback){
+    result = native.read(path);
+    if (not result[0] and result[1] == "NotFound"){ ret fallback; }
+    ret _result(result);
+}
+
 @Decorator.docstring("The lines of the file, as an array of strings without their line endings. A line ending at the very end adds no empty line.")
 func read_lines(string path) => _result(native.read_lines(path));
 
@@ -110,6 +124,23 @@ func is_dir(string path) => native.is_dir(path);
 @Decorator.docstring("The size of the file in bytes, as an int, or a longint beyond 2 GB.")
 func size(string path) => _result(native.size(path));
 
+@Decorator.docstring("""
+    Facts about a file or directory, as one map:
+
+        kind       "file", "directory", or "other"
+        link       whether the path itself is a link
+        size       bytes, or null for a directory
+        modified   seconds since 1970, like time.now()
+        created    the same, or null where the system does not record it
+        readonly   whether it can be changed
+
+    A link is followed, so kind describes what it points to.
+""")
+func info(string path) => _result(native.info(path));
+
+@Decorator.docstring("Whether two paths name the same file or directory once links, ., and .. are resolved: file.same(\"a.txt\", \"./sub/../a.txt\") is true when sub is a directory beside a.txt. Both must exist.")
+func same(string a, string b) => _result(native.same(a, b));
+
 @Decorator.docstring("When the file or directory last changed, in seconds since 1970 as a float, like time.now().")
 func modified(string path) => _result(native.modified(path));
 
@@ -125,6 +156,20 @@ func list(string dir) => _result(native.list(dir));
 """)
 func walk(string dir) => _result(native.walk(dir));
 
+@Decorator.docstring("""
+    The paths below dir whose names match pattern, files and directories alike,
+    sorted.
+
+        file.matching("logs", "*.txt");       // text files directly in logs
+        file.matching("src", "**/*.mars");    // .mars files at any depth
+
+    * is any run of characters within a name, ? one character, and [abc],
+    [a-z], or [!abc] one character of a set. ** is any number of directories,
+    none included. Names starting with a dot are matched only by a pattern that
+    starts with one, so * does not reach into .git. Case is ignored on Windows.
+""")
+func matching(string dir, string pattern) => _result(native.matching(dir, pattern));
+
 @Decorator.docstring("Create the directory and any missing directories above it. Nothing happens if it already exists; a file in the way raises ExistsError.")
 func make_dir(string path) => _result(native.make_dir(path));
 
@@ -132,6 +177,14 @@ func make_dir(string path) => _result(native.make_dir(path));
 
 @Decorator.docstring("Copy the file from to the path to, replacing a file already there. Returns null.")
 func copy(string from, string to) => _result(native.copy(from, to));
+
+@Decorator.docstring("""
+    Copy a directory and everything in it to to, which must not exist yet.
+    If the copy fails partway, what was made is removed again. A link to a
+    directory inside it raises FileError, since following it could copy far
+    more than the directory. Returns null.
+""")
+func copy_all(string from, string to) => _result(native.copy_all(from, to));
 
 @Decorator.docstring("Move or rename a file or directory, replacing a file already at to. Works across drives for files. Returns null.")
 func move(string from, string to) => _result(native.move(from, to));
@@ -164,3 +217,21 @@ func here(string name) => native.here(name);
 
 @Decorator.docstring("The system's directory for temporary files.")
 func temp_dir() => native.temp_dir();
+
+@Decorator.docstring("""
+    Make a new, empty directory for temporary files, call f with its path, and
+    remove it with everything in it afterwards, even when f raises. Returns
+    what f returns.
+
+        func work(string dir){
+            file.write(path.join(dir, "draft.txt"), "...");
+            ret file.list(dir);
+        }
+        out(file.with_temp_dir(work));   // ["draft.txt"]
+""")
+func with_temp_dir(Function f){
+    dir = _result(native.make_temp_dir());
+    result = null;
+    run{ result = f(dir); } then{ native.remove_all(dir); }
+    ret result;
+}

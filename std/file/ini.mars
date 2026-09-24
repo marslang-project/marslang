@@ -1,0 +1,32 @@
+// std.file.ini: INI files of [sections] and key = value lines. Reading and writing the text are native
+// (std/rs/config.rs); files go through std.file, so writes are all or nothing.
+takepkg rs.config = native;
+takepkg std.Decorator;
+takepkg std.file;
+
+@Decorator.docstring("""
+    INI text as a map. Keys before the first [section] are top-level keys,
+    and each section is a map inside the result.
+
+        config = ini.parse('name = demo\\n[server]\\nport = 8080\\n');
+        out(config.get("name"), config.get("server").get("port"));   // demo 8080
+
+    key = value and key: value both work, and lines starting with ; or # are
+    comments. Values are strings with the spaces around them removed; INI has
+    no quoting, so quotes stay part of the value. A section or key given twice
+    raises SyntaxError.
+""")
+func parse(string text) => native.ini_parse(text, "");
+
+@Decorator.docstring("Read an INI file into a map, as parse does. Mistakes raise SyntaxError naming the file and line.")
+func read(string path) => native.ini_parse(file.read(path), path);
+
+@Decorator.docstring("""
+    A map as INI text: plain values as top-level keys, then each map value as a
+    [section]. Values are text, numbers, or booleans; INI has one level of
+    sections, so a map inside a section raises TypeError.
+""")
+func format(map values) => native.ini_format(values);
+
+@Decorator.docstring("Write values to a file, as format writes them. All or nothing, like file.write. Returns null.")
+func write(string path, map values) => file.write(path, native.ini_format(values));
