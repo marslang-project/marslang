@@ -1,0 +1,110 @@
+// std.file.csv: CSV tables as RFC 4180 defines them. Fields are separated by
+// commas and quoted when they hold a comma, a quote, or a line break, with a
+// quote inside written twice. Reading and writing the text are native
+// (std/rs/file.rs); files go through std.file, so writes are all or nothing.
+takepkg rs.core;
+takepkg rs.file = native;
+takepkg std.Decorator;
+takepkg std.file;
+
+@Decorator.docstring("""
+    The rows of CSV text, as an array of arrays of strings.
+
+        rows = csv.parse("name,age\\nAda,36\\n");   // [["name", "age"], ["Ada", "36"]]
+
+    Every field is a string, since CSV does not say which are numbers; convert
+    with int() or float(). Blank lines are skipped, a byte-order mark at the
+    start is ignored, and both \\n and \\r\\n end a row. Malformed quoting raises
+    SyntaxError with the line.
+""")
+func parse(string text) => native.csv_parse(text, "")[0];
+
+@Decorator.docstring("""
+    Rows as CSV text: an array of arrays, one line per row, each ending in \\n.
+    Strings are written as they are, numbers and booleans as out prints them,
+    and null as an empty field. Other values raise TypeError.
+""")
+func format(array rows) => native.csv_format(rows);
+
+@Decorator.docstring("The rows of a CSV file, as an array of arrays of strings, as parse gives them.")
+func read(string path) => native.csv_parse(file.read(path), path)[0];
+
+@Decorator.docstring("Write rows to a CSV file, as format writes them. All or nothing, like file.write. Returns null.")
+func write(string path, array rows) => file.write(path, native.csv_format(rows));
+
+@Decorator.docstring("""
+    The rows of CSV text as maps, keyed by the first row.
+
+        people = csv.parse_records("name,age\\nAda,36\\n");
+        out(people[0].get("name"));   // Ada
+
+    A row with more or fewer fields than the header raises SyntaxError with its
+    line, and so does a header that names a column twice.
+""")
+func parse_records(string text) => _records(native.csv_parse(text, ""), "");
+
+@Decorator.docstring("The rows of a CSV file as maps keyed by its first row, as parse_records gives them.")
+func read_records(string path) => _records(native.csv_parse(file.read(path), path), path);
+
+@Decorator.docstring("""
+    Maps as CSV text, with a header row from the first map's keys. A later map
+    without one of those keys gets an empty field; one with a key the first
+    does not have raises RangeError, since it would be lost.
+""")
+func format_records(array records) => native.csv_format(_rows(records));
+
+@Decorator.docstring("Write maps to a CSV file, as format_records writes them. All or nothing, like file.write. Returns null.")
+func write_records(string path, array records) => file.write(path, native.csv_format(_rows(records)));
+
+@Decorator.private
+func _records(array parsed, string source){
+    rows = parsed[0];
+    lines = parsed[1];
+    records = arr();
+    if (rows.is_empty()){ ret records; }
+    where = "CSV line ";
+    if (source != ""){ where = source + ": CSV line "; }
+    header = rows[0];
+    seen = set();
+    for (name, header){
+        if (seen.has(name)){ core.raise(SyntaxError, where + string(lines[0]) + ": the header names the column " + name + " twice"); }
+        seen.add(name);
+    }
+    for (i = 1, i < rows.len(), i++){
+        row = rows[i];
+        if (row.len() != header.len()){
+            fields = " fields";
+            if (row.len() == 1){ fields = " field"; }
+            core.raise(SyntaxError, where + string(lines[i]) + ": " + string(row.len()) + fields + ", but the header has " + string(header.len()));
+        }
+        record = map();
+        for (j = 0, j < header.len(), j++){ record.set(header[j], row[j]); }
+        records.add(record);
+    }
+    ret records;
+}
+
+@Decorator.private
+func _rows(array records){
+    rows = arr();
+    if (records.is_empty()){ ret rows; }
+    for (record, records){
+        if (core.kind(record) != "map"){ core.raise(TypeError, "CSV records are maps, not " + core.kind(record)); }
+    }
+    header = records[0].keys();
+    rows.add(header);
+    for (i = 0, i < records.len(), i++){
+        record = records[i];
+        for (key, record){
+            if (not header.has(key)){
+                core.raise(RangeError, "record " + string(i) + " has the key " + string(key) + ", which the first record does not, so it has no column");
+            }
+        }
+        row = arr();
+        for (key, header){
+            if (record.has(key)){ row.add(record.get(key)); } else { row.add(null); }
+        }
+        rows.add(row);
+    }
+    ret rows;
+}

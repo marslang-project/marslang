@@ -1,0 +1,166 @@
+// std.file: reading, writing, checking, listing, copying, moving, and removing
+// files and directories. Text is UTF-8. Path text is std.file.path, and CSV
+// tables are std.file.csv.
+//
+// The work is native (std/rs/file.rs). Each native call returns [true, value]
+// or [false, kind, message]; _result turns a failure into the family below
+// that kind names, because a native package can raise only built-in errors.
+takepkg rs.file = native;
+takepkg std.Decorator;
+
+@Decorator.docstring("""
+    Any failure to read or change the file system. Every message starts with
+    the path. handle(file.FileError e) catches all of the kinds below.
+""")
+family FileError(Error){}
+
+@Decorator.docstring("Nothing is at the path, or a directory on the way to it is missing.")
+family NotFoundError(FileError){}
+
+@Decorator.docstring("create or make_dir found something already at the path.")
+family ExistsError(FileError){}
+
+@Decorator.docstring("The system refused, or remove_all refused a directory it will not remove.")
+family PermissionError(FileError){}
+
+@Decorator.docstring("An operation on files was given a directory.")
+family IsDirectoryError(FileError){}
+
+@Decorator.docstring("An operation on directories was given a file.")
+family NotDirectoryError(FileError){}
+
+@Decorator.private
+func _result(array result){
+    if (result[0]){ ret result[1]; }
+    kind = result[1];
+    message = result[2];
+    if (kind == "NotFound"){ err(NotFoundError, message); }
+    if (kind == "Exists"){ err(ExistsError, message); }
+    if (kind == "Permission"){ err(PermissionError, message); }
+    if (kind == "IsDirectory"){ err(IsDirectoryError, message); }
+    if (kind == "NotDirectory"){ err(NotDirectoryError, message); }
+    err(FileError, message);
+}
+
+// ----- reading -----
+
+@Decorator.docstring("""
+    The whole file as a string.
+
+        notes = file.read("notes.txt");
+
+    A file that is not UTF-8 text raises FileError naming the first bad byte.
+    Line endings are kept as they are in the file.
+""")
+func read(string path) => _result(native.read(path));
+
+@Decorator.docstring("The lines of the file, as an array of strings without their line endings. A line ending at the very end adds no empty line.")
+func read_lines(string path) => _result(native.read_lines(path));
+
+@Decorator.docstring("""
+    Call f with each line of the file, without its line ending, reading as it
+    goes, so a file larger than memory can be processed.
+
+        errors = 0;
+        func check(string line){ if (line.contains("ERROR")){ errors = errors + 1; } }
+        file.each_line("server.log", check);
+
+    Only about a thousand lines are held at a time.
+""")
+func each_line(string path, Function f){
+    offset = 0;
+    while (offset >= 0){
+        chunk = _result(native.lines_chunk(path, offset, 1000));
+        for (line, chunk[0]){ f(line); }
+        offset = chunk[1];
+    }
+}
+
+// ----- writing -----
+
+@Decorator.docstring("""
+    Replace the file's contents with text, creating the file if needed.
+
+    All or nothing: the text goes to a temporary file beside it, which then
+    replaces the old one, so a crash never leaves half a file. The directory
+    must exist; file.make_dir creates it. Returns null.
+""")
+func write(string path, string text) => _result(native.write(path, text));
+
+@Decorator.docstring("Add text to the end of the file, creating the file if needed. Returns null.")
+func append(string path, string text) => _result(native.append(path, text));
+
+@Decorator.docstring("Write a new file. Raises ExistsError if one is already there, so it never replaces anything. Returns null.")
+func create(string path, string text) => _result(native.create(path, text));
+
+@Decorator.docstring("Write an array of strings, one per line, each ending in a newline. All or nothing, like write. Returns null.")
+func write_lines(string path, array lines) => _result(native.write_lines(path, lines));
+
+// ----- checking -----
+
+@Decorator.docstring("Whether anything, a file or a directory, is at the path.")
+func exists(string path) => _result(native.exists(path));
+
+@Decorator.docstring("Whether a file is at the path. False when nothing is there.")
+func is_file(string path) => native.is_file(path);
+
+@Decorator.docstring("Whether a directory is at the path. False when nothing is there.")
+func is_dir(string path) => native.is_dir(path);
+
+@Decorator.docstring("The size of the file in bytes, as an int, or a longint beyond 2 GB.")
+func size(string path) => _result(native.size(path));
+
+@Decorator.docstring("When the file or directory last changed, in seconds since 1970 as a float, like time.now().")
+func modified(string path) => _result(native.modified(path));
+
+// ----- directories -----
+
+@Decorator.docstring("The names of the files and directories directly inside dir, sorted.")
+func list(string dir) => _result(native.list(dir));
+
+@Decorator.docstring("""
+    The path of every file below dir, at any depth, sorted. Each path starts
+    with dir, so it can be passed straight to read. A link to a directory is
+    listed but not entered, so a link back up the tree cannot loop.
+""")
+func walk(string dir) => _result(native.walk(dir));
+
+@Decorator.docstring("Create the directory and any missing directories above it. Nothing happens if it already exists; a file in the way raises ExistsError.")
+func make_dir(string path) => _result(native.make_dir(path));
+
+// ----- copying, moving, removing -----
+
+@Decorator.docstring("Copy the file from to the path to, replacing a file already there. Returns null.")
+func copy(string from, string to) => _result(native.copy(from, to));
+
+@Decorator.docstring("Move or rename a file or directory, replacing a file already at to. Works across drives for files. Returns null.")
+func move(string from, string to) => _result(native.move(from, to));
+
+@Decorator.docstring("Remove a file. A directory raises IsDirectoryError; use remove_dir or remove_all.")
+func remove(string path) => _result(native.remove(path));
+
+@Decorator.docstring("Remove an empty directory. One with anything in it raises FileError; use remove_all.")
+func remove_dir(string path) => _result(native.remove_dir(path));
+
+@Decorator.docstring("""
+    Remove a directory and everything in it. It cannot be undone.
+
+    It refuses, with PermissionError, the root of a drive or file system, the
+    home directory, and the working directory or any directory containing it.
+""")
+func remove_all(string path) => _result(native.remove_all(path));
+
+// ----- places -----
+
+@Decorator.docstring("""
+    name beside the running program's own file, however the program was started.
+
+        config = file.read(file.here("config.json"));
+
+    file.read("config.json") reads from the directory the program was started
+    in, which changes when someone runs it from elsewhere; this does not.
+""")
+func here(string name) => native.here(name);
+
+@Decorator.docstring("The system's directory for temporary files.")
+func temp_dir() => native.temp_dir();

@@ -61,7 +61,8 @@ pub(crate) struct Loader {
 /// Where a package's source comes from.
 enum Found {
     Native(fn() -> crate::value::Value),
-    Bundled(&'static str),
+    /// A standard package's source, and `true` when it is a directory's `init.mars`.
+    Bundled(&'static str, bool),
     /// A `.mars` file, the root it was found under, and `true` when it is a
     /// directory's `init.mars`.
     File(PathBuf, PathBuf, bool),
@@ -144,7 +145,7 @@ impl Loader {
         }
         let (source, exports) = match found {
             Found::Native(native) => (Source::Native(native), Vec::new()),
-            Found::Bundled(text) => self.compile_package(module, text, false)?,
+            Found::Bundled(text, is_init) => self.compile_package(module, text, is_init)?,
             Found::File(path, _, is_init) => {
                 let text = fs::read_to_string(&path)
                     .map_err(|e| format!("failed to read package '{module}' at {}: {e}", path.display()))?;
@@ -169,7 +170,7 @@ impl Loader {
                 .ok_or_else(|| format!("native package '{module}' does not exist"));
         }
         if module == "std" || module.starts_with("std.") {
-            return BUNDLED.iter().find(|(name, _)| *name == module).map(|(_, text)| Found::Bundled(text))
+            return BUNDLED.iter().find(|(name, ..)| *name == module).map(|(_, text, is_init)| Found::Bundled(text, *is_init))
                 .ok_or_else(|| format!("standard package '{module}' is not implemented yet"));
         }
         let mut tried = Vec::new();

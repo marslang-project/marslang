@@ -2,6 +2,7 @@
 // (std/rs/json.rs); this file is the documented surface.
 takepkg rs.json = native;
 takepkg std.Decorator;
+takepkg std.file;
 
 @Decorator.docstring("""
     Read JSON text into Marslang values.
@@ -36,3 +37,20 @@ func pretty(any value) => native.stringify(value, 2);
 
 @Decorator.docstring("As pretty, indenting each level by spaces, from 1 to 16; 0 is the same as stringify.")
 func indented(any value, int spaces) => native.stringify(value, spaces);
+
+@Decorator.docstring("""
+    Read a JSON file and parse it.
+
+        settings = json.load("settings.json");
+
+    A missing file raises file.NotFoundError, and text that is not JSON a
+    SyntaxError that names the file: settings.json: JSON line 3, column 3: ...
+""")
+func load(string path) => native.parse_from(file.read(path), path);
+
+@Decorator.docstring("""
+    Write value to a file as pretty JSON, two spaces per level, ending in a
+    newline. All or nothing, like file.write, so a crash never leaves half a
+    file. Returns null.
+""")
+func save(string path, any value){ file.write(path, native.stringify(value, 2) + "\n"); }

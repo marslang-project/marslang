@@ -499,7 +499,7 @@ fn bundled_math_imports_are_isolated_aliased_and_deduplicated() {
     "#, "23499");
     runtime_error("takepkg std.math;func m{math.min=1;}", "TypeError:");
     assert!(marslang::compile("takepkg std.math = *;").unwrap_err().contains("wildcard"));
-    assert!(marslang::compile("takepkg std.file;").unwrap_err().contains("not implemented"));
+    assert!(marslang::compile("takepkg std.regex;").unwrap_err().contains("not implemented"));
     assert!(marslang::compile("takepkg std.math = bad-name;").unwrap_err().contains("alias"));
     assert!(marslang::compile("takepkg std.math;math=1;").unwrap_err().contains("cannot reassign"));
 }
@@ -729,6 +729,215 @@ fn private_declarations_stay_inside_their_package() {
         let error = run_file(&dir.join("main.mars")).1.expect_err(body).to_string();
         assert!(error.contains(message), "{body}: {error}");
     }
+}
+
+/// Run `source` as `main.mars` in a fresh directory, so `file.here` points there.
+fn run_in_dir(name: &str, source: &str) -> (String, Result<(), marslang::RuntimeError>, std::path::PathBuf) {
+    let dir = package_dir(name, &[("main.mars", source)]);
+    let main = dir.join("main.mars");
+    let compiled = marslang::compile_file(&main).expect("compile failed");
+    let (out, result) = marslang::run_captured_with_args(compiled, "", main.display().to_string(), Vec::new());
+    (out, result, dir)
+}
+
+#[test]
+fn std_file_reads_writes_and_lists() {
+    let (out, result, dir) = run_in_dir("file-basics", r#"
+        takepkg std.file;
+        takepkg std.file.path;
+        func m{
+            dir = file.here("work");
+            file.make_dir(path.join(dir, "sub/deeper"));
+            file.make_dir(dir);
+            notes = path.join(dir, "notes.txt");
+            file.write(notes, "one\ntwo\r\nthree\n");
+            out(file.read_lines(notes), file.size(notes), file.is_file(notes), file.is_dir(notes), file.is_dir(dir));
+            out(file.read(notes) == "one\ntwo\r\nthree\n", file.exists(notes), file.exists(path.join(dir, "none")));
+            file.append(notes, "four");
+            file.append(path.join(dir, "new.txt"), "made");
+            out(file.read_lines(notes), file.read(path.join(dir, "new.txt")));
+            seen = arr();
+            func keep(string line){ seen.add(line.upper()); }
+            file.each_line(notes, keep);
+            out(seen);
+            file.write_lines(path.join(dir, "sub/list.txt"), arr("a", "b"));
+            out(file.read(path.join(dir, "sub/list.txt")) == "a\nb\n");
+            file.create(path.join(dir, "fresh.txt"), "x");
+            file.copy(notes, path.join(dir, "copy.txt"));
+            file.move(path.join(dir, "copy.txt"), path.join(dir, "sub/moved.txt"));
+            out(file.list(dir));
+            for (p, file.walk(dir)){ slout(path.name(p) + " "); }
+            out("");
+            out(file.modified(notes) > 1700000000.0, file.list(file.temp_dir()).len() >= 0);
+            file.remove(path.join(dir, "fresh.txt"));
+            file.remove_dir(path.join(dir, "sub/deeper"));
+            out(file.exists(path.join(dir, "fresh.txt")), file.exists(path.join(dir, "sub/deeper")));
+            file.remove_all(dir);
+            out(file.exists(dir));
+        }"#);
+    result.expect("runtime error");
+    assert_eq!(out, concat!(
+        "[\"one\", \"two\", \"three\"] 15 true false true\n",
+        "true true false\n",
+        "[\"one\", \"two\", \"three\", \"four\"] made\n",
+        "[\"ONE\", \"TWO\", \"THREE\", \"FOUR\"]\n",
+        "true\n",
+        "[\"fresh.txt\", \"new.txt\", \"notes.txt\", \"sub\"]\n",
+        "fresh.txt new.txt notes.txt list.txt moved.txt \n",
+        "true true\n",
+        "false false\n",
+        "false\n",
+    ));
+    assert!(!dir.join("work").exists());
+}
+
+#[test]
+fn std_file_each_line_streams_a_long_file() {
+    // Longer than one chunk, so the offset is carried from call to call.
+    let (out, result, _) = run_in_dir("file-stream", r#"
+        takepkg std.file;
+        func m{
+            lines = arr();
+            for (i = 0, i < 2500, i++){ lines.add("line " + string(i)); }
+            name = file.here("long.txt");
+            file.write_lines(name, lines);
+            count = 0;
+            last = "";
+            func take(string line){ count = count + 1; last = line; }
+            file.each_line(name, take);
+            out(count, last);
+        }"#);
+    result.expect("runtime error");
+    assert_eq!(out, "2500 line 2499\n");
+}
+
+#[test]
+fn std_file_errors_are_families_that_name_the_path() {
+    for (body, family, message) in [
+        ("file.read(file.here(\"missing.txt\"));", "NotFoundError", "missing.txt: no such file or directory"),
+        ("file.read(file.here(\"\"));", "IsDirectoryError", "is a directory; file.list shows what is inside"),
+        ("file.write(file.here(\"main.mars\"), \"x\"); file.list(file.here(\"main.mars\"));", "NotDirectoryError", "main.mars: is a file, not a directory"),
+        ("file.create(file.here(\"main.mars\"), \"x\");", "ExistsError", "file.create never replaces a file, file.write does"),
+        ("file.write(file.here(\"nope/x.txt\"), \"x\");", "NotFoundError", "does not exist; file.make_dir creates it"),
+        ("file.remove(file.here(\"\"));", "IsDirectoryError", "file.remove_dir removes an empty one"),
+        ("file.make_dir(file.here(\"d\")); file.write(file.here(\"d/x\"), \"x\"); file.remove_dir(file.here(\"d\"));", "FileError", "not empty; file.remove_all"),
+        ("file.remove_all(\".\");", "PermissionError", "refuses to remove the working directory"),
+        ("file.write(file.here(\"bad.txt\"), \"ok\"); file.append(file.here(\"bad.txt\"), \"\"); file.copy(file.here(\"\"), file.here(\"x\"));", "IsDirectoryError", "file.copy copies files"),
+    ] {
+        let source = format!("takepkg std.file;\nfunc m{{ run{{ {body} }} handle(file.{family} e){{ out(lasterr().message); }} }}");
+        let (out, result, _) = run_in_dir("file-errors", &source);
+        result.unwrap_or_else(|e| panic!("{body}: {e}"));
+        assert!(out.contains(message), "{body}: {out}");
+    }
+    // Every kind is a FileError, which is an Error.
+    let (out, result, _) = run_in_dir("file-family", "takepkg std.file;\nfunc m{ run{ file.read(\"missing\"); } handle(file.FileError e){ out(\"caught\"); } }");
+    result.expect("runtime error");
+    assert_eq!(out, "caught\n");
+
+    // Text must be UTF-8; the error names the first bad byte.
+    let dir = package_dir("file-utf8", &[("main.mars", "takepkg std.file;\nfunc m{ file.read(file.here(\"bin.dat\")); }")]);
+    std::fs::write(dir.join("bin.dat"), [b'o', b'k', 0xFF]).unwrap();
+    let main = dir.join("main.mars");
+    let error = marslang::run_captured_with_args(marslang::compile_file(&main).unwrap(), "", main.display().to_string(), Vec::new())
+        .1.expect_err("not UTF-8").to_string();
+    assert!(error.contains("not UTF-8 text (byte 0xFF at offset 2)"), "{error}");
+}
+
+#[test]
+fn std_file_write_is_all_or_nothing() {
+    // No temporary file is left beside the result.
+    let (out, result, dir) = run_in_dir("file-atomic", r#"
+        takepkg std.file;
+        func m{ file.write(file.here("a.txt"), "first"); file.write(file.here("a.txt"), "second"); out(file.read(file.here("a.txt"))); }"#);
+    result.expect("runtime error");
+    assert_eq!(out, "second\n");
+    let names: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    assert!(names.iter().all(|n| !n.ends_with(".tmp")), "{names:?}");
+}
+
+#[test]
+fn std_file_path_works_on_path_text() {
+    let sep = std::path::MAIN_SEPARATOR;
+    executes(r#"
+        takepkg std.file.path;
+        func m{
+            out(path.join("docs", "api.md"), path.parent("docs/api/std.md"), path.parent("std.md"), path.name("docs/api/std.md"));
+            out(path.stem("archive.tar.gz"), path.extension("archive.tar.gz"), path.extension("README"), path.stem(".bashrc"));
+            out(path.with_extension("notes.txt", ".md"), path.with_extension("notes.txt", ""), path.parts("docs/api/std.md"));
+            out(path.is_absolute("a/b"), path.is_absolute(path.absolute("a/b")), path.absolute("a/b").ends_with("b"));
+        }"#,
+        &format!("docs{sep}api.md docs/api  std.md\narchive.tar gz  .bashrc\nnotes.md notes [\"docs\", \"api\", \"std.md\"]\nfalse true true\n"));
+    runtime_error("takepkg std.file.path;\nfunc m{ path.with_extension(\"..\", \"x\"); }", "needs a path that ends in a name");
+    runtime_error("takepkg std.file.path;\nfunc m{ path.absolute(\"\"); }", "needs a path, not an empty string");
+}
+
+#[test]
+fn std_file_csv_reads_and_writes_tables() {
+    executes(r#"
+        takepkg std.file.csv;
+        func m{
+            text = csv.format(arr(arr("name", "note"), arr("Ada", "said \"hi\", then left"), arr("Grace", "two\nlines"), arr(1, 2.5, true, null)));
+            out(text);
+            out(csv.parse(text));
+            out(csv.parse("a,b\n\n1,2\r\n\"\"\n"), csv.parse(""), csv.parse("x"));
+            people = csv.parse_records("name,age\nAda,36\nGrace,45\n");
+            out(people[1].get("name"), people[1].get("age"));
+            out(csv.format_records(people));
+        }"#,
+        concat!(
+            "name,note\nAda,\"said \"\"hi\"\", then left\"\nGrace,\"two\nlines\"\n1,2.5,true,\n\n",
+            "[[\"name\", \"note\"], [\"Ada\", \"said \\\"hi\\\", then left\"], [\"Grace\", \"two\\nlines\"], [\"1\", \"2.5\", \"true\", \"\"]]\n",
+            "[[\"a\", \"b\"], [\"1\", \"2\"], [\"\"]] [] [[\"x\"]]\n",
+            "Grace 45\n",
+            "name,age\nAda,36\nGrace,45\n\n",
+        ));
+    for (source, message) in [
+        (r#"csv.parse_records("a,b\n1\n");"#, "CSV line 2: 1 field, but the header has 2"),
+        (r#"csv.parse_records("a,a\n1,2\n");"#, "CSV line 1: the header names the column a twice"),
+        (r#"csv.parse("a,\"b\nc");"#, "CSV line 1: this quoted field is never closed"),
+        (r#"csv.parse("a\"b");"#, "a quote inside an unquoted field"),
+        (r#"csv.parse("\"a\"b");"#, "'b' after a closing quote"),
+        ("csv.format(arr(arr(arr(1))));", "a CSV field holds text or a number, not an array"),
+        ("m1 = map(); m1.set(\"a\", 1); m2 = map(); m2.set(\"z\", 2); csv.format_records(arr(m1, m2));", "record 1 has the key z"),
+    ] {
+        runtime_error(&format!("takepkg std.file.csv;\nfunc m{{ {source} }}"), message);
+    }
+
+    // Files: a record missing a column gets an empty field; errors name the file.
+    let (out, result, _) = run_in_dir("csv-files", r#"
+        takepkg std.file;
+        takepkg std.file.csv;
+        takepkg std.json;
+        func m{
+            name = file.here("rec.csv");
+            csv.write_records(name, arr(json.parse("{\"a\": 1, \"b\": 2}"), json.parse("{\"b\": 3}")));
+            out(file.read(name));
+            for (r, csv.read_records(name)){ out(r); }
+            csv.write(file.here("rows.csv"), arr(arr("x", "y")));
+            out(csv.read(file.here("rows.csv")));
+            file.write(name, "a,b\n1,2,3\n");
+            run{ csv.read_records(name); } handle(Error e){ out(lasterr().message.ends_with("rec.csv: CSV line 2: 3 fields, but the header has 2")); }
+        }"#);
+    result.expect("runtime error");
+    assert_eq!(out, "a,b\n1,2\n,3\n\n{\"a\": \"1\", \"b\": \"2\"}\n{\"a\": \"\", \"b\": \"3\"}\n[[\"x\", \"y\"]]\ntrue\n");
+}
+
+#[test]
+fn std_json_loads_and_saves_files() {
+    let (out, result, _) = run_in_dir("json-files", r#"
+        takepkg std.file;
+        takepkg std.json;
+        func m{
+            name = file.here("settings.json");
+            json.save(name, json.parse("{\"theme\": \"dark\", \"size\": 12}"));
+            out(file.read(name));
+            out(json.load(name).get("theme"));
+            file.write(name, "{\n  \"a\": oops\n}");
+            run{ json.load(name); } handle(Error e){ out(lasterr().message.ends_with("settings.json: JSON line 2, column 8: expected a value, found 'o'")); }
+            run{ json.load(file.here("none.json")); } handle(file.NotFoundError e){ out("missing"); }
+        }"#);
+    result.expect("runtime error");
+    assert_eq!(out, "{\n  \"theme\": \"dark\",\n  \"size\": 12\n}\n\ndark\ntrue\nmissing\n");
 }
 
 #[test]
@@ -1352,12 +1561,21 @@ fn symbols_describe_imported_packages() {
 
 #[test]
 fn every_public_standard_library_declaration_has_a_docstring() {
-    let names: Vec<String> = std::fs::read_dir("std").expect("std directory").filter_map(|entry| {
-        let path = entry.ok()?.path();
-        if path.extension()? != "mars" { return None; }
-        Some(path.file_stem()?.to_string_lossy().into_owned())
-    }).collect();
-    let source: String = names.iter().map(|name| format!("takepkg std.{name};\n")).collect::<String>() + "func m{}";
+    fn packages(dir: &std::path::Path, prefix: &str, names: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).expect("std directory") {
+            let path = entry.expect("entry").path();
+            let stem = path.file_stem().unwrap().to_string_lossy().into_owned();
+            if path.is_dir() && !(prefix == "std" && stem == "rs") {
+                packages(&path, &format!("{prefix}.{stem}"), names);
+            } else if path.extension().is_some_and(|e| e == "mars") {
+                names.push(if stem == "init" { prefix.to_string() } else { format!("{prefix}.{stem}") });
+            }
+        }
+    }
+    let mut names = Vec::new();
+    packages(std::path::Path::new("std"), "std", &mut names);
+    // Two imports may not share an alias, so each package gets its own.
+    let source: String = names.iter().enumerate().map(|(i, name)| format!("takepkg {name} = p{i};\n")).collect::<String>() + "func m{}";
     let symbols = marslang::symbols(&source, std::path::Path::new(".")).expect("symbols");
     let packages = &symbols[symbols.find(r#""packages":["#).expect("packages")..];
     for (at, _) in packages.match_indices(r#""doc":null"#) {

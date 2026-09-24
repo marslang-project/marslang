@@ -15,7 +15,7 @@ pub fn package() -> Value {
         }))
         // Every bundled standard package, by the name takepkg uses.
         .function("standard_packages", 0, |_| {
-            let mut names: Vec<&str> = crate::package::BUNDLED.iter().map(|(name, _)| *name).collect();
+            let mut names: Vec<&str> = crate::package::BUNDLED.iter().map(|(name, ..)| *name).collect();
             names.sort_by_key(|name| name.to_lowercase());
             Ok(Value::array(names.into_iter().map(Value::str).collect()))
         })

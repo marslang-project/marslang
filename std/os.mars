@@ -1,6 +1,6 @@
 // std.os: the machine and process a program runs in: environment variables,
 // the working directory, the home directory, and which platform this is.
-// Reading and writing files is std.file, which is planned.
+// Reading and writing files is std.file.
 takepkg rs.os = native;
 takepkg std.Decorator;
 

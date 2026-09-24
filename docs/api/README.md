@@ -21,7 +21,10 @@ notes elsewhere under `docs/` remain local.
 - [std.strings](std-strings.md): splitting, searching, trimming, case, and padding.
 - [std.types](std-types.md): a value's kind, family checks.
 - [std.memory](std-memory.md): addresses, object identity, and the cycle collector.
-- [std.json](std-json.md): reading and writing JSON.
+- [std.file](std-file.md): reading, writing, listing, copying, moving, and removing files and directories.
+  - [std.file.path](std-file-path.md): joining and splitting paths, names, and extensions.
+  - [std.file.csv](std-file-csv.md): reading and writing CSV tables.
+- [std.json](std-json.md): reading and writing JSON, as text and as files.
 - [std.os](std-os.md): environment variables, the working and home directories, and the platform.
 - [std.sys](std-sys.md): the interpreter's version, number limits, and package directory.
 - [std.time](std-time.md): clocks and sleeping.

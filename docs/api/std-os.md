@@ -33,7 +33,7 @@ contains `=` raises `RangeError`. A value that is not valid Unicode is
 read with replacement characters rather than raising.
 
 `std.os` reads the environment and does not change it. Files and directories
-belong to `std.file`, which is planned. The program's own arguments and exit
+belong to [std.file](std-file.md). The program's own arguments and exit
 status are [std.cli](std-cli.md), and the interpreter running it is
 [std.sys](std-sys.md).
 

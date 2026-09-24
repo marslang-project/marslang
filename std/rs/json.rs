@@ -18,8 +18,13 @@ const MAX_DEPTH: usize = 512;
 pub fn package() -> Value {
     NativePackage::new("rs.json")
         .function("parse", 1, |args| match &args[0] {
-            Value::Str(text) => Parser::new(text).document(),
+            Value::Str(text) => Parser::new(text, "").document(),
             other => type_err(format!("json.parse expects a string, got {}", other.type_name())),
+        })
+        // As parse, naming the file in errors: json.load.
+        .function("parse_from", 2, |args| match (&args[0], &args[1]) {
+            (Value::Str(text), Value::Str(source)) => Parser::new(text, source).document(),
+            _ => type_err("json.parse_from expects the text and where it came from"),
         })
         .function("stringify", 2, |args| {
             let indent = match &args[1] {
@@ -39,13 +44,15 @@ struct Parser {
     chars: Vec<char>,
     at: usize,
     depth: usize,
+    /// Where the text came from, such as a file, to start error messages with.
+    source: String,
 }
 
 impl Parser {
-    fn new(text: &str) -> Self {
+    fn new(text: &str, source: &str) -> Self {
         // A byte-order mark may start a document; RFC 8259 lets readers skip it.
         let text = text.strip_prefix('\u{feff}').unwrap_or(text);
-        Parser { chars: text.chars().collect(), at: 0, depth: 0 }
+        Parser { chars: text.chars().collect(), at: 0, depth: 0, source: source.to_string() }
     }
 
     /// Line and column (both from 1) of a position, for error messages.
@@ -60,7 +67,8 @@ impl Parser {
 
     fn fail<T>(&self, at: usize, message: impl std::fmt::Display) -> RResult<T> {
         let (line, column) = self.place(at);
-        err(ErrorKind::SyntaxError, format!("JSON line {line}, column {column}: {message}"))
+        let from = if self.source.is_empty() { String::new() } else { format!("{}: ", self.source) };
+        err(ErrorKind::SyntaxError, format!("{from}JSON line {line}, column {column}: {message}"))
     }
 
     fn peek(&self) -> Option<char> { self.chars.get(self.at).copied() }

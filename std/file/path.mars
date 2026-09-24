@@ -1,0 +1,39 @@
+// std.file.path: working with path text. Nothing here reads the disk except
+// absolute, which starts from the working directory. On Windows both / and a
+// backslash separate the parts of a path; elsewhere only / does.
+takepkg rs.file = native;
+takepkg std.Decorator;
+
+@Decorator.docstring("""
+    b joined onto a with the platform's separator: path.join("docs", "api.md")
+    is docs\\api.md on Windows and docs/api.md elsewhere. When b is absolute,
+    the result is b.
+""")
+func join(string a, string b) => native.join(a, b);
+
+@Decorator.docstring("The directory part: docs/api for docs/api/std.md. \"\" when there is none, as for std.md or /.")
+func parent(string p) => native.parent(p);
+
+@Decorator.docstring("The last part: std.md for docs/api/std.md. \"\" when the path ends in .. or is a root.")
+func name(string p) => native.name(p);
+
+@Decorator.docstring("The name without its extension: std for docs/std.md, archive.tar for archive.tar.gz, .bashrc for .bashrc.")
+func stem(string p) => native.stem(p);
+
+@Decorator.docstring("The extension without its dot: md for docs/std.md, gz for archive.tar.gz, \"\" when there is none.")
+func extension(string p) => native.extension(p);
+
+@Decorator.docstring("The path with its extension replaced by extension, which may start with a dot; \"\" removes it.")
+func with_extension(string p, string extension) => native.with_extension(p, extension);
+
+@Decorator.docstring("The full path, from the working directory when p is relative. Links are not resolved.")
+func absolute(string p) => native.absolute(p);
+
+@Decorator.docstring("Whether p starts from a root: / elsewhere, a drive such as C:\\ on Windows.")
+func is_absolute(string p) => native.is_absolute(p);
+
+@Decorator.docstring("""
+    Every part of the path, as an array: ["docs", "api", "std.md"]. A root is
+    its own first part: "/" elsewhere, and "C:\\" on Windows.
+""")
+func parts(string p) => native.parts(p);

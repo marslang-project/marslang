@@ -93,7 +93,7 @@ Implemented:
 - built-in `arr`, `set`, `pair`, `map`/`dict`; legacy `a`/`s`/`p` remain compatibility spellings
 - array operations, collection `.len()`/`.is_empty()`/`.has()`, insertion-ordered map keys and snapshot iteration
 - `out`, `slout`, `in`, and `inln`; `ord` and `chr` for code points
-- standard packages for math, strings, containers, algorithms, statistics, JSON, the command line, the environment (`std.os`, `std.sys`), and object identity (`std.memory`); see [docs/api](docs/api/README.md)
+- standard packages for math, strings, containers, algorithms, statistics, files, paths, and CSV (`std.file`), JSON, the command line, the environment (`std.os`, `std.sys`), and object identity (`std.memory`); see [docs/api](docs/api/README.md)
 - `fasle` accepted as `false`
 
 Not yet:

@@ -21,6 +21,8 @@ func m{
 | `stringify(value)` | The value as JSON on one line, with no spaces |
 | `pretty(value)` | The value as JSON across lines, two spaces per level |
 | `indented(value, spaces)` | As `pretty`, with `1` to `16` spaces per level |
+| `load(path)` | Reads a JSON file and parses it |
+| `save(path, value)` | Writes a value to a file as pretty JSON |
 
 ## Reading
 
@@ -86,6 +88,28 @@ Some values have no JSON form and raise instead of being guessed at:
 
 The same array can appear twice in a value; only one that contains itself is
 refused.
+
+## Files
+
+```mars
+takepkg std.json;
+
+func m{
+    settings = json.load("settings.json");
+    settings.set("theme", "dark");
+    json.save("settings.json", settings);
+}
+```
+
+`load` reads through [std.file](std-file.md), so a missing file raises
+`file.NotFoundError`, and a parse error names the file:
+
+```text
+SyntaxError: settings.json: JSON line 3, column 3: expected a value, found 'o'
+```
+
+`save` writes pretty JSON, two spaces per level, ending in a newline, and is all
+or nothing like `file.write`: a crash while saving leaves the old file whole.
 
 ## Speed
 
