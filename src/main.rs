@@ -4,6 +4,12 @@ use std::io::{self, Write};
 use std::path::Path;
 use std::process::ExitCode;
 
+// Static musl builds, the Linux releases, use mimalloc: musl's allocator is
+// much slower for an interpreter that allocates as often as this one.
+#[cfg(target_env = "musl")]
+#[global_allocator]
+static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 const USAGE: &str = "Usage: marslang <file.mars> [args...] | marslang run <file.mars> [args...] | marslang check <file.mars> | marslang lex <file.mars> | marslang repl | marslang pkgs | marslang symbols <file.mars> [--stdin] | marslang --version";
 
 fn main() -> ExitCode {

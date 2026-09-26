@@ -258,6 +258,13 @@ fn large_integer_literals_do_not_round_before_type_checks() {
 }
 
 #[test]
+fn bool_is_a_type_annotation() {
+    executes("func f(bool on) => not on;\nfunc m{ flag (bool) = true; out(f(flag), f(false)); }", "false true\n");
+    runtime_error("func f(bool on) => on;\nfunc m{ f(1); }", "expected bool, got int");
+    runtime_error("func m{ flag (bool) = \"yes\"; }", "expected bool, got string");
+}
+
+#[test]
 fn integer_literals_beyond_32_bits_are_longints() {
     executes("takepkg std.types;
 func m{ x = 3000000000; out(x + 1, types.kind(x)); out(2147483647, types.kind(2147483647)); out(-2147483648, types.kind(-2147483648)); out(2147483648 * 2, types.kind(-2147483649)); }",

@@ -13,11 +13,19 @@ unicode-segmentation = "1.13.3"
 # date, datetime, and duration: the calendar, time zones, and daylight saving.
 # Everything but reading the system time zone, which on Windows links through
 # raw-dylib and so needs a 64-bit dlltool that windows-gnu setups often lack;
-# src/date.rs reads the Windows zone itself.
-jiff = { version = "0.2.37", default-features = false, features = ["std", "tz-fat", "tzdb-bundle-platform", "tzdb-zoneinfo", "tzdb-concatenated", "perf-inline"] }
+# src/date.rs reads the Windows zone itself. The time zone database is built
+# in as a fallback: the system's copy is used first, being kept up to date, but
+# minimal Linux containers often have none.
+jiff = { version = "0.2.37", default-features = false, features = ["std", "tz-fat", "tzdb-bundle-always", "tzdb-zoneinfo", "tzdb-concatenated", "perf-inline"] }
 # std.file.toml: TOML 1.1 reading and writing, keeping key order.
 toml = { version = "1.1.6", features = ["preserve_order"] }
 
 [target.'cfg(not(windows))'.dependencies]
 # Elsewhere jiff reads the system time zone itself (TZ, /etc/localtime).
 jiff = { version = "0.2.37", default-features = false, features = ["tz-system"] }
+
+[target.'cfg(target_env = "musl")'.dependencies]
+# The Linux releases are static musl binaries, which run on every distribution.
+# musl's own allocator made the interpreter about 55% slower; mimalloc restores
+# the speed of a glibc build. Other builds keep the system allocator.
+mimalloc = { version = "0.1.52", default-features = false }

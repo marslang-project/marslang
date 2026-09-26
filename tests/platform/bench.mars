@@ -1,0 +1,26 @@
+// A short benchmark of allocation-heavy work: recursion, sorting, maps, and
+// JSON. CI compares the static musl build against a glibc one with it. The
+// last line printed is the elapsed time in seconds.
+takepkg std.algorithms;
+takepkg std.json;
+takepkg std.time;
+
+func fib(int n){ if (n < 2){ ret n; } ret fib(n - 1) + fib(n - 2); }
+
+func m{
+    start = time.monotonic();
+    out(fib(24));
+    xs = arr();
+    seed = longint(7);
+    repeat 20000 { seed = (seed * longint(1103515245) + longint(12345)) % longint(2147483648); xs.add(int(seed % longint(10000))); }
+    sorted = algorithms.sort_with(xs, func(any a, any b) => a - b);
+    words = arr();
+    for (i = 0, i < 20000, i++){ words.add("word" + string(i % 500)); }
+    counts = algorithms.counts(words);
+    text = json.stringify(arr(xs, counts));
+    back = json.parse(text);
+    d = map();
+    for (i = 0, i < 20000, i++){ d.set("k" + string(i), arr(i, i * 2)); }
+    out(sorted.len(), counts.len(), back.len(), d.len());
+    out(time.monotonic() - start);
+}

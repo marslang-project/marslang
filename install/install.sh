@@ -54,17 +54,18 @@ done
 
 command -v curl >/dev/null 2>&1 || die "curl is required"
 
-case "$(uname -s)" in
-    Linux) os=unknown-linux-gnu ;;
-    Darwin) os=apple-darwin ;;
-    *) die "unsupported system '$(uname -s)'; build from source instead" ;;
-esac
 case "$(uname -m)" in
     x86_64|amd64) arch=x86_64 ;;
     arm64|aarch64) arch=aarch64 ;;
     *) die "unsupported architecture '$(uname -m)'; build from source instead" ;;
 esac
-target="$arch-$os"
+# Linux releases are static musl binaries, which run on every distribution;
+# releases before rs-0.15.0 only have glibc ones, used when musl is missing.
+case "$(uname -s)" in
+    Linux) targets="$arch-unknown-linux-musl $arch-unknown-linux-gnu" ;;
+    Darwin) targets="$arch-apple-darwin" ;;
+    *) die "unsupported system '$(uname -s)'; build from source instead" ;;
+esac
 
 if [ "$version" = latest ]; then
     step "Looking up the latest release"
@@ -74,19 +75,26 @@ if [ "$version" = latest ]; then
     [ -n "$version" ] || die "could not read the latest release of $repo; pass --version rs-X.Y.Z"
 fi
 
-archive="marslang-$version-$target.tar.gz"
 # A mirror or a local copy can be used instead of the GitHub release.
 base="${MARSLANG_DOWNLOAD_BASE:-https://github.com/$repo/releases/download/$version}"
 staging=$(mktemp -d "${TMPDIR:-/tmp}/marslang-install.XXXXXX")
 trap 'rm -rf "$staging"' EXIT INT TERM
 
+# SHA256SUMS lists every archive of the release, so it also says which exist.
+curl -fsSL "$base/SHA256SUMS" -o "$staging/SHA256SUMS" || die "the release has no SHA256SUMS file: $base/SHA256SUMS"
+archive=""
+expected=""
+for target in $targets; do
+    candidate="marslang-$version-$target.tar.gz"
+    expected=$(awk -v name="$candidate" '$2 == name || $2 == "*"name { print $1 }' "$staging/SHA256SUMS" | head -n 1)
+    if [ -n "$expected" ]; then archive="$candidate"; break; fi
+done
+[ -n "$archive" ] || die "release $version has no archive for this system ($targets)"
+
 step "Downloading $archive"
 curl -fsSL "$base/$archive" -o "$staging/$archive" || die "no such release asset: $base/$archive"
 
 step "Verifying the checksum"
-curl -fsSL "$base/SHA256SUMS" -o "$staging/SHA256SUMS" || die "the release has no SHA256SUMS file"
-expected=$(awk -v name="$archive" '$2 == name || $2 == "*"name { print $1 }' "$staging/SHA256SUMS" | head -n 1)
-[ -n "$expected" ] || die "SHA256SUMS does not list $archive"
 if command -v sha256sum >/dev/null 2>&1; then
     actual=$(sha256sum "$staging/$archive" | cut -d' ' -f1)
 elif command -v shasum >/dev/null 2>&1; then

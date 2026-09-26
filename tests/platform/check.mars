@@ -1,0 +1,47 @@
+// Run by CI on every platform and inside several Linux distributions, to show
+// that a release binary works there: time zones (including the built-in
+// database, which minimal containers need), files, the environment, and the
+// formats. Each check raises on failure, so the exit status says whether all
+// passed.
+takepkg std.file;
+takepkg std.file.path;
+takepkg std.file.csv;
+takepkg std.file.toml;
+takepkg std.json;
+takepkg std.os;
+takepkg std.sys;
+takepkg std.time;
+
+func check(bool ok, string what){
+    if (not ok){ err(Error, "check failed: " + what); }
+    out("ok  ", what);
+}
+
+func m{
+    out(sys.VERSION, "on", os.platform(), os.arch());
+
+    shanghai = datetime(2026, 9, 24, 14, 30, 0, "Asia/Shanghai");
+    check(string(shanghai) == "2026-09-24T14:30:00+08:00[Asia/Shanghai]", "a named time zone");
+    ny = datetime(2026, 3, 7, 12, 0, 0, "America/New_York");
+    check(string(ny.add_days(1)) == "2026-03-08T12:00:00-04:00[America/New_York]", "daylight saving");
+    check(shanghai.in_zone("UTC").hour() == 6, "converting between zones");
+    check(time.today() > date(2026, 1, 1), "today's date");
+    check(string(time.now_datetime().zone()) != "", "the local time zone");
+
+    func work(string dir){
+        name = path.join(dir, "data.json");
+        json.save(name, json.parse("{\"a\": [1, 2]}"));
+        check(json.load(name).get("a")[1] == 2, "writing and reading a file");
+        file.make_dir(path.join(dir, "sub/deep"));
+        file.write(path.join(dir, "sub/deep/x.mars"), "x");
+        check(file.matching(dir, "**/*.mars").len() == 1, "matching a pattern");
+        csv.write(path.join(dir, "t.csv"), arr(arr("a", "b,c")));
+        check(csv.read(path.join(dir, "t.csv"))[0][1] == "b,c", "CSV");
+        check(toml.parse("x = 2026-09-24\n").get("x") == date(2026, 9, 24), "TOML dates");
+        ret file.list(dir).len();
+    }
+    check(file.with_temp_dir(work) == 3, "a temporary directory");
+    check(os.home() != null or os.platform() == "linux", "the home directory");
+    check(os.cwd() != "", "the working directory");
+    out("all checks passed");
+}

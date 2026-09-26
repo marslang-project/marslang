@@ -18,7 +18,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        # Linux on Intel and ARM, Windows, and macOS on Apple silicon.
+        os: [ubuntu-latest, ubuntu-24.04-arm, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
 
@@ -28,12 +29,12 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('Cargo.lock') }}
 
       - name: Test
         run: cargo test --locked
 
-      - name: Check the documented examples compile
+      - name: Run the documented examples and the platform check
         shell: bash
         run: |
           set -eu
@@ -41,3 +42,62 @@ jobs:
           binary=target/debug/marslang
           [ -f "$binary.exe" ] && binary="$binary.exe"
           "$binary" docs/api/examples/strings.mars
+          "$binary" tests/platform/check.mars
+
+  # The Linux releases are static musl binaries, so that one binary runs on
+  # every distribution. Build one the way the release does and run it inside
+  # distributions that differ where it matters: Alpine uses musl and has no
+  # time zone data, and the others have older glibc versions.
+  distributions:
+    name: static Linux binary, ${{ matrix.arch }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, arch: x86_64 }
+          - { os: ubuntu-24.04-arm, arch: aarch64 }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: musl-${{ runner.arch }}-cargo-${{ hashFiles('Cargo.lock') }}
+
+      - name: Install musl
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+          rustup target add ${{ matrix.arch }}-unknown-linux-musl
+
+      - name: Build the static binary and a glibc one
+        run: |
+          cargo build --release --locked --target ${{ matrix.arch }}-unknown-linux-musl
+          cargo build --release --locked
+          file target/${{ matrix.arch }}-unknown-linux-musl/release/marslang
+
+      - name: Run it in each distribution
+        run: |
+          set -eu
+          binary=target/${{ matrix.arch }}-unknown-linux-musl/release/marslang
+          for image in alpine:3 debian:11 ubuntu:20.04 rockylinux:8 amazonlinux:2; do
+            echo "::group::$image"
+            docker run --rm -v "$PWD:/w" -w /w "$image" "./$binary" tests/platform/check.mars
+            echo "::endgroup::"
+          done
+
+      - name: Compare its speed with the glibc build
+        run: |
+          set -eu
+          best() {
+            for i in 1 2 3; do "$1" tests/platform/bench.mars | tail -n 1; done | sort -g | head -n 1
+          }
+          static=$(best target/${{ matrix.arch }}-unknown-linux-musl/release/marslang)
+          glibc=$(best target/release/marslang)
+          echo "static musl: ${static}s, glibc: ${glibc}s"
+          # The static build must not be much slower; musl's own allocator was 55% slower.
+          awk -v s="$static" -v g="$glibc" 'BEGIN { if (s > g * 1.25) { print "the static build is too slow"; exit 1 } }'

@@ -26,8 +26,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu }
-          - { os: ubuntu-latest, target: aarch64-unknown-linux-gnu, linker: gcc-aarch64-linux-gnu }
+          # Linux: static musl binaries, which run on every distribution, from
+          # Alpine to old glibc systems. Each is built and tested on its own
+          # architecture.
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-musl, musl: true }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl, musl: true }
+          # The Intel macOS build is tested under Rosetta on the Apple silicon runner.
           - { os: macos-latest, target: aarch64-apple-darwin }
           - { os: macos-latest, target: x86_64-apple-darwin }
           - { os: windows-latest, target: x86_64-pc-windows-msvc }
@@ -39,20 +43,25 @@ jobs:
       - name: Install the target
         run: rustup target add ${{ matrix.target }}
 
-      - name: Install the cross linker
-        if: matrix.linker
+      - name: Install musl
+        if: matrix.musl
         run: |
           sudo apt-get update
-          sudo apt-get install -y ${{ matrix.linker }}
-          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+          sudo apt-get install -y musl-tools
 
       - name: Build
         run: cargo build --release --locked --target ${{ matrix.target }}
 
-      # The tests run on the host only; a cross-built binary cannot run here.
       - name: Test
-        if: ${{ !matrix.linker }}
         run: cargo test --release --locked --target ${{ matrix.target }}
+
+      - name: Run the platform check
+        shell: bash
+        run: |
+          set -eu
+          binary="target/${{ matrix.target }}/release/marslang"
+          [ -f "$binary.exe" ] && binary="$binary.exe"
+          "$binary" tests/platform/check.mars
 
       - name: Package
         shell: bash

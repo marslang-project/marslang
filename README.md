@@ -41,9 +41,21 @@ platform from the release, check it against the release's `SHA256SUMS`, put
 `marslang` in a per-user directory, add it to `PATH`, and create the package
 directory `marslang_pkgs` in your home directory. `--use std,ext` (`-Use` in
 PowerShell) selects package sets; `std` is built into the interpreter and `ext`
-is not published yet. The archives are built for Windows, Linux, and macOS by
+is not published yet. The archives are built by
 [.github/workflows/release.yml](.github/workflows/release.yml) when an `rs-*`
-tag is pushed.
+tag is pushed, and each is tested on its own platform before it is published:
+
+| Platform | Archive |
+| --- | --- |
+| Windows, x64 | `x86_64-pc-windows-msvc` |
+| macOS, Apple silicon and Intel | `aarch64-apple-darwin`, `x86_64-apple-darwin` |
+| Linux, x64 and ARM64 | `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl` |
+
+The Linux binaries are static, so one binary runs on every distribution:
+Alpine, old glibc systems such as Debian 11 and RHEL 8, and minimal containers.
+Every push runs the tests on Linux (x64 and ARM64), Windows, and macOS, and runs
+the static binary inside Alpine, Debian 11, Ubuntu 20.04, Rocky Linux 8, and
+Amazon Linux 2.
 
 `marslang pkgs` prints the directory that installed packages are imported from:
 `MARSLANG_PKGS`, or `marslang_pkgs` in your home directory. A program's own

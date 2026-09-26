@@ -1035,6 +1035,7 @@ impl<'o> Interp<'o> {
                 _ => type_err("expected float"),
             },
             "string" => match value { Value::Str(_) => Ok(value), _ => type_err("expected string") },
+            "bool" => match value { Value::Bool(_) => Ok(value), _ => type_err(format!("expected bool, got {}", value.type_name())) },
             "date" => match value { Value::Date(_) => Ok(value), _ => type_err(format!("expected date, got {}", value.type_name())) },
             "datetime" => match value { Value::DateTime(_) => Ok(value), _ => type_err(format!("expected datetime, got {}", value.type_name())) },
             "duration" => match value { Value::Duration(_) => Ok(value), _ => type_err(format!("expected duration, got {}", value.type_name())) },

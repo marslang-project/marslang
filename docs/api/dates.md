@@ -165,3 +165,8 @@ writes them back as TOML dates. CSV, `.env`, and INI write them as they print.
 `time.today()`, `time.now_datetime()`, and the `"local"` zone use the `TZ`
 environment variable when it names a zone, and otherwise the zone the system is
 set to. Where neither is known, they use UTC.
+
+Zone names such as `"Asia/Shanghai"` come from the system's time zone database
+on Linux and macOS, which the system keeps up to date. Windows has no such
+database, and minimal Linux containers often leave it out, so a copy is built
+into `marslang` and used when the system has none.
