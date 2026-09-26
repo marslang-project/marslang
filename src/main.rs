@@ -36,7 +36,7 @@ fn run() -> Result<(), String> {
         }
         Some("run") => run_cmd(file(2)?, &args[3.min(args.len())..]),
         Some("check") => {
-            marslang::compile_file(file(2)?)?;
+            marslang::check_file(file(2)?)?;
             println!("ok");
             Ok(())
         }

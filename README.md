@@ -57,6 +57,15 @@ Every push runs the tests on Linux (x64 and ARM64), Windows, and macOS, and runs
 the static binary inside Alpine, Debian 11, Ubuntu 20.04, Rocky Linux 8, and
 Amazon Linux 2.
 
+From rs-0.15.1 on, each archive also carries a signed build attestation, which
+proves it was built by that workflow from this repository and not altered since.
+The checksums catch a damaged download; the attestation also catches a
+tampered one. With the [GitHub CLI](https://cli.github.com):
+
+```bash
+gh attestation verify marslang-rs-0.15.1-x86_64-unknown-linux-musl.tar.gz --repo marslang-project/marslang
+```
+
 `marslang pkgs` prints the directory that installed packages are imported from:
 `MARSLANG_PKGS`, or `marslang_pkgs` in your home directory. A program's own
 directory is always searched first.

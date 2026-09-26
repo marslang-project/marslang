@@ -9,6 +9,11 @@
 # and nothing outside $HOME is written, so no root access is needed.
 set -eu
 
+# Everything is inside main, called on the last line: if the download of this
+# script is cut off, the shell has only defined part of a function and runs
+# nothing, rather than running half of the steps.
+main() {
+
 repo="marslang-project/marslang"
 version="latest"
 use="std"
@@ -41,6 +46,8 @@ while [ $# -gt 0 ]; do
 done
 
 step() { printf '==> %s\n' "$1"; }
+# HTTPS only, redirects included; file:// is allowed for a local mirror.
+fetch() { curl --proto '=https,file' --proto-redir '=https' -fsSL "$@"; }
 die() { printf 'error: %s\n' "$1" >&2; exit 1; }
 
 wants_ext=no
@@ -69,7 +76,7 @@ esac
 
 if [ "$version" = latest ]; then
     step "Looking up the latest release"
-    version=$(curl -fsSL "https://api.github.com/repos/$repo/releases/latest" 2>/dev/null |
+    version=$(fetch "https://api.github.com/repos/$repo/releases/latest" 2>/dev/null |
         sed -n 's/.*"tag_name"[ ]*:[ ]*"\([^"]*\)".*/\1/p' | head -n 1) ||
         die "could not read the latest release of $repo; pass --version rs-X.Y.Z, or check that the repository is public"
     [ -n "$version" ] || die "could not read the latest release of $repo; pass --version rs-X.Y.Z"
@@ -81,7 +88,7 @@ staging=$(mktemp -d "${TMPDIR:-/tmp}/marslang-install.XXXXXX")
 trap 'rm -rf "$staging"' EXIT INT TERM
 
 # SHA256SUMS lists every archive of the release, so it also says which exist.
-curl -fsSL "$base/SHA256SUMS" -o "$staging/SHA256SUMS" || die "the release has no SHA256SUMS file: $base/SHA256SUMS"
+fetch "$base/SHA256SUMS" -o "$staging/SHA256SUMS" || die "the release has no SHA256SUMS file: $base/SHA256SUMS"
 archive=""
 expected=""
 for target in $targets; do
@@ -92,7 +99,7 @@ done
 [ -n "$archive" ] || die "release $version has no archive for this system ($targets)"
 
 step "Downloading $archive"
-curl -fsSL "$base/$archive" -o "$staging/$archive" || die "no such release asset: $base/$archive"
+fetch "$base/$archive" -o "$staging/$archive" || die "no such release asset: $base/$archive"
 
 step "Verifying the checksum"
 if command -v sha256sum >/dev/null 2>&1; then
@@ -138,3 +145,6 @@ printf '  interpreter: %s\n' "$install_dir/bin/marslang"
 printf '  packages:    %s\n\n' "$pkg_dir"
 printf 'Open a new shell, then run:  marslang hello.mars\n'
 printf 'Documentation: https://marslang.kevin-z.com\n'
+}
+
+main "$@"

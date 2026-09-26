@@ -102,7 +102,7 @@ pub fn parse(text: &str) -> Result<Expr, String> {
         }
     }
     tokens.push(Token::End);
-    let mut parser = Parser { tokens, pos: 0 };
+    let mut parser = Parser { tokens, pos: 0, depth: 0 };
     let value = parser.expr(0)?;
     if !matches!(parser.tokens[parser.pos], Token::End) {
         return Err(format!("unexpected expression token {:?}", parser.tokens[parser.pos]));
@@ -110,7 +110,14 @@ pub fn parse(text: &str) -> Result<Expr, String> {
     Ok(value)
 }
 
-struct Parser { tokens: Vec<Token>, pos: usize }
+/// Deeper nesting in one expression is refused with an error rather than
+/// risking the stack; no written program comes near it.
+const MAX_NESTING: usize = 1000;
+/// Operators in a row, such as a + b + c: each one deepens the tree the
+/// interpreter walks, so a machine-made expression cannot overflow it.
+const MAX_CHAIN: usize = 10_000;
+
+struct Parser { tokens: Vec<Token>, pos: usize, depth: usize }
 impl Parser {
     fn take(&mut self) -> Token {
         let token = self.tokens[self.pos].clone();
@@ -123,6 +130,17 @@ impl Parser {
         self.pos += 1; Ok(())
     }
     fn expr(&mut self, min: u8) -> Result<Expr, String> {
+        if self.depth == MAX_NESTING {
+            return Err(format!("this expression is nested more than {MAX_NESTING} levels deep"));
+        }
+        self.depth += 1;
+        let result = self.expr_at(min);
+        self.depth -= 1;
+        result
+    }
+
+    fn expr_at(&mut self, min: u8) -> Result<Expr, String> {
+        let mut chained = 0;
         let mut left = match self.take() {
             Token::Name(s) => match s.as_str() {
                 "true" => Expr::Bool(true), "false" | "fasle" => Expr::Bool(false),
@@ -188,6 +206,10 @@ impl Parser {
                 "**" => (6, true), _ => break,
             };
             if precedence < min { break; }
+            chained += 1;
+            if chained > MAX_CHAIN {
+                return Err(format!("this expression has more than {MAX_CHAIN} operators in a row; split it into several statements"));
+            }
             let op = op.clone(); self.pos += 1;
             let right = self.expr(precedence + u8::from(!right_assoc))?;
             left = Expr::Binary { left: Box::new(left), op, right: Box::new(right) };

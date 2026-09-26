@@ -134,25 +134,64 @@ fn check_parent(path: &str) -> Option<RResult<Value>> {
     None
 }
 
+/// A name no one can guess: SipHash keyed from the operating system's random
+/// source, so another user cannot plant a file or link where it will go.
+fn unguessable() -> String {
+    use std::hash::{BuildHasher, Hasher};
+    let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+    hasher.write_u64(TEMPORARY.fetch_add(1, Ordering::Relaxed));
+    hasher.write_u32(std::process::id());
+    format!("{:016x}", hasher.finish())
+}
+
 /// Replace the file all at once: write a temporary file beside it, flush it
 /// to disk, then rename it over the old one, so a crash or a full disk leaves
 /// either the old contents or the new, never half of either.
+///
+/// The temporary file is created exclusively under an unguessable name, so it
+/// can never be a link someone planted, and it takes the old file's
+/// permissions (and owner, where allowed) before replacing it: a private file
+/// stays private. Writing through a link updates the file it points to.
 fn write(path: &str, contents: &[u8]) -> RResult<Value> {
     if let Some(failure) = check_parent(path) { return failure; }
-    let target = Path::new(path);
+    let mut target = PathBuf::from(path);
+    if fs::symlink_metadata(&target).is_ok_and(|m| m.file_type().is_symlink()) {
+        if let Ok(real) = fs::canonicalize(&target) { target = real; }
+    }
+    let existing = fs::metadata(&target).ok().filter(|m| m.is_file());
     let name = target.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let temporary = target.with_file_name(format!(
-        ".{name}.{}.{}.tmp", std::process::id(), TEMPORARY.fetch_add(1, Ordering::Relaxed)
-    ));
+    let mut temporary = PathBuf::new();
     let written = (|| {
-        let mut file = fs::File::create(&temporary)?;
+        let mut attempts = 0;
+        let mut file = loop {
+            temporary = target.with_file_name(format!(".{name}.{}.tmp", unguessable()));
+            let mut options = fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            // Private while it is written; it gets its final permissions below.
+            #[cfg(unix)]
+            if existing.is_some() { std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600); }
+            match options.open(&temporary) {
+                Ok(file) => break file,
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists && attempts < 8 => attempts += 1,
+                Err(e) => { temporary = PathBuf::new(); return Err(e); }
+            }
+        };
         file.write_all(contents)?;
         file.sync_all()?;
         drop(file);
-        fs::rename(&temporary, target)
+        if let Some(old) = &existing {
+            fs::set_permissions(&temporary, old.permissions())?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                // Keeps the owner when the writer may; otherwise the writer owns it.
+                let _ = std::os::unix::fs::chown(&temporary, Some(old.uid()), Some(old.gid()));
+            }
+        }
+        fs::rename(&temporary, &target)
     })();
     if let Err(error) = written {
-        let _ = fs::remove_file(&temporary);
+        if !temporary.as_os_str().is_empty() { let _ = fs::remove_file(&temporary); }
         return io_fail(path, error);
     }
     ok(Value::Null)
@@ -427,15 +466,27 @@ fn same(a: &str, b: &str) -> RResult<Value> {
     ok(Value::Bool(a_real == b_real))
 }
 
-/// A new, empty directory under the system's temporary directory.
+/// A new, empty directory under the system's temporary directory, under an
+/// unguessable name, and private to this user where the system allows.
 fn make_temp_dir() -> RResult<Value> {
-    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(0);
-    let dir = std::env::temp_dir().join(format!(
-        "marslang-{}-{}-{nanos}", std::process::id(), TEMPORARY.fetch_add(1, Ordering::Relaxed)
-    ));
-    let shown = dir.to_string_lossy().into_owned();
-    attempt!(&shown, fs::create_dir(&dir));
-    ok(Value::str(&shown))
+    let base = std::env::temp_dir();
+    let mut attempts = 0;
+    loop {
+        let dir = base.join(format!("marslang-{}", unguessable()));
+        let shown = dir.to_string_lossy().into_owned();
+        let builder = {
+            #[allow(unused_mut)]
+            let mut builder = fs::DirBuilder::new();
+            #[cfg(unix)]
+            std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+            builder
+        };
+        match builder.create(&dir) {
+            Ok(()) => return ok(Value::str(&shown)),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists && attempts < 8 => attempts += 1,
+            Err(e) => return io_fail(&shown, e),
+        }
+    }
 }
 
 // ----- matching names against patterns -----
@@ -785,4 +836,19 @@ pub fn package() -> Value {
         .function("normalize", 1, |a| Ok(display(&lexical(Path::new(text(&a[0], "path.normalize")?)))))
         .function("relative", 2, |a| relative(text(&a[0], "path.relative")?, text(&a[1], "path.relative")?))
         .build()
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn temporary_directories_are_private() {
+        let Value::Array(result) = make_temp_dir().expect("made") else { panic!("not a result") };
+        let Value::Str(dir) = result.items.borrow()[1].clone() else { panic!("no path") };
+        let mode = fs::metadata(&*dir).expect("exists").permissions().mode() & 0o777;
+        fs::remove_dir(&*dir).expect("removed");
+        assert_eq!(mode, 0o700, "{dir}");
+    }
 }

@@ -66,6 +66,13 @@ beside the target, which is flushed to disk and then renamed over the old file,
 so a crash, a full disk, or a power cut leaves either the old contents or the
 new, never half of a file. `append` adds in place.
 
+Replacing a file keeps what protected the old one: a file only you could read
+stays that way, and on Linux and macOS it keeps its permissions and, where the
+system allows, its owner. Writing to a link updates the file it points to and
+leaves the link in place. The temporary file is created under an unguessable
+name and never reuses anything already there, so another user of the same
+machine cannot redirect the write.
+
 The text is written exactly as given on every platform: `\n` stays `\n` on
 Windows, so a file is the same bytes wherever it was written.
 
@@ -170,7 +177,8 @@ is the file next to `report.mars` wherever it is started from.
 
 `with_temp_dir` is for scratch work and tests: the directory is removed with
 everything in it after `f` returns, and also when `f` raises, and it returns
-what `f` returns.
+what `f` returns. Its name is unguessable, and on Linux and macOS only you can
+open it, so other users of the machine cannot read what `f` writes there.
 
 ```mars
 takepkg std.file;

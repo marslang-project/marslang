@@ -42,6 +42,14 @@ pub fn compile(source: &str) -> Result<Compiled, String> {
     compile_in(source, std::path::Path::new("."))
 }
 
+/// Compile a file only to report its errors, as `marslang check` does. The
+/// program is also dropped on the large-stack thread, since freeing a deeply
+/// nested syntax tree recurses as deeply as building it.
+pub fn check_file(path: &std::path::Path) -> Result<(), String> {
+    let path = path.to_path_buf();
+    on_interpreter_thread(move || compile_file(&path).map(drop))
+}
+
 /// Compile a source file; package files are found relative to its directory.
 pub fn compile_file(path: &std::path::Path) -> Result<Compiled, String> {
     let source = std::fs::read_to_string(path)
@@ -49,7 +57,15 @@ pub fn compile_file(path: &std::path::Path) -> Result<Compiled, String> {
     compile_in(&source, path.parent().unwrap_or(std::path::Path::new(".")))
 }
 
+/// Parsing and resolving recurse as deeply as the program nests, so they run
+/// on the interpreter's large-stack thread, like the program itself; the main
+/// thread's stack is 1 MB on Windows.
 fn compile_in(source: &str, base: &std::path::Path) -> Result<Compiled, String> {
+    let (source, base) = (source.to_string(), base.to_path_buf());
+    on_interpreter_thread(move || compile_here(&source, &base))
+}
+
+fn compile_here(source: &str, base: &std::path::Path) -> Result<Compiled, String> {
     let mut program = parser::parse_program(source)?;
     let mut loader = package::Loader::new(base);
     loader.load_imports(&mut program, None)?;
@@ -63,6 +79,11 @@ fn compile_in(source: &str, base: &std::path::Path) -> Result<Compiled, String> 
 /// type. This is `marslang symbols`, which editors read for hover information.
 /// Packages are loaded, from `base`, so decorators are checked as in `compile`.
 pub fn symbols(source: &str, base: &std::path::Path) -> Result<String, String> {
+    let (source, base) = (source.to_string(), base.to_path_buf());
+    on_interpreter_thread(move || symbols_here(&source, &base))
+}
+
+fn symbols_here(source: &str, base: &std::path::Path) -> Result<String, String> {
     let mut program = parser::parse_program(source)?;
     let mut loader = package::Loader::new(base);
     loader.load_imports(&mut program, None)?;

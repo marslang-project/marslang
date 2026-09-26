@@ -12,11 +12,17 @@ on:
         description: "Existing rs-X.Y.Z tag to build and upload"
         required: true
 
+# Read-only by default: the build jobs compile and run third-party code (crate
+# build scripts), so they must not hold a token that can change the repository
+# or its releases. Only the last job, which publishes, can write.
 permissions:
-  contents: write
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
+  # The tag, passed to scripts as an environment variable rather than pasted
+  # into them, so no tag name can become shell code.
+  TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
   build:
@@ -67,8 +73,7 @@ jobs:
         shell: bash
         run: |
           set -eu
-          tag="${{ inputs.tag || github.ref_name }}"
-          name="marslang-$tag-${{ matrix.target }}"
+          name="marslang-$TAG-${{ matrix.target }}"
           mkdir -p "staging/$name" dist
           cp README.md LICENSE.md "staging/$name/"
           if [ "${{ runner.os }}" = Windows ]; then
@@ -88,6 +93,13 @@ jobs:
     name: attach to the release
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      # Signed build provenance: anyone can check that an archive was built by
+      # this workflow from this repository with `gh attestation verify`.
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -106,13 +118,18 @@ jobs:
           (cd dist && sha256sum * > SHA256SUMS)
           cat dist/SHA256SUMS
 
+      - name: Attest where the archives came from
+        uses: actions/attest@v4
+        with:
+          subject-path: "dist/marslang-*"
+
       - name: Upload to the release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
-          tag="${{ inputs.tag || github.ref_name }}"
+          tag="$TAG"
           notes="docs/releases/$tag.md"
           if ! gh release view "$tag" >/dev/null 2>&1; then
             # The release page is normally written by hand; create it only if the

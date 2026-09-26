@@ -258,6 +258,24 @@ fn large_integer_literals_do_not_round_before_type_checks() {
 }
 
 #[test]
+fn deep_nesting_is_an_error_not_a_crash() {
+    // The editor runs check and symbols on any file opened, so a crafted file
+    // must get an error rather than overflow the stack.
+    let nested = |depth: usize| format!("func m{{ out({}1{}); }}", "(".repeat(depth), ")".repeat(depth));
+    executes(&nested(998), "1\n");
+    let error = marslang::compile(&nested(50_000)).unwrap_err();
+    assert!(error.contains("nested more than 1000 levels deep"), "{error}");
+    let error = marslang::compile(&format!("func m{{ out({}1); }}", "-".repeat(50_000))).unwrap_err();
+    assert!(error.contains("nested more than 1000 levels deep"), "{error}");
+    assert!(marslang::symbols(&nested(50_000), std::path::Path::new(".")).is_err());
+
+    let chain = |terms: usize| format!("func m{{ out({}); }}", vec!["1"; terms].join("+"));
+    executes(&chain(10_001), "10001\n");
+    let error = marslang::compile(&chain(10_002)).unwrap_err();
+    assert!(error.contains("more than 10000 operators in a row"), "{error}");
+}
+
+#[test]
 fn bool_is_a_type_annotation() {
     executes("func f(bool on) => not on;\nfunc m{ flag (bool) = true; out(f(flag), f(false)); }", "false true\n");
     runtime_error("func f(bool on) => on;\nfunc m{ f(1); }", "expected bool, got int");
@@ -860,6 +878,39 @@ fn std_file_write_is_all_or_nothing() {
     assert_eq!(out, "second\n");
     let names: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
     assert!(names.iter().all(|n| !n.ends_with(".tmp")), "{names:?}");
+}
+
+/// Writing replaces the file through a temporary one; it must keep the old
+/// file's permissions, so a private file does not become readable by others,
+/// and write through a link rather than replace it.
+#[cfg(unix)]
+#[test]
+fn std_file_write_keeps_permissions_and_links() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = package_dir("file-permissions", &[("main.mars", r#"
+        takepkg std.file;
+        takepkg std.json;
+        func m{
+            file.write(file.here("secret.env"), "TOKEN=new\n");
+            json.save(file.here("settings.json"), json.parse("{\"a\": 1}"));
+            file.write(file.here("link.txt"), "through the link\n");
+        }"#)]);
+    let set = |name: &str, text: &str, mode: u32| {
+        std::fs::write(dir.join(name), text).unwrap();
+        std::fs::set_permissions(dir.join(name), std::fs::Permissions::from_mode(mode)).unwrap();
+    };
+    set("secret.env", "TOKEN=old\n", 0o600);
+    set("settings.json", "{}\n", 0o640);
+    set("real.txt", "original\n", 0o604);
+    std::os::unix::fs::symlink("real.txt", dir.join("link.txt")).unwrap();
+    let main = dir.join("main.mars");
+    let (_, result) = marslang::run_captured_with_args(marslang::compile_file(&main).unwrap(), "", main.display().to_string(), Vec::new());
+    result.expect("runtime error");
+    let mode = |name: &str| std::fs::metadata(dir.join(name)).unwrap().permissions().mode() & 0o777;
+    assert_eq!((mode("secret.env"), mode("settings.json"), mode("real.txt")), (0o600, 0o640, 0o604));
+    assert!(std::fs::symlink_metadata(dir.join("link.txt")).unwrap().file_type().is_symlink());
+    assert_eq!(std::fs::read_to_string(dir.join("real.txt")).unwrap(), "through the link\n");
+    assert_eq!(std::fs::read_to_string(dir.join("secret.env")).unwrap(), "TOKEN=new\n");
 }
 
 #[test]

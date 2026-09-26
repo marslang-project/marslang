@@ -145,6 +145,11 @@ families inheriting from it. `Function` and `Family` are for parameters only.
   contain `"`. Escapes: `\n` `\r` `\t` `\b` `\f` `\v` `\0`, `\xHH`, `\uHHHH`,
   `\u{H...}`, and a backslash before any other character stands for that
   character, so `\"` and `\\` work in every kind of string.
+- **Limits**: one expression may nest at most 1,000 levels deep, counting
+  parentheses, calls, and unary operators, and chain at most 10,000 operators
+  in a row, as in `a + b + c`. Beyond either, compiling stops with an error,
+  so no file, however it was made, can crash `marslang check` or an editor
+  that runs it.
 
 ## Not in the grammar
 
