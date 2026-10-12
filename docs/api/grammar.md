@@ -144,7 +144,9 @@ families inheriting from it. `Function` and `Family` are for parameters only.
 - **Strings**: `"..."`, `'...'`, and `"""..."""`, which may span lines and
   contain `"`. Escapes: `\n` `\r` `\t` `\b` `\f` `\v` `\0`, `\xHH`, `\uHHHH`,
   `\u{H...}`, and a backslash before any other character stands for that
-  character, so `\"` and `\\` work in every kind of string.
+  character, so `\"` and `\\` work in every kind of string. An `r` before the
+  opening quote, `r"..."`, `r'...'`, or `r"""..."""`, makes a raw string, in
+  which a backslash is only a backslash; it cannot contain its closing quote.
 - **Limits**: one expression may nest at most 1,000 levels deep, counting
   parentheses, calls, and unary operators, and chain at most 10,000 operators
   in a row, as in `a + b + c`. Beyond either, compiling stops with an error,

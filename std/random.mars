@@ -1,0 +1,309 @@
+// std.random: random numbers, and random choices, shuffles, and samples.
+//
+// The generator is native (std/rs/random.rs): xoshiro256++, started from the
+// operating system's random source, or from a seed to repeat its numbers.
+// Everything made from its numbers is Marslang, below: the shared functions
+// call one Generator that the package keeps. Not for passwords, keys, or
+// tokens: enough of its output lets anyone predict the rest.
+takepkg rs.random = native;
+takepkg std.Decorator;
+takepkg std.math;
+takepkg std.types;
+
+@Decorator.docstring("""
+    A random number generator of its own, apart from the one the functions of
+    std.random share, so that one part of a program repeats its numbers
+    whatever the rest does.
+
+        dice = random.Generator(42);
+        out(dice.int_between(1, 6));    // the same on every run
+
+    seed is an int, longint, or string, for the same numbers on every run and
+    platform, or null for unpredictable ones. A Generator has every function
+    of std.random as a method: dice.shuffle(items), dice.float(), and so on.
+""")
+family Generator{
+    @Decorator.docstring("A generator started from seed: an int, longint, or string to repeat its numbers, or null for unpredictable ones.")
+    func init(any seed){ me._state = native.state(seed); }
+
+    @Decorator.docstring("Start this generator over from seed, as random.seed does the shared one. Returns null.")
+    func seed(any seed){ native.reseed(me._state, seed); }
+
+    @Decorator.docstring("As random.float, from this generator.")
+    func float() => native.float(me._state);
+
+    @Decorator.docstring("As random.float_between, from this generator.")
+    func float_between(float low, float high){
+        if (not (low <= high)){ err(RangeError, "random.float_between needs low <= high, got " + string(low) + " and " + string(high)); }
+        width = high - low;
+        if (width - width != 0.0){ err(RangeError, "random.float_between needs finite bounds less than a float's range apart"); }
+        if (width == 0.0){ ret low; }
+        value = low + width * native.float(me._state);
+        // Rounding can reach high itself, about once in 2^53 draws.
+        while (value >= high){ value = low + width * native.float(me._state); }
+        ret value;
+    }
+
+    @Decorator.docstring("As random.int_between, from this generator.")
+    func int_between([int,longint] low, [int,longint] high) => native.between(me._state, low, high);
+
+    @Decorator.docstring("As random.int_below, from this generator.")
+    func int_below([int,longint] count){
+        if (count <= 0){ err(RangeError, "random.int_below needs a count above 0, got " + string(count)); }
+        ret native.between(me._state, 0, count - 1);
+    }
+
+    @Decorator.docstring("As random.bool, from this generator.")
+    func bool() => native.between(me._state, 0, 1) == 1;
+
+    @Decorator.docstring("As random.chance, from this generator.")
+    func chance(float probability){
+        if (not (probability >= 0.0 and probability <= 1.0)){
+            err(RangeError, "random.chance needs a probability from 0.0 to 1.0, got " + string(probability));
+        }
+        ret native.float(me._state) < probability;
+    }
+
+    @Decorator.docstring("As random.choice, from this generator.")
+    func choice(array items){
+        if (items.is_empty()){ err(RangeError, "random.choice needs at least one item"); }
+        ret items[native.between(me._state, 0, items.len() - 1)];
+    }
+
+    @Decorator.docstring("As random.choices, from this generator.")
+    func choices(array items, int count){
+        _count("choices", count);
+        if (items.is_empty() and count > 0){ err(RangeError, "random.choices needs at least one item"); }
+        chosen = arr();
+        last = items.len() - 1;
+        repeat count { chosen.add(items[native.between(me._state, 0, last)]); }
+        ret chosen;
+    }
+
+    @Decorator.docstring("As random.sample, from this generator.")
+    func sample(array items, int count){
+        _count("sample", count);
+        total = items.len();
+        if (count > total){
+            err(RangeError, "random.sample cannot take " + string(count) + " items from " + string(total));
+        }
+        chosen = arr();
+        if (count <= total / 4){
+            // Few from many: draw positions and skip any already taken, which
+            // is rare at a quarter or less, and copies nothing.
+            taken = set();
+            while (chosen.len() < count){
+                at = native.between(me._state, 0, total - 1);
+                if (not taken.has(at)){
+                    taken.add(at);
+                    chosen.add(items[at]);
+                }
+            }
+            ret chosen;
+        }
+        // Many from many: the first count steps of a Fisher-Yates shuffle of a copy.
+        pool = items.slice(0, total);
+        for (i = 0, i < count, i++){
+            at = native.between(me._state, i, total - 1);
+            item = pool[at];
+            pool.modify(at, pool[i]);
+            chosen.add(item);
+        }
+        ret chosen;
+    }
+
+    @Decorator.docstring("As random.shuffle, from this generator.")
+    func shuffle(array items){
+        // A fixed array raises at once, even when the order drawn would
+        // happen to leave it as it is.
+        if (items.len() > 1){ items.modify(0, items[0]); }
+        // Fisher-Yates, from the end: each position takes an item from those
+        // not yet placed, so every order is equally likely.
+        for (i = items.len() - 1, i > 0, i--){
+            at = native.between(me._state, 0, i);
+            if (at != i){
+                item = items[at];
+                items.modify(at, items[i]);
+                items.modify(i, item);
+            }
+        }
+    }
+
+    @Decorator.docstring("As random.shuffled, from this generator.")
+    func shuffled(array items){
+        copy = items.slice(0, items.len());
+        me.shuffle(copy);
+        ret copy;
+    }
+
+    @Decorator.docstring("As random.weighted_choice, from this generator.")
+    func weighted_choice(array items, array weights) => me.weighted_choices(items, weights, 1)[0];
+
+    @Decorator.docstring("As random.weighted_choices, from this generator.")
+    func weighted_choices(array items, array weights, int count){
+        _count("weighted_choices", count);
+        bounds = _cumulative(items, weights);
+        total = bounds[bounds.len() - 1];
+        chosen = arr();
+        while (chosen.len() < count){
+            // The first item whose running total passes a point from 0 up to
+            // the total, by binary search; an item of weight 0 is never chosen.
+            point = total * native.float(me._state);
+            low = 0;
+            high = bounds.len();
+            while (low < high){
+                middle = (low + high - (low + high) % 2) / 2;
+                if (bounds[middle] > point){ high = middle; } else { low = middle + 1; }
+            }
+            // Rounding can put point on the total itself; that draw is redone.
+            if (low < bounds.len()){ chosen.add(items[low]); }
+        }
+        ret chosen;
+    }
+
+    @Decorator.docstring("As random.gauss, from this generator.")
+    func gauss(float mean, float deviation){
+        if (not (deviation >= 0.0)){ err(RangeError, "random.gauss needs a deviation of 0.0 or more, got " + string(deviation)); }
+        // Box-Muller: two uniform numbers make one normally distributed one.
+        // 1 - u is never 0, so its logarithm is finite.
+        radius = math.sqrt(-2.0 * math.ln(1.0 - native.float(me._state)));
+        ret mean + deviation * radius * math.cos(math.TAU * native.float(me._state));
+    }
+}
+
+@Decorator.private
+func _count(string name, int count){
+    if (count < 0){ err(RangeError, "random." + name + " needs a count of 0 or more, got " + string(count)); }
+}
+
+// Exact for every int, and every longint up to 2^53.
+@Decorator.private
+func _real(float value) => value;
+
+@Decorator.private
+func _cumulative(array items, array weights){
+    if (items.len() != weights.len()){
+        err(RangeError, "random needs one weight per item, got " + string(weights.len()) + " weights for " + string(items.len()) + " items");
+    }
+    if (items.is_empty()){ err(RangeError, "random needs at least one item to choose from"); }
+    bounds = arr();
+    total = 0.0;
+    for (weight, weights){
+        if (not types.is_number(weight) or not (weight >= 0 and weight - weight == 0)){
+            err(RangeError, "random weights must be finite numbers of 0 or more, got " + string(weight));
+        }
+        total = total + _real(weight);
+        bounds.add(total);
+    }
+    if (not (total > 0.0)){ err(RangeError, "random weights must not all be 0"); }
+    if (total - total != 0.0){ err(RangeError, "random weights add up to more than a float can hold"); }
+    ret bounds;
+}
+
+// The generator the functions below share, unpredictable until seed is called.
+_shared = Generator(null);
+
+@Decorator.docstring("""
+    Start the shared generator over from seed, so the program makes the same
+    numbers on every run, on every platform: for tests, replays, and
+    procedural worlds.
+
+        random.seed(2026);
+        out(random.int_between(1, 100));   // the same number every time
+
+    seed is an int, longint, or string; null makes the numbers unpredictable
+    again. Returns null.
+""")
+func seed(any seed){ _shared.seed(seed); }
+
+@Decorator.docstring("A float from 0.0 up to, but never, 1.0, every value equally likely.")
+func float() => _shared.float();
+
+@Decorator.docstring("""
+    A float from low up to, but never, high. Equal bounds give low. Bounds
+    the wrong way round, or not finite, raise RangeError.
+""")
+func float_between(float low, float high) => _shared.float_between(low, high);
+
+@Decorator.docstring("""
+    A whole number from low to high, both included, each equally likely.
+
+        roll = random.int_between(1, 6);
+
+    An int when both bounds are ints, otherwise a longint. low above high
+    raises RangeError.
+""")
+func int_between([int,longint] low, [int,longint] high) => _shared.int_between(low, high);
+
+@Decorator.docstring("""
+    A whole number from 0 up to, but not, count: a random position in
+    something count long. A count of 0 or less raises RangeError.
+""")
+func int_below([int,longint] count) => _shared.int_below(count);
+
+@Decorator.docstring("true or false, each half of the time.")
+func bool() => _shared.bool();
+
+@Decorator.docstring("""
+    true with the given probability, from 0.0 (never) to 1.0 (always).
+
+        if (random.chance(0.1)){ out("critical hit"); }
+""")
+func chance(float probability) => _shared.chance(probability);
+
+@Decorator.docstring("""
+    One item of the array, each equally likely. An empty array raises
+    RangeError.
+
+        out(random.choice(arr("rock", "paper", "scissors")));
+""")
+func choice(array items) => _shared.choice(items);
+
+@Decorator.docstring("count items picked from the array one by one, so the same one can come up again.")
+func choices(array items, int count) => _shared.choices(items, count);
+
+@Decorator.docstring("""
+    count items from different positions of the array, in random order: a
+    hand dealt from a deck. More than the array holds raises RangeError.
+
+        winners = random.sample(entrants, 3);
+
+    The array is unchanged.
+""")
+func sample(array items, int count) => _shared.sample(items, count);
+
+@Decorator.docstring("""
+    Put the array's items in a random order, in place; every order is
+    equally likely. Returns null; random.shuffled leaves the array alone.
+""")
+func shuffle(array items){ _shared.shuffle(items); }
+
+@Decorator.docstring("A copy of the array in a random order, leaving the array unchanged.")
+func shuffled(array items) => _shared.shuffled(items);
+
+@Decorator.docstring("""
+    One item, picked in proportion to its weight: weights[i] is how likely
+    items[i] is, against the total.
+
+        loot = random.weighted_choice(arr("common", "rare", "epic"), arr(80, 15, 5));
+
+    Weights are numbers of 0 or more, one per item, not all 0; an item of
+    weight 0 never comes up. Anything else raises RangeError.
+""")
+func weighted_choice(array items, array weights) => _shared.weighted_choice(items, weights);
+
+@Decorator.docstring("""
+    count items picked by weight, as weighted_choice, one by one, so the
+    same one can come up again. Faster than calling weighted_choice count
+    times: the weights are added up once.
+""")
+func weighted_choices(array items, array weights, int count) => _shared.weighted_choices(items, weights, count);
+
+@Decorator.docstring("""
+    A float from the normal distribution, the bell curve, around mean, with
+    the given standard deviation: about 68% fall within one deviation of
+    mean, and 95% within two.
+
+        height = random.gauss(170.0, 7.5);
+""")
+func gauss(float mean, float deviation) => _shared.gauss(mean, deviation);

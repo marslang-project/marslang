@@ -1,0 +1,206 @@
+// std.regex: regular expressions: checking, finding, replacing, and
+// splitting text by pattern.
+//
+// Matching is native (std/rs/regex.rs), by Rust's regex crate, which takes
+// time in proportion to the text for every pattern, so no pattern can hang a
+// program. Patterns are compiled the first time they are used and kept, so a
+// pattern used in a loop is compiled once. Match and Regex, and replacing
+// with a function, are Marslang, below.
+takepkg rs.regex = native;
+takepkg std.Decorator;
+takepkg std.strings;
+takepkg std.types;
+
+@Decorator.docstring(r"""
+    One match of a pattern in a text.
+
+        m = regex.find(r"(\d+)-(\d+)", "pages 12-19");
+        out(m.text, m.start, m.end, m.group(1), m.group(2));   // 12-19 6 11 12 19
+
+    text is what matched, and start and end are character positions, as for
+    slice: text.slice(m.start, m.end) is the match. groups holds the text of
+    each ( ) group in order, with null for one that took no part; names maps
+    each named group, (?<year>...), to its text.
+""")
+family Match{
+    @Decorator.docstring("Made by the functions of std.regex from what they found; not called directly.")
+    func init(array raw){
+        me.text = raw[0];
+        me.start = raw[1];
+        me.end = raw[2];
+        me.groups = raw[3];
+        me.names = raw[4];
+    }
+
+    @Decorator.docstring(r"""
+        The text of group number, counting ( from the left from 1; 0 is the
+        whole match. null when the group took no part, as in (a)|b matching
+        "b". A number the pattern has no group for raises OutOfBoundsError.
+    """)
+    func group(int number){
+        if (number == 0){ ret me.text; }
+        if (number < 0 or number > me.groups.len()){
+            err(OutOfBoundsError, "the pattern has no group " + string(number) + ", only " + string(me.groups.len()));
+        }
+        ret me.groups[number - 1];
+    }
+
+    @Decorator.docstring("The text of the group named name, (?<name>...), or null when it took no part. A name the pattern lacks raises RangeError.")
+    func named(string name){
+        if (not me.names.has(name)){ err(RangeError, "the pattern has no group named \"" + name + "\""); }
+        ret me.names.get(name);
+    }
+}
+
+@Decorator.docstring(r"""
+    A pattern, checked once, with every function of std.regex as a method
+    that leaves out the pattern argument.
+
+        word = regex.Regex(r"\w+");
+        out(word.find_all("one two").len());   // 2
+
+    A pattern that is not valid raises SyntaxError here, rather than at its
+    first use. pattern is the text it was made from.
+""")
+family Regex{
+    @Decorator.docstring("The pattern, checked now: one that is not valid raises SyntaxError, saying where.")
+    func init(string pattern){
+        native.check(pattern);
+        me.pattern = pattern;
+    }
+
+    @Decorator.docstring("As regex.matches, with this pattern.")
+    func matches(string text) => native.matches(me.pattern, text);
+    @Decorator.docstring("As regex.contains, with this pattern.")
+    func contains(string text) => native.contains(me.pattern, text);
+    @Decorator.docstring("As regex.find, with this pattern.")
+    func find(string text) => _match(native.find(me.pattern, text));
+    @Decorator.docstring("As regex.find_all, with this pattern.")
+    func find_all(string text) => _matches(native.find_all(me.pattern, text));
+    @Decorator.docstring("As regex.find_whole, with this pattern.")
+    func find_whole(string text) => _match(native.find_whole(me.pattern, text));
+    @Decorator.docstring("As regex.replace, with this pattern.")
+    func replace(string text, string replacement) => native.replace(me.pattern, text, replacement, true);
+    @Decorator.docstring("As regex.replace_first, with this pattern.")
+    func replace_first(string text, string replacement) => native.replace(me.pattern, text, replacement, false);
+    @Decorator.docstring("As regex.replace_with, with this pattern.")
+    func replace_with(string text, Function f) => _replace_with(me.pattern, text, f);
+    @Decorator.docstring("As regex.split, with this pattern.")
+    func split(string text) => native.split(me.pattern, text);
+}
+
+@Decorator.private
+func _match(any raw){
+    if (raw == null){ ret null; }
+    ret Match(raw);
+}
+
+@Decorator.private
+func _matches(array raws){
+    found = arr();
+    for (raw, raws){ found.add(Match(raw)); }
+    ret found;
+}
+
+@Decorator.private
+func _replace_with(string pattern, string text, Function f){
+    parts = native.pieces(pattern, text);
+    gaps = parts[0];
+    raws = parts[1];
+    joined = arr(gaps[0]);
+    for (i = 0, i < raws.len(), i++){
+        replacement = f(Match(raws[i]));
+        if (types.kind(replacement) != "string"){
+            err(TypeError, "regex.replace_with needs the function to return a string, got " + types.kind(replacement));
+        }
+        joined.add(replacement);
+        joined.add(gaps[i + 1]);
+    }
+    ret strings.join(joined, "");
+}
+
+// ----- checking -----
+
+@Decorator.docstring(r"""
+    Whether the whole text matches the pattern, not just a part of it.
+
+        regex.matches(r"\d{4}-\d{2}-\d{2}", "2026-10-12")     // true
+        regex.matches(r"\d{4}-\d{2}-\d{2}", "on 2026-10-12")  // false
+
+    A pattern that is not valid raises SyntaxError, saying where.
+""")
+func matches(string pattern, string text) => native.matches(pattern, text);
+
+@Decorator.docstring("Whether the pattern matches anywhere in the text.")
+func contains(string pattern, string text) => native.contains(pattern, text);
+
+// ----- finding -----
+
+@Decorator.docstring(r"""
+    The first match of the pattern in the text, as a Match, or null.
+
+        m = regex.find(r"(?<user>\w+)@(?<host>[\w.]+)", "mail ada@example.com");
+        if (m != null){ out(m.named("host")); }   // example.com
+""")
+func find(string pattern, string text) => _match(native.find(pattern, text));
+
+@Decorator.docstring(r"""
+    Every match of the pattern, left to right, as an array of Match; matches
+    do not overlap. Empty when there are none.
+
+        for (m, regex.find_all(r"#(\w+)", "#rust and #mars")){ out(m.group(1)); }
+""")
+func find_all(string pattern, string text) => _matches(native.find_all(pattern, text));
+
+@Decorator.docstring(r"""
+    The match of the whole text, as a Match, or null when the whole text does
+    not match: matches, with the groups.
+
+        m = regex.find_whole(r"(\d+)x(\d+)", "1920x1080");
+        out(m.group(1), m.group(2));   // 1920 1080
+""")
+func find_whole(string pattern, string text) => _match(native.find_whole(pattern, text));
+
+// ----- replacing and splitting -----
+
+@Decorator.docstring(r"""
+    The text with every match replaced. In the replacement, $1 or ${1} is
+    the text of group 1, ${name} that of a named group, and $$ is a $.
+
+        out(regex.replace(r"(\w+)@(\w+)", "ada@home", "$2:$1"));   // home:ada
+
+    Write ${1} when letters, digits, or _ follow: $1st reads as a group
+    named 1st. A group that does not exist, or took no part, is empty.
+""")
+func replace(string pattern, string text, string replacement) => native.replace(pattern, text, replacement, true);
+
+@Decorator.docstring("As replace, for the first match only.")
+func replace_first(string pattern, string text, string replacement) => native.replace(pattern, text, replacement, false);
+
+@Decorator.docstring(r"""
+    The text with every match replaced by what f returns for it: f gets the
+    Match and returns a string.
+
+        func shout(regex.Match m) => m.text.upper();
+        out(regex.replace_with(r"\b\w", "ada lovelace", shout));   // Ada Lovelace
+
+    A non-string from f raises TypeError.
+""")
+func replace_with(string pattern, string text, Function f) => _replace_with(pattern, text, f);
+
+@Decorator.docstring(r"""
+    The pieces of text between matches of the pattern.
+
+        out(regex.split(r"\s*,\s*", "a , b,c"));   // ["a", "b", "c"]
+
+    A match at the very start or end gives an empty piece there.
+""")
+func split(string pattern, string text) => native.split(pattern, text);
+
+@Decorator.docstring(r"""
+    A pattern that matches text exactly, with every character a pattern
+    treats specially escaped: for putting user input into a pattern.
+
+        regex.find(regex.escape("1+1=2?"), question)
+""")
+func escape(string text) => native.escape(text);

@@ -19,7 +19,9 @@ notes elsewhere under `docs/` remain local.
 - [std.containers](std-containers.md): stack, queue, deque, and priority queue.
 - [std.algorithms](std-algorithms.md): sorting by a key or a comparison, binary search, and the usual collection passes.
 - [std.stats](std-stats.md): mean, median, mode, quantiles, spread, and correlation.
+- [std.random](std-random.md): random numbers, choices, shuffles, samples, weights, and seeds.
 - [std.strings](std-strings.md): splitting, searching, trimming, case, and padding.
+- [std.regex](std-regex.md): regular expressions: checking, finding, replacing, and splitting by pattern.
 - [std.types](std-types.md): a value's kind, family checks.
 - [std.memory](std-memory.md): addresses, object identity, and the cycle collector.
 - [std.file](std-file.md): reading, writing, listing, copying, moving, and removing files and directories.

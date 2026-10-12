@@ -217,6 +217,50 @@ fn preprocess(input: &str) -> PResult<Vec<Line>> {
             }
             clean.push('"');
             for _ in 0..newlines { clean.push(LINE_MARK); }
+        } else if ch == 'r' && matches!(chars.peek(), Some('"' | '\''))
+            && !clean.chars().next_back().is_some_and(|c| c.is_alphanumeric() || c == '_')
+        {
+            // r"...", r'...', and r"""...""" are raw: a backslash is only a
+            // backslash, for regex patterns and Windows paths. Each becomes an
+            // ordinary string with its backslashes and quotes escaped.
+            let (start_line, start_column) = (line, column);
+            let q = chars.next().unwrap();
+            column += 1;
+            let triple = q == '"' && opens_triple(&chars);
+            if triple {
+                chars.next();
+                chars.next();
+                column += 2;
+            }
+            let unterminated = || format!("line {start_line}: unterminated raw string starting at column {start_column}");
+            let mut newlines = 0;
+            clean.push('"');
+            loop {
+                let Some(c) = chars.next() else { return Err(unterminated()) };
+                column += 1;
+                if c == '\n' {
+                    if !triple { return Err(unterminated()); }
+                    line += 1;
+                    column = 0;
+                    newlines += 1;
+                }
+                if triple && c == '"' && opens_triple(&chars) {
+                    chars.next();
+                    chars.next();
+                    column += 2;
+                    break;
+                }
+                if !triple && c == q { break; }
+                match c {
+                    '\\' => clean.push_str("\\\\"),
+                    '"' => clean.push_str("\\\""),
+                    '\n' => clean.push_str("\\n"),
+                    '\r' if triple => {}
+                    _ => clean.push(c),
+                }
+            }
+            clean.push('"');
+            for _ in 0..newlines { clean.push(LINE_MARK); }
         } else {
             if ch == '\'' || ch == '"' {
                 quote = Some(ch);

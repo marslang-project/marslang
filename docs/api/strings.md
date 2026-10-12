@@ -17,6 +17,23 @@ The text is taken exactly as written, so the line break after an opening `"""`
 and the indentation of the lines are part of the string. Docstrings are the
 exception: `@Decorator.docstring` removes the indentation they share.
 
+## Raw strings
+
+An `r` straight before the opening quote makes a raw string, in which a
+backslash is only a backslash and escapes nothing. Use them for
+[regular expressions](std-regex.md) and Windows paths:
+
+```mars
+pattern = r"\d{4}-\d{2}";          // the same as "\\d{4}-\\d{2}"
+folder = r"C:\Users\ada\new";       // \n is not a line break here
+```
+
+All three quotes work: `r"..."`, `r'...'`, and `r"""..."""`, which spans
+lines. A raw string cannot contain its own closing quote, so a `"` goes in
+`r'...'` or `r"""..."""`. In an ordinary string, a backslash before a
+character without an escape of its own stands for that character, so `"\d"`
+is just `d`, which is why patterns need raw strings.
+
 ## Characters
 
 A character is one Unicode extended grapheme cluster: a visible character can

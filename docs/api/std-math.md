@@ -211,5 +211,6 @@ hyperbolic functions, `atan2`, float `pow`, and the float sign bit.
 
 Approximate equality, adjacent-float operations, inverse hyperbolic functions,
 decimal/fraction, and the optional convenience functions from the expansion proposal
-remain future work. Package boundaries for statistics,
-random generation, complex numbers, and linear algebra remain unchanged.
+remain future work, as do complex numbers and linear algebra. Statistics and
+random numbers have packages of their own: [std.stats](std-stats.md) and
+[std.random](std-random.md).

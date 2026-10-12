@@ -23,6 +23,31 @@ pub fn lex(input: &str) -> Vec<Token> {
             i += 1;
             continue;
         }
+        // r"...", r'...', r"""...""": raw strings, in which \ escapes nothing.
+        if c == 'r' && matches!(chars.get(i + 1), Some('"' | '\'')) {
+            let start = i;
+            let q = chars[i + 1];
+            let triple = q == '"' && chars.get(i + 2) == Some(&'"') && chars.get(i + 3) == Some(&'"');
+            i += if triple { 4 } else { 2 };
+            while i < chars.len() {
+                let closes = if triple {
+                    chars[i] == '"' && chars.get(i + 1) == Some(&'"') && chars.get(i + 2) == Some(&'"')
+                } else {
+                    chars[i] == q
+                };
+                if closes {
+                    i += if triple { 3 } else { 1 };
+                    break;
+                }
+                i += 1;
+            }
+            i = i.min(chars.len());
+            out.push(Token {
+                kind: TokenKind::String(chars[start..i].iter().collect()),
+                pos: start,
+            });
+            continue;
+        }
         if c.is_ascii_alphabetic() || c == '_' {
             let start = i;
             i += 1;

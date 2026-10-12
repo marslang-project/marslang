@@ -19,6 +19,11 @@ unicode-segmentation = "1.13.3"
 jiff = { version = "0.2.37", default-features = false, features = ["std", "tz-fat", "tzdb-bundle-always", "tzdb-zoneinfo", "tzdb-concatenated", "perf-inline"] }
 # std.file.toml: TOML 1.1 reading and writing, keeping key order.
 toml = { version = "1.1.6", features = ["preserve_order"] }
+# std.regex: matching in time proportional to the text, whatever the pattern.
+# regex-syntax is the crate's own parser, used directly only to say where in a
+# pattern an error is.
+regex = "1.13.1"
+regex-syntax = "0.8.11"
 
 [target.'cfg(not(windows))'.dependencies]
 # Elsewhere jiff reads the system time zone itself (TZ, /etc/localtime).

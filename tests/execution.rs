@@ -524,7 +524,7 @@ fn bundled_math_imports_are_isolated_aliased_and_deduplicated() {
     "#, "23499");
     runtime_error("takepkg std.math;func m{math.min=1;}", "TypeError:");
     assert!(marslang::compile("takepkg std.math = *;").unwrap_err().contains("wildcard"));
-    assert!(marslang::compile("takepkg std.regex;").unwrap_err().contains("not implemented"));
+    assert!(marslang::compile("takepkg std.http;").unwrap_err().contains("not implemented"));
     assert!(marslang::compile("takepkg std.math = bad-name;").unwrap_err().contains("alias"));
     assert!(marslang::compile("takepkg std.math;math=1;").unwrap_err().contains("cannot reassign"));
 }
@@ -2354,4 +2354,183 @@ fn decorator_package_lists_the_available_markers() {
         "private subclass static\n");
     let error = marslang::compile("takepkg std.Decorator;\nfamily Box{\n @Decorator.secret\n func x() => 1;\n}").unwrap_err();
     assert!(error.contains("std.Decorator provides: docstring, private, subclass, static, class, overload"), "{error}");
+}
+
+#[test]
+fn raw_strings_keep_backslashes() {
+    executes(r#"func m{
+        out(r"C:\new\table", r'say "hi"\n', r"\d+//not a comment/*", "\d");
+        out(r"""first\n
+second "quoted" \t""".len(), r"".len(), r"\".len());
+        bar = "x";
+        out(bar);
+    }"#, "C:\\new\\table say \"hi\"\\n \\d+//not a comment/* d\n26 0 1\nx\n");
+    // A raw string over several lines keeps the line numbers after it right.
+    let error = marslang::compile("func m{\n    x = r\"\"\"one\ntwo\"\"\";\n    out(1 +);\n}").unwrap_err();
+    assert!(error.contains("line 4"), "{error}");
+    let error = marslang::compile("func m{\n    x = r\"one\ntwo\";\n}").unwrap_err();
+    assert!(error.contains("line 2: unterminated raw string"), "{error}");
+}
+
+#[test]
+fn std_random_repeats_seeded_numbers_on_every_platform() {
+    executes(r#"
+        takepkg std.random;
+        takepkg std.types;
+        func m{
+            random.seed(42);
+            out(random.int_between(1, 6), random.int_between(1, 6), random.int_between(1, 6), random.int_below(100));
+            out(random.float(), random.bool(), random.chance(0.5));
+            g = random.Generator("level-1");
+            out(g.choice(arr("a", "b", "c")), g.sample(arr(1, 2, 3, 4, 5, 6, 7, 8, 9, 10), 3), g.shuffled(arr(1, 2, 3, 4, 5)));
+            out(g.choices(arr("x", "y"), 4), g.weighted_choice(arr("common", "rare"), arr(9, 1)), g.float_between(10, 20));
+            out(types.kind(g.int_between(longint(1), 3)), g.int_between(-9223372036854775807 - 1, 9223372036854775807));
+            h = random.Generator(7);
+            random.seed(7);
+            out(h.int_between(1, 1000000) == random.int_between(1, 1000000));
+            h.seed(7);
+            random.seed(8);
+            out(h.int_between(1, 1000000), random.int_between(1, 1000000), random.Generator(longint(7)).int_between(1, 1000000));
+        }"#,
+        concat!(
+            "5 2 6 70\n",
+            "0.793504489691729 true true\n",
+            "c [9, 8, 7] [1, 4, 3, 5, 2]\n",
+            "[\"y\", \"x\", \"x\", \"x\"] common 13.123154562765826\n",
+            "longint 4634886036284679342\n",
+            "true\n",
+            "55361 391923 55361\n",
+        ));
+}
+
+#[test]
+fn std_random_stays_in_range_and_is_fair() {
+    executes(r#"
+        takepkg std.random;
+        takepkg std.stats;
+        func m{
+            faces = arr(0, 0, 0, 0, 0, 0);
+            repeat 6000 { f = random.int_between(1, 6); faces.modify(f - 1, faces[f - 1] + 1); }
+            fair = true;
+            for (count, faces){ if (count < 850 or count > 1150){ fair = false; } }
+            out(fair);
+            inside = true;
+            repeat 2000 {
+                x = random.float();
+                y = random.float_between(-2.5, 2.5);
+                n = random.int_below(longint(3));
+                if (x < 0.0 or x >= 1.0 or y < -2.5 or y >= 2.5 or n < 0 or n > 2){ inside = false; }
+            }
+            out(inside, random.float_between(4.0, 4.0), random.int_between(3, 3));
+            out(random.weighted_choices(arr("never", "always", "never"), arr(0, 2.5, 0), 200).has("never"));
+            different = set();
+            for (card, random.sample(arr(1, 2, 3, 4, 5, 6, 7, 8, 9, 10), 10)){ different.add(card); }
+            out(different.len(), random.sample(arr(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12), 2).len());
+            deck = arr(1, 2, 3, 4, 5);
+            random.shuffle(deck);
+            out(stats.sum(deck), deck.len(), random.shuffled(arr()), random.choices(arr(), 0), random.sample(arr(1), 0));
+            heights = arr();
+            repeat 4000 { heights.add(random.gauss(170.0, 7.5)); }
+            out(stats.mean(heights) > 169.0 and stats.mean(heights) < 171.0, stats.stdev(heights) > 7.0 and stats.stdev(heights) < 8.0);
+            out(random.chance(1.0), random.chance(0.0), random.gauss(5.0, 0.0));
+        }"#,
+        "true\ntrue 4 3\nfalse\n10 2\n15 5 [] [] []\ntrue true\ntrue false 5\n");
+}
+
+#[test]
+fn std_random_mistakes_are_explained() {
+    for (source, message) in [
+        ("random.int_between(6, 1);", "random.int_between needs low <= high, got 6 and 1"),
+        ("random.int_between(1, 2.5);", "TypeError"),
+        ("random.int_below(0);", "random.int_below needs a count above 0, got 0"),
+        ("random.float_between(2.0, 1.0);", "random.float_between needs low <= high"),
+        ("random.float_between(0.0, float(\"inf\"));", "finite bounds"),
+        ("random.chance(1.5);", "random.chance needs a probability from 0.0 to 1.0, got 1.5"),
+        ("random.choice(arr());", "random.choice needs at least one item"),
+        ("random.choices(arr(1), -1);", "random.choices needs a count of 0 or more, got -1"),
+        ("random.sample(arr(1, 2), 3);", "random.sample cannot take 3 items from 2"),
+        ("random.weighted_choice(arr(1, 2), arr(1));", "one weight per item, got 1 weights for 2 items"),
+        ("random.weighted_choice(arr(1, 2), arr(0, 0));", "random weights must not all be 0"),
+        ("random.weighted_choice(arr(1, 2), arr(1, -1));", "finite numbers of 0 or more, got -1"),
+        ("random.weighted_choice(arr(1, 2), arr(1, \"2\"));", "finite numbers of 0 or more, got 2"),
+        ("random.gauss(0.0, -1.0);", "random.gauss needs a deviation of 0.0 or more"),
+        ("random.seed(1.5);", "a random seed must be an int, longint, string, or null, got float"),
+        ("fixed deck = arr(1, 2); random.shuffle(deck);", "Error"),
+        ("fixed deck = arr(1, 2); random.Generator(1).shuffle(deck);", "Error"),
+    ] {
+        runtime_error(&format!("takepkg std.random;\nfunc m{{ {source} }}"), message);
+    }
+}
+
+#[test]
+fn std_regex_finds_replaces_and_splits() {
+    executes(r##"
+        takepkg std.regex;
+        func shout(regex.Match found) => found.text.upper();
+        func m{
+            p = regex.find(r"(\d+)-(\d+)", "pages 12-19");
+            out(p.text, p.start, p.end, p.group(0), p.group(1), p.group(2), p.groups);
+            out(regex.matches(r"\d{4}-\d{2}-\d{2}", "2026-10-12"), regex.matches(r"\d{4}-\d{2}-\d{2}", "on 2026-10-12"), regex.matches("a|ab", "ab"));
+            out(regex.contains(r"\d", "abc1"), regex.contains(r"\d", "abc"), regex.find("z", "abc"));
+            h = regex.find(r"(?<user>\w+)@(?<host>[\w.]+)", "mail ada@example.com");
+            out(h.named("host"), h.names);
+            for (x, regex.find_all(r"#(\w+)", "#rust and #mars")){ slout(x.group(1) + " "); }
+            out(regex.find_all("x", "abc"));
+            w = regex.find_whole(r"(\d+)x(\d+)", "1920x1080");
+            out(w.group(1), w.group(2), regex.find_whole(r"\d+", "12a"), regex.find("(a)|b", "b").groups);
+            out(regex.replace(r"(\w+)@(\w+)", "ada@home", "$2:$1"), regex.replace_first("o", "foo boo", "0"), regex.replace("a", "banana", "$$"));
+            out(regex.replace_with(r"\b\w", "ada lovelace", shout), regex.replace_with("x", "abc", shout));
+            out(regex.split(r"\s*,\s*", "a , b,c"), regex.split(",", ",a,"), regex.escape("1+1=2?"));
+            out(regex.matches(r"(?x) \d+  # digits", "123"), regex.matches("(?i)hello", "HeLLo"), regex.find_all(r"(?m)^\w", "ab\ncd").len());
+            word = regex.Regex(r"\w+");
+            out(word.pattern, word.matches("one"), word.contains("!"), word.find("  hi").start, word.find_all("one two").len());
+            out(word.find_whole("one two"), word.replace("one two", "w"), word.replace_first("one two", "w"), word.replace_with("ab", shout), word.split("a b c"));
+        }"##,
+        concat!(
+            "12-19 6 11 12-19 12 19 [\"12\", \"19\"]\n",
+            "true false true\n",
+            "true false null\n",
+            "example.com {\"user\": \"ada\", \"host\": \"example.com\"}\n",
+            "rust mars []\n",
+            "1920 1080 null [null]\n",
+            "home:ada f0o boo b$n$n$\n",
+            "Ada Lovelace abc\n",
+            "[\"a\", \"b\", \"c\"] [\"\", \"a\", \"\"] 1\\+1=2\\?\n",
+            "true true 2\n",
+            "\\w+ true false 2 2\n",
+            "null w w w two AB [\"\", \" \", \" \", \"\"]\n",
+        ));
+}
+
+#[test]
+fn std_regex_positions_count_characters() {
+    executes(r#"
+        takepkg std.regex;
+        func m{
+            text = "x👨‍👩‍👧‍👦yz";
+            y = regex.find("y", text);
+            out(y.start, y.end, text.slice(y.start, y.end));
+            // The accent alone, inside "é" written as e and a combining accent:
+            // the match covers that whole character.
+            accented = "cafe\u0301!";
+            accent = regex.find("\u0301", accented);
+            out(accent.start, accent.end, accented.slice(accent.start, accent.end) == "e\u0301");
+            out(regex.find_all(".", "e\u0301").len(), regex.find("!", accented).start);
+        }"#,
+        "2 3 y\n3 4 true\n2 4\n");
+}
+
+#[test]
+fn std_regex_mistakes_are_explained() {
+    for (source, message) in [
+        ("regex.find(\"ab(c\", \"x\");", "SyntaxError: regex \"ab(c\" at character 3: unclosed group"),
+        ("regex.Regex(r\"(a)\\1\");", "regex \"(a)\\1\" at character 4: backreferences are not supported"),
+        ("regex.contains(\"(?=a)\", \"a\");", "look-around, including look-ahead and look-behind, is not supported"),
+        ("regex.matches(\"a{1000}{1000}\", \"a\");", "RangeError: regex \"a{1000}{1000}\" is too large"),
+        ("regex.find(\"(a)\", \"a\").group(2);", "OutOfBoundsError: the pattern has no group 2, only 1"),
+        ("regex.find(\"(a)\", \"a\").named(\"x\");", "RangeError: the pattern has no group named \"x\""),
+        ("func bad(regex.Match found) => 1; regex.replace_with(\"a\", \"a\", bad);", "regex.replace_with needs the function to return a string, got int"),
+    ] {
+        runtime_error(&format!("takepkg std.regex;\nfunc m{{ {source} }}"), message);
+    }
 }
