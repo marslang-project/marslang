@@ -123,7 +123,8 @@ Implemented:
   f-strings, `f"Hello {name}"`
 - `date`, `datetime`, and `duration` kinds with time zones and daylight saving
 - `marslang test` and std.testing for testing programs
-- standard packages for math, strings, regular expressions, formatting numbers and tables, random numbers, containers, algorithms, statistics, files, paths, CSV, `.env`, INI, and TOML (`std.file`), JSON, the command line, the environment (`std.os`, `std.sys`), and object identity (`std.memory`); see [docs/api](docs/api/README.md)
+- `bigint`, integers of any size, with the operators of the other numbers
+- standard packages for HTTP, hashing, encoding, logging, terminal colours, math, strings, regular expressions, formatting numbers and tables, random numbers, containers, algorithms, statistics, files, paths, CSV, `.env`, INI, and TOML (`std.file`), JSON, the command line, the environment (`std.os`, `std.sys`), and object identity (`std.memory`); see [docs/api](docs/api/README.md)
 - `fasle` accepted as `false`
 
 Not yet:

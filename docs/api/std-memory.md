@@ -39,8 +39,8 @@ inside the value itself, like a C value held in a register, and `address`,
 `pointer`, and `refs` raise `TypeError` for them:
 
 ```text
-TypeError: std.memory.address needs a value that lives behind a pointer; a int
-is stored inside the value itself
+TypeError: std.memory.address needs a value that lives behind a pointer; an int
+is not one: numbers have no address of their own
 ```
 
 `same` accepts them anyway, because the question still has an answer: for

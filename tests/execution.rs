@@ -2105,9 +2105,10 @@ fn std_memory_tells_objects_apart() {
         }"#, "true 0\n");
 
     for (source, message) in [
-        ("memory.address(5);", "a int is stored inside the value itself"),
-        ("memory.pointer(true);", "a bool is stored inside the value itself"),
-        ("memory.refs(null);", "a null is stored inside the value itself"),
+        ("memory.address(5);", "an int is not one: numbers have no address of their own"),
+        ("memory.address(bigint(5));", "a bigint is not one: numbers have no address of their own"),
+        ("memory.pointer(true);", "a bool is not one: it is stored inside the value itself"),
+        ("memory.refs(null);", "a null is not one: it is stored inside the value itself"),
     ] {
         runtime_error(&format!("takepkg std.memory;\nfunc m{{ {source} }}"), message);
     }

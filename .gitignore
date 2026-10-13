@@ -7,3 +7,6 @@
 
 # IDE
 .idea/
+
+# Worktrees that agents work in.
+/.claude/worktrees/

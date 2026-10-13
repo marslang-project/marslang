@@ -31,10 +31,12 @@ fn references(value: &Value) -> Option<usize> {
 }
 
 fn needs_address<T>(name: &str, value: &Value) -> RResult<T> {
-    type_err(format!(
-        "std.memory.{name} needs a value that lives behind a pointer; a {} is stored inside the value itself",
-        value.type_name()
-    ))
+    // A bigint is kept behind a pointer, but like every number it is a value
+    // with no identity, so it has no address to show either.
+    let kind = value.type_name();
+    let article = if kind.starts_with(['a', 'e', 'i', 'o', 'u']) { "an" } else { "a" };
+    let why = if value.num_kind().is_some() { "numbers have no address of their own" } else { "it is stored inside the value itself" };
+    type_err(format!("std.memory.{name} needs a value that lives behind a pointer; {article} {kind} is not one: {why}"))
 }
 
 pub fn package() -> Value {

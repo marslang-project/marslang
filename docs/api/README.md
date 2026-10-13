@@ -24,6 +24,12 @@ notes elsewhere under `docs/` remain local.
 - [std.regex](std-regex.md): regular expressions: checking, finding, replacing, and splitting by pattern.
 - [std.format](std-format.md): decimal places, thousands, percentages, aligned columns, and tables.
 - [std.testing](std-testing.md): assertions, and `marslang test`, which runs every `test_` function.
+- [std.bigint](std-bigint.md): integers of any size, the `bigint` kind, and gcd, factorial, and bases.
+- [std.encoding](std-encoding.md): base64, hex, URL encoding, query strings, and bytes.
+- [std.hash](std-hash.md): SHA-256, SHA-512, SHA-1, MD5, and CRC-32 of text and files, and HMAC.
+- [std.http](std-http.md): fetching pages, calling JSON APIs, and downloading files, over HTTPS.
+- [std.log](std-log.md): leveled logging with timestamps, to standard error or a file.
+- [std.terminal](std-terminal.md): colours and styles, the terminal's size, and progress bars.
 - [std.types](std-types.md): a value's kind, family checks.
 - [std.memory](std-memory.md): addresses, object identity, and the cycle collector.
 - [std.file](std-file.md): reading, writing, listing, copying, moving, and removing files and directories.

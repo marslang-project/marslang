@@ -39,8 +39,9 @@ hmac = "0.13.0"
 crc32fast = "1.5.2"
 # std.http: HTTP(S) over rustls with ring (not aws-lc-rs, which needs cmake) and built-in root certificates; SOCKS proxies too.
 ureq = { version = "3.4.2", default-features = false, features = ["rustls", "socks-proxy"] }
-# bigint: whole numbers of any size, and their arithmetic, in pure Rust.
-num-bigint = "0.5.1"
+# bigint: whole numbers of any size, and their arithmetic, in pure Rust. The
+# long-proven 0.4 line: 0.5 is months old and has just fixed its new division.
+num-bigint = "0.4.6"
 # bigint: num-bigint's conversions to and from ints and floats, and its zero, one, and sign.
 num-traits = "0.2.19"
 # bigint: num-bigint's division with remainder, and whether a number is odd.
@@ -59,3 +60,9 @@ terminal_size = "0.4.3"
 # musl's own allocator made the interpreter about 55% slower; mimalloc restores
 # the speed of a glibc build. Other builds keep the system allocator.
 mimalloc = { version = "0.1.52", default-features = false }
+
+[profile.release]
+# Release binaries without their symbol tables: about 30% smaller (11.4 MB to
+# 8.1 MB on Windows). A panic still prints its message; only a Rust backtrace
+# would lose function names, and users never see one.
+strip = true
