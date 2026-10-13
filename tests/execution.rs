@@ -524,7 +524,7 @@ fn bundled_math_imports_are_isolated_aliased_and_deduplicated() {
     "#, "23499");
     runtime_error("takepkg std.math;func m{math.min=1;}", "TypeError:");
     assert!(marslang::compile("takepkg std.math = *;").unwrap_err().contains("wildcard"));
-    assert!(marslang::compile("takepkg std.http;").unwrap_err().contains("not implemented"));
+    assert!(marslang::compile("takepkg std.no_such_package;").unwrap_err().contains("not implemented"));
     assert!(marslang::compile("takepkg std.math = bad-name;").unwrap_err().contains("alias"));
     assert!(marslang::compile("takepkg std.math;math=1;").unwrap_err().contains("cannot reassign"));
 }

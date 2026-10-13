@@ -1,0 +1,207 @@
+// std.http: an HTTP(S) client: fetching pages, calling JSON APIs, and
+// downloading files.
+//
+// The network is native (std/rs/http.rs), by the ureq crate over rustls:
+// connecting, through a proxy from the environment when one applies, TLS,
+// redirects, the time and size limits, and streaming a download to a file.
+// The rest is Marslang, below: Response, the error families, JSON, and which
+// statuses are errors. Each native call returns [true, raw response] or
+// [false, kind, message]; _response turns a failure into the family that kind
+// names, because a native package can raise only built-in errors.
+takepkg rs.http = native;
+takepkg rs.json = json_native;
+takepkg std.Decorator;
+takepkg std.file;
+takepkg std.json;
+
+@Decorator.docstring("""
+    A request that failed before an answer arrived: the host was not found,
+    the connection was refused or dropped, TLS failed, the time limit ran
+    out, there were too many redirects, or the body was too large. The
+    message names the method and the URL, says why in plain words, and names
+    the proxy when one was used:
+
+        GET http://localhost:9/: the connection was refused: nothing is listening at that address and port
+
+    handle(http.HttpError e) also catches UrlError and StatusError.
+""")
+family HttpError(Error){}
+
+@Decorator.docstring("""
+    The URL is not one std.http can fetch: not http:// or https://, or not a
+    valid URL. A space or other character URLs cannot hold must be
+    percent-encoded first: %20 for a space.
+""")
+family UrlError(HttpError){}
+
+@Decorator.docstring("""
+    The server answered, but with a status outside 200 to 299. Raised only by
+    get_json and download; get, post, post_json, and request return the
+    Response whatever its status, so check ok.
+
+        run{ data = http.get_json(url); }
+        handle(http.StatusError e){ out(e.status, e.response.text); }
+
+    status is the status, such as 404, and response the whole Response.
+""")
+family StatusError(HttpError){}
+
+@Decorator.docstring("""
+    The server's answer to a request.
+
+        r = http.get("https://example.com/");
+        if (r.ok){ out(r.text.len(), r.header("Content-Type")); }
+
+    status is the status as an int, such as 200 or 404, and ok whether it is
+    from 200 to 299. text is the body as a string; bytes that are not UTF-8
+    become U+FFFD. headers maps each header name, in lower case, to its
+    value; a header sent more than once has its values joined by ", ". url
+    is the URL that answered, after any redirects.
+""")
+family Response{
+    @Decorator.docstring("Made by the functions of std.http from the answer; not called directly.")
+    func init(array raw){
+        me.status = raw[0];
+        me.ok = raw[0] >= 200 and raw[0] < 300;
+        me.text = raw[1];
+        me.headers = raw[2];
+        me.url = raw[3];
+    }
+
+    @Decorator.docstring("""
+        The body parsed as JSON, as json.parse does. Text that is not JSON
+        raises SyntaxError naming the URL.
+    """)
+    func json() => json_native.parse_from(me.text, me.url);
+
+    @Decorator.docstring("""
+        The value of the header named name, in any case, or null when the
+        answer has none: r.header("content-type") and r.header("Content-Type")
+        are the same.
+    """)
+    func header(string name) => me.headers.get(name.lower());
+}
+
+@Decorator.private
+func _response(array result){
+    if (result[0]){ ret Response(result[1]); }
+    kind = result[1];
+    message = result[2];
+    if (kind == "Url"){ err(UrlError, message); }
+    if (kind == "NotFound"){ err(file.NotFoundError, message); }
+    if (kind == "Permission"){ err(file.PermissionError, message); }
+    if (kind == "IsDirectory"){ err(file.IsDirectoryError, message); }
+    if (kind == "File"){ err(file.FileError, message); }
+    err(HttpError, message);
+}
+
+// A StatusError carrying the status and the Response as fields: err makes the
+// error, and the handler adds them before raising it on.
+@Decorator.private
+func _status_error(string method, Response r){
+    reason = native.reason(r.status);
+    said = string(r.status);
+    if (reason != ""){ said = said + " " + reason; }
+    run{
+        err(StatusError, method + " " + r.url + ": the server answered " + said);
+    } handle(StatusError e){
+        e.status = r.status;
+        e.response = r;
+        err(e);
+    }
+}
+
+// ----- requests -----
+
+@Decorator.docstring("""
+    Fetch a URL with GET, returning the Response.
+
+        r = http.get("https://example.com/");
+        out(r.status, r.ok);   // 200 true
+
+    A 404 or 500 is a Response like any other: check ok. Failing to get an
+    answer raises HttpError; a URL that is not http:// or https:// raises
+    UrlError.
+""")
+func get(string url) => _response(native.request("GET", url, map(), null));
+
+@Decorator.docstring("""
+    Send text with POST, as Content-Type text/plain; charset=utf-8,
+    returning the Response.
+
+        r = http.post("https://example.com/notes", "remember the milk");
+""")
+func post(string url, string text) => _response(native.request("POST", url, map().set("Content-Type", "text/plain; charset=utf-8"), text));
+
+@Decorator.docstring("""
+    Send a value as JSON with POST, written by json.stringify, as
+    Content-Type application/json, returning the Response.
+
+        r = http.post_json("https://example.com/api/users", map().set("name", "Ada"));
+        if (r.ok){ out(r.json().get("id")); }
+
+    A value JSON cannot hold raises TypeError or RangeError, as json.stringify does.
+""")
+func post_json(string url, any value) => _response(native.request("POST", url, map().set("Content-Type", "application/json"), json.stringify(value)));
+
+@Decorator.docstring("""
+    Send any request: method is a string such as "PUT" or "DELETE", headers a
+    map from header names to values (strings), and body a string or null for
+    none. Returns the Response.
+
+        headers = map().set("Authorization", "Bearer " + token);
+        r = http.request("DELETE", "https://example.com/api/notes/7", headers, null);
+
+    A header name or method that is not valid raises SyntaxError. Content-Type
+    is sent only when headers has it.
+""")
+func request(string method, string url, map headers, any body) => _response(native.request(method, url, headers, body));
+
+@Decorator.docstring("""
+    Fetch a URL with GET and parse its body as JSON.
+
+        release = http.get_json("https://api.github.com/repos/marslang-project/marslang/releases/latest");
+        out(release.get("tag_name"));
+
+    A status outside 200 to 299 raises StatusError, with the status and the
+    Response as fields; a body that is not JSON raises SyntaxError naming the
+    URL. Sends Accept: application/json.
+""")
+func get_json(string url){
+    r = _response(native.request("GET", url, map().set("Accept", "application/json"), null));
+    if (not r.ok){ _status_error("GET", r); }
+    ret r.json();
+}
+
+@Decorator.docstring("""
+    Save the body of a GET to the file at path, streamed, so a file of any
+    size takes little memory. Returns the Response, whose text is empty.
+
+        http.download("https://example.com/data.csv", "data.csv");
+
+    All or nothing: the body goes to a temporary file beside path, which
+    replaces path only once the whole body has arrived, so a failed download
+    leaves no partial file and an existing file as it was. A status outside
+    200 to 299 raises StatusError and writes nothing, since a saved error page
+    is rarely wanted. A directory that does not exist raises file.NotFoundError.
+""")
+func download(string url, string path){
+    r = _response(native.download(url, path));
+    if (not r.ok){ _status_error("GET", r); }
+    ret r;
+}
+
+// ----- settings -----
+
+@Decorator.docstring("""
+    Limit every request after this one to seconds, an int or a float: the
+    whole request, from connecting to the last byte of the body, must finish
+    within it or HttpError is raised. The default is 30 seconds.
+
+        http.set_timeout(5);
+
+    For download the limit covers each step up to the start of the answer,
+    not the body, which can take as long as it needs. A number that is not
+    positive raises RangeError. The setting lasts until the program ends.
+""")
+func set_timeout([int, float] seconds){ native.set_timeout(seconds); }

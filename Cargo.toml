@@ -37,6 +37,8 @@ md-5 = "0.11.0"
 hmac = "0.13.0"
 # std.hash: CRC-32 checksums, in pure Rust, fast enough for large files.
 crc32fast = "1.5.2"
+# std.http: HTTP(S) over rustls with ring (not aws-lc-rs, which needs cmake) and built-in root certificates; SOCKS proxies too.
+ureq = { version = "3.4.2", default-features = false, features = ["rustls", "socks-proxy"] }
 
 [target.'cfg(not(windows))'.dependencies]
 # Elsewhere jiff reads the system time zone itself (TZ, /etc/localtime).
