@@ -46,6 +46,8 @@ while [ $# -gt 0 ]; do
 done
 
 step() { printf '==> %s\n' "$1"; }
+# Whether $1 is a release tag: rs-X.Y.Z.
+is_release_tag() { printf '%s' "$1" | grep -Eq '^rs-[0-9]+\.[0-9]+\.[0-9]+$'; }
 # HTTPS only, redirects included; file:// is allowed for a local mirror.
 fetch() { curl --proto '=https,file' --proto-redir '=https' -fsSL "$@"; }
 die() { printf 'error: %s\n' "$1" >&2; exit 1; }
@@ -76,10 +78,19 @@ esac
 
 if [ "$version" = latest ]; then
     step "Looking up the latest release"
-    version=$(fetch "https://api.github.com/repos/$repo/releases/latest" 2>/dev/null |
-        sed -n 's/.*"tag_name"[ ]*:[ ]*"\([^"]*\)".*/\1/p' | head -n 1) ||
-        die "could not read the latest release of $repo; pass --version rs-X.Y.Z, or check that the repository is public"
-    [ -n "$version" ] || die "could not read the latest release of $repo; pass --version rs-X.Y.Z"
+    # github.com/OWNER/REPO/releases/latest redirects to .../releases/tag/TAG,
+    # so the tag is the last part of where it ends up. Unlike api.github.com,
+    # it has no limit of 60 lookups an hour per address, which networks that
+    # many people share (offices, VPNs, CI) run into; the API is the fallback.
+    landed=$(fetch -I -o /dev/null -w '%{url_effective}' "https://github.com/$repo/releases/latest" 2>/dev/null) || landed=""
+    version=${landed##*/}
+    if ! is_release_tag "$version"; then
+        version=$(fetch "https://api.github.com/repos/$repo/releases/latest" 2>/dev/null |
+            sed -n 's/.*"tag_name"[ ]*:[ ]*"\([^"]*\)".*/\1/p' | head -n 1) || version=""
+    fi
+    # The tag goes into URLs and file names, so only a well-formed one is used.
+    is_release_tag "$version" ||
+        die "could not find the latest release of $repo; pass --version rs-X.Y.Z, or check that the repository is public"
 fi
 
 # A mirror or a local copy can be used instead of the GitHub release.

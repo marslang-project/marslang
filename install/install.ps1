@@ -52,11 +52,32 @@ $architecture = switch ($env:PROCESSOR_ARCHITECTURE) {
 
 if ($Version -eq "latest") {
     Step "Looking up the latest release"
+    $Version = ""
+    $problem = ""
+    # github.com/OWNER/REPO/releases/latest redirects to .../releases/tag/TAG,
+    # so the tag is the last part of where it ends up. Unlike api.github.com,
+    # it has no limit of 60 lookups an hour per address, which networks that
+    # many people share (offices, VPNs, CI) run into; the API is the fallback.
     try {
-        $release = Invoke-RestMethod "https://api.github.com/repos/$repo/releases/latest" -Headers @{ "User-Agent" = "marslang-installer" }
-        $Version = $release.tag_name
+        $request = [Net.WebRequest]::Create("https://github.com/$repo/releases/latest")
+        $request.Method = "HEAD"
+        $request.UserAgent = "marslang-installer"
+        $response = $request.GetResponse()
+        try { $Version = $response.ResponseUri.AbsolutePath.Split("/")[-1] } finally { $response.Close() }
     } catch {
-        throw "could not read the latest release of $repo ($($_.Exception.Message)). Pass -Version rs-X.Y.Z, or check that the repository is public."
+        $problem = $_.Exception.Message
+    }
+    if ($Version -notmatch '^rs-\d+\.\d+\.\d+$') {
+        try {
+            $release = Invoke-RestMethod "https://api.github.com/repos/$repo/releases/latest" -Headers @{ "User-Agent" = "marslang-installer" }
+            $Version = [string] $release.tag_name
+        } catch {
+            $problem = $_.Exception.Message
+        }
+    }
+    # The tag goes into URLs and file names, so only a well-formed one is used.
+    if ($Version -notmatch '^rs-\d+\.\d+\.\d+$') {
+        throw "could not find the latest release of $repo ($problem). Pass -Version rs-X.Y.Z, or check that the repository is public."
     }
 }
 
