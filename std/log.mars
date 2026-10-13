@@ -1,0 +1,184 @@
+// std.log: leveled logging, to standard error or to a file.
+//
+// Written in Marslang, except for one native call: writing a line to standard
+// error (std/rs/log.rs), which Marslang cannot do. Levels, timestamps, the
+// choice of destination, and the Logger family are all here. Lines go to
+// standard error so they never mix with a program's own output: a program run
+// as `marslang prog.mars > out.txt` keeps its logs on the screen.
+takepkg rs.log = native;
+takepkg std.Decorator;
+takepkg std.file;
+takepkg std.time;
+takepkg std.types;
+
+// The rank of each level name: a message is written when its rank is at least
+// the current level's. "off" is above every level, so it writes nothing.
+_ranks = map().set("debug", 0).set("info", 1).set("warn", 2).set("error", 3).set("off", 4);
+
+// The label of each level, padded to five characters so the lines line up.
+_labels = map().set("debug", "DEBUG").set("info", "INFO ").set("warn", "WARN ").set("error", "ERROR");
+
+// The shared settings every log and Logger writes with.
+family _Settings{
+    func init(){
+        me._level = "info";
+        me._path = null;
+    }
+    func set_level(string name){ me._level = name; }
+    func set_path(any path){ me._path = path; }
+}
+
+_shared = _Settings();
+
+// The level name, checked. Raises RangeError naming the choices otherwise.
+@Decorator.private
+func _checked(string who, any name){
+    if (types.kind(name) == "string" and _ranks.has(name)){ ret name; }
+    err(RangeError, who + " needs \"debug\", \"info\", \"warn\", \"error\", or \"off\", got " + _shown(name));
+}
+
+// A value as it reads in an error message: a string in quotes, anything else as it prints.
+@Decorator.private
+func _shown(any value){
+    if (types.kind(value) == "string"){ ret "\"" + value + "\""; }
+    ret string(value);
+}
+
+// One line, written when the level is at or above the threshold. tag is "" or
+// the "[name] " a Logger puts in front of its message.
+@Decorator.private
+func _emit(string level, string threshold, string tag, any message){
+    if (_ranks.get(level) < _ranks.get(threshold)){ ret null; }
+    stamp = time.now_datetime().format("%Y-%m-%d %H:%M:%S");
+    line = stamp + " " + _labels.get(level) + " " + tag + string(message);
+    if (_shared._path == null){
+        native.write(line);
+    } else {
+        file.append(_shared._path, line + "\n");
+    }
+    ret null;
+}
+
+@Decorator.docstring("""
+    Write message at the debug level, which is hidden at the default "info" level.
+
+        log.debug("cache miss for " + key);
+""")
+func debug(any message) => _emit("debug", _shared._level, "", message);
+
+@Decorator.docstring("""
+    Write message at the info level, the default, for normal progress.
+
+        log.info("loaded 42 rows");
+""")
+func info(any message) => _emit("info", _shared._level, "", message);
+
+@Decorator.docstring("""
+    Write message at the warn level, for something odd that did not stop the program.
+
+        log.warn("disk is nearly full");
+""")
+func warn(any message) => _emit("warn", _shared._level, "", message);
+
+@Decorator.docstring("""
+    Write message at the error level, for a failure.
+
+        log.error("could not reach the server");
+""")
+func error(any message) => _emit("error", _shared._level, "", message);
+
+@Decorator.docstring("""
+    Set the lowest level written: "debug", "info", "warn", "error", or "off"
+    to write nothing. The default is "info". Returns null.
+
+        log.set_level("debug");    // show debug lines too
+        log.set_level("off");      // silence the log
+
+    Any other name raises RangeError.
+""")
+func set_level(any name){
+    _shared.set_level(_checked("log.set_level", name));
+    ret null;
+}
+
+@Decorator.docstring("""
+    The current level name: "debug", "info", "warn", "error", or "off".
+
+        out(log.level());    // info
+""")
+func level() => _shared._level;
+
+@Decorator.docstring("""
+    Append every line to the file at path, instead of standard error, creating
+    the file if needed. Returns null.
+
+        log.to_file("run.log");
+        log.info("started");    // written to run.log, not the screen
+
+    The file is opened for each line, so a failure to write it raises FileError
+    from the log call itself.
+""")
+func to_file(string path){
+    _shared.set_path(path);
+    ret null;
+}
+
+@Decorator.docstring("""
+    Write lines to standard error again, after to_file. Returns null.
+
+        log.to_screen();
+""")
+func to_screen(){
+    _shared.set_path(null);
+    ret null;
+}
+
+@Decorator.docstring("""
+    A log with a name of its own. Its lines carry [name] after the level, so
+    lines from different parts of a program can be told apart:
+
+        db = log.Logger("db");
+        db.warn("slow query");    // 2026-10-13 14:05:09 WARN  [db] slow query
+
+    A new Logger follows the shared level, set by log.set_level, until its own
+    set_level is called. It writes wherever the shared log writes.
+""")
+family Logger{
+    @Decorator.docstring("A logger named name, which follows the shared level until its own set_level is called.")
+    func init(any name){
+        me._name = "[" + string(name) + "] ";
+        me._own = null;
+    }
+
+    @Decorator.docstring("Write message at the debug level, with this logger's name.")
+    func debug(any message) => _emit("debug", me._threshold(), me._name, message);
+
+    @Decorator.docstring("Write message at the info level, with this logger's name.")
+    func info(any message) => _emit("info", me._threshold(), me._name, message);
+
+    @Decorator.docstring("Write message at the warn level, with this logger's name.")
+    func warn(any message) => _emit("warn", me._threshold(), me._name, message);
+
+    @Decorator.docstring("Write message at the error level, with this logger's name.")
+    func error(any message) => _emit("error", me._threshold(), me._name, message);
+
+    @Decorator.docstring("""
+        Set this logger's own level, "debug", "info", "warn", "error", or "off",
+        which overrides the shared one. Returns null. Any other name raises RangeError.
+
+            db.set_level("debug");
+    """)
+    func set_level(any name){
+        me._own = _checked("Logger.set_level", name);
+        ret null;
+    }
+
+    @Decorator.docstring("This logger's level name: its own if set, else the shared one.")
+    func level() => me._threshold();
+
+    @Decorator.private
+    func _threshold(){
+        if (me._own == null){ ret _shared._level; }
+        ret me._own;
+    }
+}
