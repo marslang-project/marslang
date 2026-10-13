@@ -2534,3 +2534,54 @@ fn std_regex_mistakes_are_explained() {
         runtime_error(&format!("takepkg std.regex;\nfunc m{{ {source} }}"), message);
     }
 }
+
+fn report(source: &str) -> String {
+    let compiled = marslang::compile(source).expect("compile failed");
+    let (_, result) = marslang::run_captured(compiled, "");
+    result.expect_err("expected a runtime error").report()
+}
+
+#[test]
+fn runtime_errors_say_which_line_and_calls() {
+    assert_eq!(report("func half(int n){\n    if (n > 0){\n        ret n / 0;\n    }\n    ret n;\n}\nfamily Box{\n    func init(){ me.size = 4; }\n    func open() => half(me.size);\n}\nfunc m{\n    out(\"start\");\n    Box().open();\n}\n"),
+        "RangeError: division by zero\n    at half (line 3)\n    at Box.open (line 9)\n    at m (line 13)");
+    // A condition fails on its own line, after the body ran without error.
+    assert_eq!(report("func m{\n    items = arr(1);\n    i = 0;\n    while (items[i] > 0){\n        i++;\n    }\n}"),
+        "OutOfBoundsError: index 1 is out of range for an array of 1 elements\n    at m (line 4)");
+    // A wrong argument is the caller's mistake, so the call is not a frame.
+    assert_eq!(report("func m{\n    double = func(int x) => x * 2;\n    out(double(\"a\"));\n}"),
+        "TypeError: expected int\n    at m (line 3)");
+    assert_eq!(report("func m{\n    f = func(int x) => x / 0;\n    f(1);\n}"),
+        "RangeError: division by zero\n    at an anonymous function (line 2)\n    at m (line 3)");
+    assert_eq!(report("x = 1;\ny = x / 0;\nfunc m{}"), "RangeError: division by zero\n    at top level (line 2)");
+    // Calls inside the standard library are left out; the program's own call is the one to fix.
+    assert_eq!(report("takepkg std.random;\nfunc m{\n    random.int_between(6, 1);\n}"),
+        "RangeError: random.int_between needs low <= high, got 6 and 1\n    at m (line 3)");
+}
+
+#[test]
+fn runtime_error_traces_stay_short_in_recursion() {
+    assert_eq!(report("func f(int n){\n    if (n == 0){ ret 1 / 0; }\n    ret f(n - 1);\n}\nfunc m{\n    f(40);\n}"),
+        "RangeError: division by zero\n    at f (line 2)\n    at f (line 3), 40 calls\n    at m (line 6)");
+    let deep = report("func g(int n){ ret h(n); }\nfunc h(int n){ ret g(n); }\nfunc m{\n    g(1);\n}");
+    assert!(deep.starts_with("RangeError: maximum call depth exceeded\n    at g (line 1)\n    at h (line 2)\n"), "{deep}");
+    assert!(deep.ends_with(" more calls\n    at m (line 4)"), "{deep}");
+    assert_eq!(deep.lines().count(), 15, "{deep}");
+    // A handled error leaves nothing behind.
+    assert_eq!(report("func m{\n    run{ x = 1 / 0; } handle(RangeError e){ out(e.message); }\n    err(TypeError, \"later\");\n}"),
+        "TypeError: later\n    at m (line 3)");
+}
+
+#[test]
+fn runtime_errors_name_the_files_of_packages() {
+    let dir = package_dir("trace-files", &[
+        ("dice.mars", "func roll(int sides){\n    ret sides / 0;\n}\n"),
+        ("main.mars", "takepkg dice;\n\nfunc m{\n    dice.roll(6);\n}\n"),
+    ]);
+    let main = dir.join("main.mars");
+    let compiled = marslang::compile_file(&main).expect("compile failed");
+    let (_, result) = marslang::run_captured_with_args(compiled, "", "main.mars".into(), Vec::new());
+    let report = result.unwrap_err().report();
+    let dice = dir.join("dice.mars").display().to_string();
+    assert_eq!(report, format!("RangeError: division by zero\n    at roll ({dice}:2)\n    at m (main.mars:4)"));
+}

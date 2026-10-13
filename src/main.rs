@@ -80,7 +80,7 @@ fn run_cmd(input: &Path, program_args: &[String]) -> Result<(), String> {
     match marslang::run_with_args(compiled, input.display().to_string(), program_args.to_vec()) {
         // cli.exit(code): output is already flushed, so stop with that status.
         Err(error) if error.exit.is_some() => std::process::exit(error.exit.unwrap()),
-        result => result.map_err(|e| e.to_string()),
+        result => result.map_err(|e| e.report()),
     }
 }
 
@@ -142,7 +142,7 @@ fn repl_cmd() -> Result<(), String> {
                 source = candidate;
                 shown = output.len();
             }
-            Err(e) => eprintln!("error: {e}"),
+            Err(e) => eprintln!("error: {}", e.report()),
         }
     }
 

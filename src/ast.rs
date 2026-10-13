@@ -29,6 +29,10 @@ pub struct VarDecl {
     pub name: String,
     pub ty: Option<String>,
     pub value: Expr,
+    /// Source line, for a declaration at the top level of a file, where it is
+    /// an item rather than a statement; 0 inside a block, where the statement
+    /// carries the line.
+    pub line: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,8 +106,15 @@ pub struct FamilyDecl {
     pub end_line: usize,
 }
 
+/// A statement and the source line it starts on, which runtime errors report.
 #[derive(Debug, Clone)]
-pub enum Stmt {
+pub struct Stmt {
+    pub kind: StmtKind,
+    pub line: usize,
+}
+
+#[derive(Debug, Clone)]
+pub enum StmtKind {
     Var(VarDecl),
     Assign {
         target: Expr,

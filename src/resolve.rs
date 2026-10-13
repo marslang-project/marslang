@@ -3,10 +3,16 @@ use crate::ast::*;
 
 #[derive(Clone)]
 struct Binding { name: String, fixed: bool, ty: Option<String>, hot: Option<Expr> }
-struct Resolver { scopes: Vec<HashMap<String, Binding>>, next: usize }
+struct Resolver {
+    scopes: Vec<HashMap<String, Binding>>,
+    next: usize,
+    /// The line of the statement being resolved, which an anonymous function
+    /// written in it takes as its own, for runtime errors.
+    line: usize,
+}
 
 pub fn resolve(program: &mut Program) -> Result<(), String> {
-    let mut resolver = Resolver { scopes: vec![HashMap::new()], next: 0 };
+    let mut resolver = Resolver { scopes: vec![HashMap::new()], next: 0, line: 0 };
     for item in &program.items {
         let name = match item { Item::Func(f) => Some(&f.name), Item::Family(f) => Some(&f.name), _ => None };
         if let Some(name) = name {
@@ -17,8 +23,8 @@ pub fn resolve(program: &mut Program) -> Result<(), String> {
     for item in &mut program.items {
         match item {
             Item::Var(v) => {
-                let mut stmt = Stmt::Var(v.clone()); resolver.stmt(&mut stmt)?;
-                *item = match stmt { Stmt::Var(v) => Item::Var(v), other => Item::Stmt(other) };
+                let mut stmt = Stmt { kind: StmtKind::Var(v.clone()), line: v.line }; resolver.stmt(&mut stmt)?;
+                *item = match stmt.kind { StmtKind::Var(v) => Item::Var(v), kind => Item::Stmt(Stmt { kind, line: stmt.line }) };
             }
             Item::Stmt(s) => resolver.stmt(s)?,
             Item::Import(import) => {
@@ -74,6 +80,15 @@ impl Resolver {
         self.scopes.last_mut().unwrap().insert(name.into(), binding.clone()); Ok(binding)
     }
     fn function(&mut self, f: &mut FuncDecl) -> Result<(), String> {
+        // An anonymous function in a body that is one expression is on the
+        // function's own line; afterwards the enclosing statement's line holds.
+        let outer = std::mem::replace(&mut self.line, f.line);
+        let line = f.line;
+        let result = self.function_body(f).map_err(|message| crate::parser::at_line(line, message));
+        self.line = outer;
+        result
+    }
+    fn function_body(&mut self, f: &mut FuncDecl) -> Result<(), String> {
         self.scopes.push(HashMap::new());
         for param in &mut f.params {
             param.ty.retain(|c| !c.is_whitespace());
@@ -90,14 +105,21 @@ impl Resolver {
         for stmt in body { self.stmt(stmt)?; }
         self.scopes.pop(); Ok(())
     }
+    /// Errors say which line they are on, as syntax errors do.
     fn stmt(&mut self, stmt: &mut Stmt) -> Result<(), String> {
-        match stmt {
-            Stmt::Func { name, decl } => {
+        let line = stmt.line;
+        self.statement(stmt).map_err(|message| crate::parser::at_line(line, message))
+    }
+    fn statement(&mut self, stmt: &mut Stmt) -> Result<(), String> {
+        let line = stmt.line;
+        self.line = line;
+        match &mut stmt.kind {
+            StmtKind::Func { name, decl } => {
                 // Bound before its body is resolved, so it can call itself.
                 *name = self.bind(name, true, None, None)?.name;
                 self.function(std::sync::Arc::make_mut(decl))?;
             }
-            Stmt::Var(v) => {
+            StmtKind::Var(v) => {
                 if let Some(ty) = &v.ty {
                     if ty.split(|c: char| !c.is_alphanumeric()).any(|word| word == "Function" || word == "Family") {
                         return Err(format!("'{}': Function and Family are parameter types, as in func apply(Function f)", v.name));
@@ -105,7 +127,7 @@ impl Resolver {
                 }
                 let explicit = v.is_fixed || v.temp != TempKind::Default || v.ty.is_some();
                 if !explicit && self.find(&v.name).is_some() {
-                    let mut replacement = Stmt::Assign { target: Expr::Ident(v.name.clone()), value: v.value.clone() };
+                    let mut replacement = Stmt { kind: StmtKind::Assign { target: Expr::Ident(v.name.clone()), value: v.value.clone() }, line };
                     self.stmt(&mut replacement)?; *stmt = replacement; return Ok(());
                 }
                 let inherited = match &v.value { Expr::Ident(n) => self.find(n).map(|b| b.fixed).unwrap_or(false), _ => false };
@@ -120,7 +142,7 @@ impl Resolver {
                 v.value = typed(v.value.clone(), &v.ty);
                 if v.is_fixed { v.value = Expr::Freeze(Box::new(v.value.clone())); }
             }
-            Stmt::Assign { target, value } => {
+            StmtKind::Assign { target, value } => {
                 self.expr(value)?;
                 match target {
                     Expr::Ident(name) => {
@@ -134,30 +156,30 @@ impl Resolver {
                     _ => return Err("invalid assignment target".into()),
                 }
             }
-            Stmt::Ret(e) | Stmt::Expr(e) => self.expr(e)?,
-            Stmt::If { cond, then_block, elif_blocks, else_block } => {
+            StmtKind::Ret(e) | StmtKind::Expr(e) => self.expr(e)?,
+            StmtKind::If { cond, then_block, elif_blocks, else_block } => {
                 self.expr(cond)?; self.block(then_block)?;
                 for (e, body) in elif_blocks { self.expr(e)?; self.block(body)?; }
                 if let Some(body) = else_block { self.block(body)?; }
             }
-            Stmt::Repeat { times, body } => { self.expr(times)?; self.block(body)?; }
-            Stmt::While { cond, body } => { self.expr(cond)?; self.block(body)?; }
-            Stmt::ForEach { name, iterable, body } => {
+            StmtKind::Repeat { times, body } => { self.expr(times)?; self.block(body)?; }
+            StmtKind::While { cond, body } => { self.expr(cond)?; self.block(body)?; }
+            StmtKind::ForEach { name, iterable, body } => {
                 self.expr(iterable)?; self.scopes.push(HashMap::new());
                 *name = self.bind(name, false, None, None)?.name;
                 for s in body { self.stmt(s)?; } self.scopes.pop();
             }
-            Stmt::For { init, cond, step, body } => {
+            StmtKind::For { init, cond, step, body } => {
                 self.scopes.push(HashMap::new());
                 for s in init { self.stmt(s)?; }
                 self.expr(cond)?;
                 for s in step.iter_mut() {
                     self.stmt(s)?;
-                    if matches!(s, Stmt::Var(_)) { return Err("for change cannot declare a new binding".into()); }
+                    if matches!(s.kind, StmtKind::Var(_)) { return Err("for change cannot declare a new binding".into()); }
                 }
                 self.block(body)?; self.scopes.pop();
             }
-            Stmt::Run { body, handlers, then_block } => {
+            StmtKind::Run { body, handlers, then_block } => {
                 self.block(body)?;
                 for handler in handlers {
                     self.scopes.push(HashMap::new());
@@ -199,7 +221,11 @@ impl Resolver {
             Expr::Member { object, .. } => self.expr(object)?,
             Expr::Index { object, index } => { self.expr(object)?; self.expr(index)?; }
             // Resolved where it stands, so it sees the variables around it.
-            Expr::Lambda(decl) => self.function(std::sync::Arc::make_mut(decl))?,
+            Expr::Lambda(decl) => {
+                let decl = std::sync::Arc::make_mut(decl);
+                if decl.line == 0 { (decl.line, decl.end_line) = (self.line, self.line); }
+                self.function(decl)?;
+            }
             _ => {}
         }
         Ok(())

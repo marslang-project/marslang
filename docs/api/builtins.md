@@ -86,21 +86,35 @@ as `Error.TypeError`, `Error.RangeError`, and so on.
 | `Error` | Mutation through a fixed alias and other runtime contract violations |
 
 `SyntaxError` is raised for invalid `longint(...)` strings. An error that no
-`handle` block catches ends the program with `error: <Family>: <message>` on standard
-error and exit status 1.
+`handle` block catches ends the program with exit status 1, printing
+`error: <Family>: <message>` on standard error and then where it happened: the
+line, and the calls that led there, innermost first.
+
+```text
+error: RangeError: random.int_between needs low <= high, got 6 and 1
+    at roll (dice.mars:4)
+    at Game.play (game.mars:7)
+    at m (game.mars:14)
+```
+
+Each `at` line names a function, or `Family.method`, and its `file:line`, which
+editors such as VS Code open with a click. `top level` is code outside any
+function, and `an anonymous function` one written as `func(int x) => ...`.
+Calls inside the standard library are left out: the line to look at is where
+your program called it. Recursion is shown once with its count, as in
+`at f (deep.mars:5), 40 calls`, and in a very deep stack only the first twelve
+calls and the outermost are printed.
 Calls nested deeper than 10,000 levels raise `RangeError: maximum call depth exceeded`.
 Calling a function, method, or built-in with the wrong number of arguments raises `TypeError`.
 
 Undefined variables, invalid syntax, and fixed-binding reassignment fail during
-compilation, before anything runs. Syntax errors and bad imports report the
-source line they are on:
+compilation, before anything runs, and say which line they are on:
 
 ```text
 error: line 9: expected expression, got End
+error: line 3: unknown name 'nope'
 error: line 2: package 'shapes.circle' not found: looked for ...
 ```
 
-Name resolution has no positions yet, so `error: unknown name 'nope'` says what
-is missing but not where. Editors can still place it: the
-[VS Code extension](https://github.com/marslang-project/vscode-marslang) marks
-the first use of the name it quotes.
+The [VS Code extension](https://github.com/marslang-project/vscode-marslang)
+underlines the line, or the name the message quotes on it.

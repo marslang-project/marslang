@@ -98,7 +98,9 @@ Words after the file are the program's arguments, read with
 imports export, with types and docstrings, as JSON for editors (`--stdin` reads
 the source from standard input).
 Syntax errors, unknown names, and fixed-binding reassignment are reported before
-anything runs. Runtime errors print `error: <Kind>: <message>` and exit with status 1.
+anything runs, with their line. Runtime errors print `error: <Kind>: <message>`
+and then where they happened, line by line through the calls that led there
+(`at area (shapes.mars:12)`), and exit with status 1.
 
 ## Current release coverage
 
@@ -123,7 +125,6 @@ Not yet:
 - no static type checker: annotations are checked as the program runs
 - no bytecode or native backend: programs run in a tree-walking interpreter
 - no `match`, hot functions, type aliases, or tagged variants
-- runtime errors do not report a source line yet; compile errors do
 - the parser works on normalized statement text; `marslang lex` uses a separate, simpler lexer
 
 ```mars

@@ -47,6 +47,10 @@ enum Contents {
 struct Unit {
     /// Package name, or `None` for the program itself.
     name: Option<String>,
+    /// The file, as runtime errors name it; `None` when it has none.
+    file: Option<String>,
+    /// A standard package, whose calls runtime errors leave out.
+    internal: bool,
     globals: RefCell<HashMap<String, Value>>,
     /// Imported packages by their source alias, for `alias.Family` annotations.
     imports: RefCell<HashMap<String, Value>>,
@@ -132,7 +136,8 @@ impl<'o> Interp<'o> {
             };
             self.packages.insert(package.key.clone(), value);
         }
-        let unit = self.load_unit(program, None)?;
+        let file = Some(crate::value::program_path()).filter(|path| !path.is_empty());
+        let unit = self.load_unit(program, None, file, false)?;
         self.run_top_level(program, unit)?;
         let entry = self.units[unit].functions.get("m").cloned();
         if let Some(entry) = entry { self.call_function(&entry, None, Vec::new(), None)?; }
@@ -140,7 +145,8 @@ impl<'o> Interp<'o> {
     }
 
     fn load_package(&mut self, package: &LoadedPackage, program: &Program) -> RResult<Value> {
-        let unit = self.load_unit(program, Some(package.name.clone()))?;
+        let file = package.file.as_ref().map(|path| path.display().to_string());
+        let unit = self.load_unit(program, Some(package.name.clone()), file, package.file.is_none())?;
         self.run_top_level(program, unit)?;
         let mut members = IndexMap::new();
         for (name, export) in &package.exports {
@@ -154,7 +160,7 @@ impl<'o> Interp<'o> {
         Ok(Value::package(package.name.clone(), members))
     }
 
-    fn load_unit(&mut self, program: &Program, name: Option<String>) -> RResult<usize> {
+    fn load_unit(&mut self, program: &Program, name: Option<String>, file: Option<String>, internal: bool) -> RResult<usize> {
         let index = self.units.len();
         let mut functions = HashMap::new();
         let mut decls = HashMap::new();
@@ -189,11 +195,24 @@ impl<'o> Interp<'o> {
         };
         let mut families = HashMap::new();
         for name in decls.keys() { build_family(name, &decls, &mut families, &outside, index, &mut Vec::new())?; }
-        self.units.push(Unit { name, globals: RefCell::new(HashMap::new()), imports: RefCell::new(HashMap::new()), functions, families });
+        self.units.push(Unit { name, file, internal, globals: RefCell::new(HashMap::new()), imports: RefCell::new(HashMap::new()), functions, families });
         Ok(index)
     }
 
+    /// A file's top-level statements, in order. An error from one leaves as a
+    /// call named "top level", or for a package "top level of NAME".
     fn run_top_level(&mut self, program: &Program, unit: usize) -> RResult<()> {
+        self.run_top_level_items(program, unit).map_err(|error| {
+            let unit = &self.units[unit];
+            let function = match &unit.name {
+                Some(name) => format!("top level of {name}"),
+                None => "top level".to_string(),
+            };
+            error.left_call((!unit.internal).then(|| (function, unit.file.clone())), 0)
+        })
+    }
+
+    fn run_top_level_items(&mut self, program: &Program, unit: usize) -> RResult<()> {
         let mut env = Env { unit, owner: None, locals: None, me: None };
         for item in &program.items {
             match item {
@@ -204,7 +223,10 @@ impl<'o> Interp<'o> {
                     self.units[unit].imports.borrow_mut().insert(display_name(&alias).to_string(), package.clone());
                     self.units[unit].globals.borrow_mut().insert(alias, package);
                 }
-                Item::Var(v) => { let value = self.eval(&v.value, &mut env)?; self.declare(&mut env, &v.name, value); }
+                Item::Var(v) => {
+                    let value = self.eval(&v.value, &mut env).map_err(|error| error.at_line(v.line))?;
+                    self.declare(&mut env, &v.name, value);
+                }
                 Item::Stmt(stmt) => match self.exec(stmt, &mut env)? {
                     Flow::Next => {}
                     _ => return err(ErrorKind::SyntaxError, "ret/break/continue outside of a function"),
@@ -265,14 +287,18 @@ impl<'o> Interp<'o> {
     }
 
     fn exec(&mut self, stmt: &Stmt, env: &mut Env) -> Exec {
+        self.exec_kind(&stmt.kind, env).map_err(|error| error.at_line(stmt.line))
+    }
+
+    fn exec_kind(&mut self, stmt: &StmtKind, env: &mut Env) -> Exec {
         // Statement boundaries are safe points: no container is borrowed here.
         if crate::gc::due() { crate::gc::collect(); }
         match stmt {
-            Stmt::Var(v) => {
+            StmtKind::Var(v) => {
                 let value = self.eval(&v.value, env)?;
                 self.declare(env, &v.name, value);
             }
-            Stmt::Assign { target, value } => match target {
+            StmtKind::Assign { target, value } => match target {
                 Expr::Ident(name) => {
                     let value = self.eval(value, env)?;
                     self.assign(env, name, value);
@@ -284,22 +310,22 @@ impl<'o> Interp<'o> {
                 }
                 _ => return type_err("invalid assignment target"),
             },
-            Stmt::Ret(e) => return Ok(Flow::Return(self.eval(e, env)?)),
-            Stmt::Expr(e) => { self.eval(e, env)?; }
-            Stmt::Break => return Ok(Flow::Break),
-            Stmt::Continue => return Ok(Flow::Continue),
-            Stmt::Func { name, decl } => {
+            StmtKind::Ret(e) => return Ok(Flow::Return(self.eval(e, env)?)),
+            StmtKind::Expr(e) => { self.eval(e, env)?; }
+            StmtKind::Break => return Ok(Flow::Break),
+            StmtKind::Continue => return Ok(Flow::Continue),
+            StmtKind::Func { name, decl } => {
                 let closure = self.closure(decl, env);
                 self.declare(env, name, closure);
             }
-            Stmt::If { cond, then_block, elif_blocks, else_block } => {
+            StmtKind::If { cond, then_block, elif_blocks, else_block } => {
                 if self.eval(cond, env)?.truth() { return self.exec_block(then_block, env); }
                 for (cond, body) in elif_blocks {
                     if self.eval(cond, env)?.truth() { return self.exec_block(body, env); }
                 }
                 if let Some(body) = else_block { return self.exec_block(body, env); }
             }
-            Stmt::Repeat { times, body } => {
+            StmtKind::Repeat { times, body } => {
                 let count = repeat_count(&self.eval(times, env)?)?;
                 for _ in 0..count {
                     match self.exec_block(body, env)? {
@@ -309,7 +335,7 @@ impl<'o> Interp<'o> {
                     }
                 }
             }
-            Stmt::While { cond, body } => {
+            StmtKind::While { cond, body } => {
                 while self.eval(cond, env)?.truth() {
                     match self.exec_block(body, env)? {
                         Flow::Break => break,
@@ -318,7 +344,7 @@ impl<'o> Interp<'o> {
                     }
                 }
             }
-            Stmt::ForEach { name, iterable, body } => {
+            StmtKind::ForEach { name, iterable, body } => {
                 let items = iterate(&self.eval(iterable, env)?)?;
                 for item in items {
                     self.declare(env, name, item);
@@ -329,7 +355,7 @@ impl<'o> Interp<'o> {
                     }
                 }
             }
-            Stmt::For { init, cond, step, body } => {
+            StmtKind::For { init, cond, step, body } => {
                 for s in init { self.exec(s, env)?; }
                 while self.eval(cond, env)?.truth() {
                     match self.exec_block(body, env)? {
@@ -340,7 +366,7 @@ impl<'o> Interp<'o> {
                     for s in step { self.exec(s, env)?; }
                 }
             }
-            Stmt::Run { body, handlers, then_block } => return self.exec_run(body, handlers, then_block.as_deref(), env),
+            StmtKind::Run { body, handlers, then_block } => return self.exec_run(body, handlers, then_block.as_deref(), env),
         }
         Ok(Flow::Next)
     }
@@ -604,7 +630,25 @@ impl<'o> Interp<'o> {
         };
         self.depth -= 1;
         self.caller = previous_caller;
-        result
+        result.map_err(|error| error.left_call(self.frame_name(function), decl.line))
+    }
+
+    /// How a runtime error names a call of `function`, with its file; `None`
+    /// inside the standard library.
+    fn frame_name(&self, function: &Function) -> Option<(String, Option<String>)> {
+        let unit = &self.units[function.package];
+        if unit.internal { return None; }
+        let decl = &function.decl;
+        let family = function.owner.as_ref().and_then(|owner| owner.upgrade());
+        let name = match family {
+            // A method, rather than a function made inside one.
+            Some(family) if family.method(&decl.name).is_some_and(|method| std::sync::Arc::ptr_eq(&method.decl, decl)) => {
+                format!("{}.{}", family.name, decl.name)
+            }
+            _ if decl.name == "anonymous" => "an anonymous function".to_string(),
+            _ => decl.name.clone(),
+        };
+        Some((name, unit.file.clone()))
     }
 
     fn construct(&mut self, family: &Rc<Family>, args: Vec<Value>) -> RResult<Value> {

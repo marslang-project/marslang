@@ -402,7 +402,37 @@ pub struct RuntimeError {
     /// Set by `std.cli.exit(code)`: not an error but a request to stop with
     /// that status. No handler catches it; `then` blocks still run.
     pub exit: Option<i32>,
+    /// Where it happened, gathered as it leaves statements and calls.
+    pub trace: Option<Box<Trace>>,
 }
+
+/// The lines and calls an error passed through, innermost first.
+#[derive(Clone, Debug, Default)]
+pub struct Trace {
+    /// The line of the innermost statement in the call the error is leaving,
+    /// until that call becomes a frame.
+    line: Option<usize>,
+    pub frames: Vec<TraceFrame>,
+    /// Frames left out between the first ones and `last`, in deep recursion.
+    pub hidden: usize,
+    pub last: Option<TraceFrame>,
+}
+
+/// One call an error left: `at area (shapes.mars:12)`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TraceFrame {
+    pub function: String,
+    /// The file as given on the command line or found by the package loader;
+    /// `None` for a program compiled from text.
+    pub file: Option<String>,
+    pub line: usize,
+    /// How many calls in a row this frame stands for, as in recursion.
+    pub calls: usize,
+}
+
+/// Frames kept from the innermost call outwards; beyond them only the
+/// outermost is kept, and the rest are counted.
+const TRACE_FRAMES: usize = 12;
 
 /// Stop the program with an exit status (`std.cli.exit`).
 pub fn exit_request(code: i32) -> RuntimeError {
@@ -430,6 +460,63 @@ pub fn program_args() -> Vec<String> {
 impl RuntimeError {
     pub fn new(kind: ErrorKind, message: impl Into<String>) -> Self {
         RuntimeError { kind, message: message.into(), ..Default::default() }
+    }
+
+    /// Leaving a statement on `line`: the innermost statement sets the line.
+    pub(crate) fn at_line(mut self, line: usize) -> Self {
+        if self.exit.is_none() {
+            let trace = self.trace.get_or_insert_with(Default::default);
+            if trace.line.is_none() { trace.line = Some(line); }
+        }
+        self
+    }
+
+    /// Leaving a call of `function`: it becomes a frame at the line its
+    /// innermost statement set, or `fallback`, the function's own line, for a
+    /// body that is one expression. Calls inside the standard library pass
+    /// `None` and are left out: the call that matters is the program's own.
+    pub(crate) fn left_call(mut self, frame: Option<(String, Option<String>)>, fallback: usize) -> Self {
+        if self.exit.is_some() { return self; }
+        let trace = self.trace.get_or_insert_with(Default::default);
+        let line = trace.line.take().unwrap_or(fallback);
+        if let Some((function, file)) = frame {
+            let frame = TraceFrame { function, file, line, calls: 1 };
+            let latest = trace.last.as_mut().or(trace.frames.last_mut());
+            if let Some(latest) = latest.filter(|latest| latest.function == frame.function && latest.file == frame.file && latest.line == frame.line) {
+                latest.calls += 1;
+            } else if trace.frames.len() < TRACE_FRAMES {
+                trace.frames.push(frame);
+            } else if trace.last.replace(frame).is_some() {
+                trace.hidden += 1;
+            }
+        }
+        self
+    }
+
+    /// The error and where it happened, for printing after `error: `:
+    ///
+    /// ```text
+    /// RangeError: random.int_between needs low <= high, got 6 and 1
+    ///     at roll (dice.mars:4)
+    ///     at m (game.mars:9)
+    /// ```
+    pub fn report(&self) -> String {
+        let mut report = self.to_string();
+        let Some(trace) = &self.trace else { return report };
+        let at = |frame: &TraceFrame| {
+            let place = match &frame.file {
+                Some(file) => format!("{file}:{}", frame.line),
+                None => format!("line {}", frame.line),
+            };
+            let calls = if frame.calls > 1 { format!(", {} calls", frame.calls) } else { String::new() };
+            format!("\n    at {} ({place}){calls}", frame.function)
+        };
+        for frame in &trace.frames { report.push_str(&at(frame)); }
+        if trace.hidden > 0 {
+            report.push_str(&format!("\n    ... {} more call{}", trace.hidden, if trace.hidden == 1 { "" } else { "s" }));
+        }
+        if let Some(last) = &trace.last { report.push_str(&at(last)); }
+        report
     }
 }
 

@@ -67,10 +67,12 @@ pub fn parse_program(input: &str) -> PResult<Program> {
             continue;
         }
         let (stmt, next) = parse_stmt_at(&lines, idx)?;
-        if let Stmt::Var(v) = stmt {
-            items.push(Item::Var(v));
-        } else {
-            items.push(Item::Stmt(stmt));
+        match stmt.kind {
+            StmtKind::Var(mut v) => {
+                v.line = stmt.line;
+                items.push(Item::Var(v));
+            }
+            kind => items.push(Item::Stmt(Stmt { kind, line: stmt.line })),
         }
         idx = next;
     }
@@ -95,18 +97,18 @@ fn validate_function_loops(function: &FuncDecl) -> PResult<()> {
 
 fn validate_loop_control(body: &[Stmt], depth: usize) -> PResult<()> {
     for stmt in body {
-        match stmt {
-            Stmt::Break | Stmt::Continue if depth == 0 => {
+        match &stmt.kind {
+            StmtKind::Break | StmtKind::Continue if depth == 0 => {
                 return Err("break/continue must be inside a loop".to_string());
             }
-            Stmt::Repeat { body, .. } | Stmt::While { body, .. } |
-            Stmt::ForEach { body, .. } | Stmt::For { body, .. } => validate_loop_control(body, depth + 1)?,
-            Stmt::If { then_block, elif_blocks, else_block, .. } => {
+            StmtKind::Repeat { body, .. } | StmtKind::While { body, .. } |
+            StmtKind::ForEach { body, .. } | StmtKind::For { body, .. } => validate_loop_control(body, depth + 1)?,
+            StmtKind::If { then_block, elif_blocks, else_block, .. } => {
                 validate_loop_control(then_block, depth)?;
                 for (_, body) in elif_blocks { validate_loop_control(body, depth)?; }
                 if let Some(body) = else_block { validate_loop_control(body, depth)?; }
             }
-            Stmt::Run { body, handlers, then_block } => {
+            StmtKind::Run { body, handlers, then_block } => {
                 validate_loop_control(body, depth)?;
                 for handler in handlers { validate_loop_control(&handler.body, depth)?; }
                 if let Some(body) = then_block { validate_loop_control(body, depth)?; }
@@ -617,7 +619,7 @@ fn opens_keyword_block(line: &str, keyword: &str) -> bool {
     line.strip_prefix(keyword).and_then(|rest| rest.trim_start().strip_suffix('{')).is_some_and(|mid| mid.trim().is_empty())
 }
 
-fn parse_run_stmt(lines: &[Line], start: usize) -> PResult<(Stmt, usize)> {
+fn parse_run_stmt(lines: &[Line], start: usize) -> PResult<(StmtKind, usize)> {
     let mut i = start + 1;
     let body = parse_block_stmts(lines, &mut i)?;
     let mut handlers = Vec::new();
@@ -646,7 +648,7 @@ fn parse_run_stmt(lines: &[Line], start: usize) -> PResult<(Stmt, usize)> {
     if handlers.is_empty() && then_block.is_none() {
         return Err("run needs at least one handle or then block".into());
     }
-    Ok((Stmt::Run { body, handlers, then_block }, i))
+    Ok((StmtKind::Run { body, handlers, then_block }, i))
 }
 
 /// `handle(Error)`, `handle(TypeError, RangeError)` (no name), `handle(Error e)`,
@@ -679,17 +681,18 @@ fn parse_handle_header(header: &str) -> PResult<(Vec<String>, Option<String>)> {
 
 fn parse_stmt_at(lines: &[Line], idx: usize) -> PResult<(Stmt, usize)> {
     let number = lines[idx].number;
-    parse_stmt_from(lines, idx).map_err(|e| at_line(number, e))
+    let (kind, next) = parse_stmt_from(lines, idx).map_err(|e| at_line(number, e))?;
+    Ok((Stmt { kind, line: number }, next))
 }
 
-fn parse_stmt_from(lines: &[Line], idx: usize) -> PResult<(Stmt, usize)> {
+fn parse_stmt_from(lines: &[Line], idx: usize) -> PResult<(StmtKind, usize)> {
     let l = lines[idx].trim();
 
     // A func inside a block: a closure over the variables around it.
     if l.starts_with("func ") {
         let (decl, next) = parse_func(lines, idx)?;
         validate_function_loops(&decl)?;
-        return Ok((Stmt::Func { name: decl.name.clone(), decl: std::sync::Arc::new(decl) }, next));
+        return Ok((StmtKind::Func { name: decl.name.clone(), decl: std::sync::Arc::new(decl) }, next));
     }
 
     if opens_keyword_block(l, "run") {
@@ -701,7 +704,7 @@ fn parse_stmt_from(lines: &[Line], idx: usize) -> PResult<(Stmt, usize)> {
         let cond = parse_condition_between_parens(l, "while")?;
         let mut next = idx + 1;
         let body = parse_block_stmts(lines, &mut next)?;
-        return Ok((Stmt::While { cond, body }, next));
+        return Ok((StmtKind::While { cond, body }, next));
     }
     if l.starts_with("for ") || l.starts_with("for(") {
         let header = l.trim_start_matches("for").trim().strip_suffix('{')
@@ -710,12 +713,12 @@ fn parse_stmt_from(lines: &[Line], idx: usize) -> PResult<(Stmt, usize)> {
             .ok_or("for requires a parenthesized header")?;
         let parts = split_top_level(header, ',');
         if parts.len() == 3 {
-            let init = parse_for_sequence(parts[0].trim())?;
+            let init = parse_for_sequence(parts[0].trim(), lines[idx].number)?;
             let cond = parse_expr(parts[1].trim())?;
-            let step = parse_for_sequence(parts[2].trim())?;
+            let step = parse_for_sequence(parts[2].trim(), lines[idx].number)?;
             let mut next = idx + 1;
             let body = parse_block_stmts(lines, &mut next)?;
-            return Ok((Stmt::For { init, cond, step, body }, next));
+            return Ok((StmtKind::For { init, cond, step, body }, next));
         }
         if parts.len() != 2 {
             return Err("expected for (item, iterable) or for (initializer, condition, change)".into());
@@ -727,7 +730,7 @@ fn parse_stmt_from(lines: &[Line], idx: usize) -> PResult<(Stmt, usize)> {
         let iterable = parse_expr(parts[1].trim())?;
         let mut next = idx + 1;
         let body = parse_block_stmts(lines, &mut next)?;
-        return Ok((Stmt::ForEach { name: name.into(), iterable, body }, next));
+        return Ok((StmtKind::ForEach { name: name.into(), iterable, body }, next));
     }
 
     if l.starts_with("if ") || l.starts_with("if(") {
@@ -739,7 +742,7 @@ fn parse_stmt_from(lines: &[Line], idx: usize) -> PResult<(Stmt, usize)> {
     Ok((parse_stmt_line(l)?, idx + 1))
 }
 
-fn parse_for_sequence(text: &str) -> PResult<Vec<Stmt>> {
+fn parse_for_sequence(text: &str, line: usize) -> PResult<Vec<Stmt>> {
     let text = if text.starts_with('(') && find_matching_paren(text)? == text.len() - 1 {
         &text[1..text.len()-1]
     } else { text };
@@ -763,15 +766,15 @@ fn parse_for_sequence(text: &str) -> PResult<Vec<Stmt>> {
     }
     parts.push(&text[start..]);
     parts.into_iter().map(|part| {
-        let stmt = parse_stmt_line(&format!("{};", part.trim()))?;
-        if !matches!(stmt, Stmt::Var(_) | Stmt::Assign { .. } | Stmt::Expr(_)) {
+        let kind = parse_stmt_line(&format!("{};", part.trim()))?;
+        if !matches!(kind, StmtKind::Var(_) | StmtKind::Assign { .. } | StmtKind::Expr(_)) {
             return Err("invalid for initializer/change".into());
         }
-        Ok(stmt)
+        Ok(Stmt { kind, line })
     }).collect()
 }
 
-fn parse_if_stmt(lines: &[Line], start: usize) -> PResult<(Stmt, usize)> {
+fn parse_if_stmt(lines: &[Line], start: usize) -> PResult<(StmtKind, usize)> {
     let line = lines[start].trim();
     if !line.ends_with('{') {
         return Err("if statement header must end with '{'".to_string());
@@ -815,7 +818,7 @@ fn parse_if_stmt(lines: &[Line], start: usize) -> PResult<(Stmt, usize)> {
     }
 
     Ok((
-        Stmt::If {
+        StmtKind::If {
             cond,
             then_block,
             elif_blocks,
@@ -825,7 +828,7 @@ fn parse_if_stmt(lines: &[Line], start: usize) -> PResult<(Stmt, usize)> {
     ))
 }
 
-fn parse_repeat_stmt(lines: &[Line], start: usize) -> PResult<(Stmt, usize)> {
+fn parse_repeat_stmt(lines: &[Line], start: usize) -> PResult<(StmtKind, usize)> {
     let line = lines[start].trim();
     if !line.ends_with('{') {
         return Err("repeat statement header must end with '{'".to_string());
@@ -839,7 +842,7 @@ fn parse_repeat_stmt(lines: &[Line], start: usize) -> PResult<(Stmt, usize)> {
     let mut i = start + 1;
     let body = parse_block_stmts(lines, &mut i)?;
     Ok((
-        Stmt::Repeat {
+        StmtKind::Repeat {
             times: parse_expr(expr_text)?,
             body,
         },
@@ -958,17 +961,18 @@ fn parse_var_decl(line: &str) -> PResult<VarDecl> {
         name,
         ty,
         value: parse_expr(value)?,
+        line: 0,
     })
 }
 
-fn parse_stmt_line(line: &str) -> PResult<Stmt> {
+fn parse_stmt_line(line: &str) -> PResult<StmtKind> {
     let l = line.trim();
-    if l == "break;" { return Ok(Stmt::Break); }
-    if l == "continue;" { return Ok(Stmt::Continue); }
+    if l == "break;" { return Ok(StmtKind::Break); }
+    if l == "continue;" { return Ok(StmtKind::Continue); }
     for (suffix, op) in [("++;", "+"), ("--;", "-")] {
         if let Some(target) = l.strip_suffix(suffix) {
             let target = parse_expr(target)?;
-            return Ok(Stmt::Assign { target: target.clone(), value: Expr::Binary {
+            return Ok(StmtKind::Assign { target: target.clone(), value: Expr::Binary {
                 left: Box::new(target), op: op.into(), right: Box::new(Expr::Number("1".into())),
             }});
         }
@@ -977,29 +981,29 @@ fn parse_stmt_line(line: &str) -> PResult<Stmt> {
         if let Some((target, value)) = l.strip_suffix(';').and_then(|s| s.split_once(op)) {
             if is_bare_ident(target.trim()) {
                 let target = parse_expr(target)?;
-                return Ok(Stmt::Assign { target: target.clone(), value: Expr::Binary {
+                return Ok(StmtKind::Assign { target: target.clone(), value: Expr::Binary {
                     left: Box::new(target), op: op[..1].into(), right: Box::new(parse_expr(value)?),
                 }});
             }
         }
     }
     if l.starts_with("ret ") {
-        return Ok(Stmt::Ret(parse_expr(
+        return Ok(StmtKind::Ret(parse_expr(
             l.trim_start_matches("ret").trim().trim_end_matches(';'),
         )?));
     }
     if is_var_decl(l) {
-        return Ok(Stmt::Var(parse_var_decl(l)?));
+        return Ok(StmtKind::Var(parse_var_decl(l)?));
     }
     if let Some(eq_idx) = find_plain_assignment(l.trim_end_matches(';')) {
         let (lhs, rhs_with_eq) = l.trim_end_matches(';').split_at(eq_idx);
         let rhs = &rhs_with_eq[1..];
-        return Ok(Stmt::Assign {
+        return Ok(StmtKind::Assign {
             target: parse_expr(lhs.trim())?,
             value: parse_expr(rhs.trim())?,
         });
     }
-    Ok(Stmt::Expr(parse_expr(l.trim_end_matches(';'))?))
+    Ok(StmtKind::Expr(parse_expr(l.trim_end_matches(';'))?))
 }
 
 fn find_plain_assignment(text: &str) -> Option<usize> {

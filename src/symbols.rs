@@ -41,7 +41,7 @@ pub(crate) fn describe(program: &Program, imports: &[(String, &LoadedPackage)]) 
                 globals.insert(var.name.clone());
                 walker.declared(var, None);
             }
-            Item::Stmt(Stmt::Assign { target: Expr::Ident(name), value }) if globals.insert(name.clone()) => {
+            Item::Stmt(Stmt { kind: StmtKind::Assign { target: Expr::Ident(name), value }, .. }) if globals.insert(name.clone()) => {
                 let ty = walker.infer(value);
                 walker.variable(name, "variable", ty, true, None);
             }
@@ -191,37 +191,37 @@ impl Walker<'_> {
     }
 
     fn stmt(&mut self, stmt: &Stmt, scope: &str, known: &mut HashSet<String>) {
-        match stmt {
-            Stmt::Var(var) if known.insert(var.name.clone()) => self.declared(var, Some(scope)),
+        match &stmt.kind {
+            StmtKind::Var(var) if known.insert(var.name.clone()) => self.declared(var, Some(scope)),
             // A nested function: listed with the others, so hovering it or
             // anything inside it works, and a variable of its enclosing scope.
-            Stmt::Func { name, decl } => {
+            StmtKind::Func { name, decl } => {
                 known.insert(name.clone());
                 self.variable(name, "function", Some("Function".into()), false, Some(scope));
                 let json = self.function(decl, None, known);
                 self.functions.push(json);
             }
             // A bare assignment declares a local unless the name already exists.
-            Stmt::Assign { target: Expr::Ident(name), value } if known.insert(name.clone()) => {
+            StmtKind::Assign { target: Expr::Ident(name), value } if known.insert(name.clone()) => {
                 let ty = self.infer(value);
                 self.variable(name, "variable", ty, true, Some(scope));
             }
-            Stmt::If { then_block, elif_blocks, else_block, .. } => {
+            StmtKind::If { then_block, elif_blocks, else_block, .. } => {
                 self.block(then_block, scope, known);
                 for (_, block) in elif_blocks { self.block(block, scope, known); }
                 if let Some(block) = else_block { self.block(block, scope, known); }
             }
-            Stmt::Repeat { body, .. } | Stmt::While { body, .. } => self.block(body, scope, known),
-            Stmt::ForEach { name, body, .. } => {
+            StmtKind::Repeat { body, .. } | StmtKind::While { body, .. } => self.block(body, scope, known),
+            StmtKind::ForEach { name, body, .. } => {
                 if known.insert(name.clone()) { self.variable(name, "loop", None, false, Some(scope)); }
                 self.block(body, scope, known);
             }
-            Stmt::For { init, step, body, .. } => {
+            StmtKind::For { init, step, body, .. } => {
                 self.block(init, scope, known);
                 self.block(step, scope, known);
                 self.block(body, scope, known);
             }
-            Stmt::Run { body, handlers, then_block } => {
+            StmtKind::Run { body, handlers, then_block } => {
                 self.block(body, scope, known);
                 for handler in handlers {
                     if let Some(name) = &handler.name {

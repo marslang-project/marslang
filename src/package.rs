@@ -45,6 +45,8 @@ pub(crate) struct LoadedPackage {
     pub name: String,
     pub source: Source,
     pub exports: Vec<(String, Export)>,
+    /// The file it was read from; `None` for a standard package.
+    pub file: Option<PathBuf>,
 }
 
 pub(crate) struct Loader {
@@ -143,16 +145,20 @@ impl Loader {
             }
             if self.loaded.contains(module) { return Ok(()); }
         }
-        let (source, exports) = match found {
-            Found::Native(native) => (Source::Native(native), Vec::new()),
-            Found::Bundled(text, is_init) => self.compile_package(module, text, is_init)?,
+        let (source, exports, file) = match found {
+            Found::Native(native) => (Source::Native(native), Vec::new(), None),
+            Found::Bundled(text, is_init) => {
+                let (source, exports) = self.compile_package(module, text, is_init)?;
+                (source, exports, None)
+            }
             Found::File(path, _, is_init) => {
                 let text = fs::read_to_string(&path)
                     .map_err(|e| format!("failed to read package '{module}' at {}: {e}", path.display()))?;
-                self.compile_package(module, &text, is_init)?
+                let (source, exports) = self.compile_package(module, &text, is_init)?;
+                (source, exports, Some(path))
             }
         };
-        self.packages.push(LoadedPackage { key: module.to_string(), name: module.to_string(), source, exports });
+        self.packages.push(LoadedPackage { key: module.to_string(), name: module.to_string(), source, exports, file });
         self.loaded.insert(module.to_string());
         Ok(())
     }
