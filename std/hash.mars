@@ -1,0 +1,123 @@
+// std.hash: checksums and message digests of text and files, the HMAC keyed
+// digest, and comparing a digest with one someone sent you.
+//
+// The work is native (std/rs/hash.rs): the digests, reading files in chunks,
+// and comparing every byte of two strings, which Marslang cannot do without
+// bitwise operators and which an interpreted loop would stop short of. What
+// is Marslang, below: which algorithms exist, which error family each failure
+// raises, and the messages. Every digest is a lowercase hex string.
+//
+// Fine for checksums and for detecting accidental change; none of these is for
+// storing passwords, and md5 and sha1 are broken for signatures and anything
+// an attacker might try to forge. See docs/api/std-hash.md.
+takepkg rs.hash = native;
+takepkg std.Decorator;
+takepkg std.file = files;
+
+@Decorator.docstring("""
+    The SHA-256 digest of text, as 64 lowercase hex digits. The text is hashed
+    as its UTF-8 bytes, so the same text gives the same digest on every system.
+
+        out(hash.sha256("abc"));   // ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+""")
+func sha256(string text) => native.sha256(text);
+
+@Decorator.docstring("""
+    The SHA-512 digest of text, as 128 lowercase hex digits. The text is hashed
+    as its UTF-8 bytes.
+
+        out(hash.sha512("abc"));   // ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f
+""")
+func sha512(string text) => native.sha512(text);
+
+@Decorator.docstring("""
+    The SHA-1 digest of text, as 40 lowercase hex digits. SHA-1 is broken for
+    signatures and certificates; use it only for checksums that are not
+    attacked. For new work prefer sha256.
+
+        out(hash.sha1("abc"));   // a9993e364706816aba3e25717850c26c9cd0d89d
+""")
+func sha1(string text) => native.sha1(text);
+
+@Decorator.docstring("""
+    The MD5 digest of text, as 32 lowercase hex digits. MD5 is broken: an
+    attacker can make two different texts with the same digest. It is fine for
+    spotting accidental damage, not for signatures, certificates, or anything
+    an attacker might try to forge. For new work prefer sha256.
+
+        out(hash.md5("abc"));   // 900150983cd24fb0d6963f7d28e17f72
+""")
+func md5(string text) => native.md5(text);
+
+@Decorator.docstring("""
+    The CRC-32 checksum of text, as 8 lowercase hex digits. It finds accidental
+    damage in transfers and files quickly, but anyone can change a text to have
+    any CRC-32 they like, so it is never a security check.
+
+        out(hash.crc32("123456789"));   // cbf43926
+""")
+func crc32(string text) => native.crc32(text);
+
+@Decorator.docstring("""
+    The HMAC-SHA256 of text under key, as 64 lowercase hex digits. It proves a
+    message came from someone who holds key, and that it was not changed; a
+    webhook or an API request can be checked this way. Both are hashed as
+    their UTF-8 bytes. Keep key secret, and compare the result with same.
+
+        out(hash.hmac_sha256("Jefe", "what do ya want for nothing?"));
+        // 5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843
+""")
+func hmac_sha256(string key, string text) => native.hmac_sha256(key, text);
+
+@Decorator.docstring("""
+    Whether two strings are equal, for checking a digest or HMAC someone sent
+    you against the one you computed. Every byte is compared whatever the
+    result, so the time taken does not show where they first differ. Strings
+    of different lengths are not equal.
+
+        sent = "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843";
+        out(hash.same(sent, hash.hmac_sha256("Jefe", "what do ya want for nothing?")));   // true
+        out(hash.same(sent, "0000"));                                                   // false
+""")
+func same(string a, string b) => native.same(a, b);
+
+@Decorator.docstring("""
+    The digest of the file at path, as lowercase hex, read in pieces so a file
+    larger than memory works, and a binary file too. algorithm is one of
+    "sha256", "sha512", "sha1", "md5", or "crc32", the same digests as above.
+
+        out(hash.file("archive.zip", "sha256"));
+
+    A file that is missing raises file.NotFoundError, a directory
+    file.IsDirectoryError, and no permission file.PermissionError, all from
+    std.file, so handle(file.FileError e) catches any of them. An unknown
+    algorithm raises RangeError before the file is touched.
+""")
+func file(string path, string algorithm){
+    _check_algorithm(algorithm);
+    ret _result(native.file(path, algorithm));
+}
+
+@Decorator.private
+func _algorithms() => arr("sha256", "sha512", "sha1", "md5", "crc32");
+
+@Decorator.private
+func _check_algorithm(string algorithm){
+    if (_algorithms().has(algorithm)){ ret null; }
+    err(RangeError, "hash.file needs an algorithm of \"sha256\", \"sha512\", \"sha1\", \"md5\", or \"crc32\", got \"" + algorithm + "\"");
+}
+
+// Turns the native result into a value, or raises the std.file family its kind
+// names, as std.file's own _result does. A native package can raise only
+// built-in errors, so the family is raised here.
+@Decorator.private
+func _result(array result){
+    if (result[0]){ ret result[1]; }
+    kind = result[1];
+    message = result[2];
+    if (kind == "NotFound"){ err(files.NotFoundError, message); }
+    if (kind == "Permission"){ err(files.PermissionError, message); }
+    if (kind == "IsDirectory"){ err(files.IsDirectoryError, message); }
+    if (kind == "NotDirectory"){ err(files.NotDirectoryError, message); }
+    err(files.FileError, message);
+}

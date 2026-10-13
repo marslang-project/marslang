@@ -27,6 +27,16 @@ regex-syntax = "0.8.11"
 # std.format: how many terminal columns text takes, so tables line up when
 # they hold Chinese, Japanese, Korean, or emoji, which take two.
 unicode-width = "0.2.2"
+# std.hash: SHA-256 and SHA-512 digests, in pure Rust so every release target builds.
+sha2 = "0.11.1"
+# std.hash: SHA-1 digests, in pure Rust (RustCrypto).
+sha1 = "0.11.0"
+# std.hash: MD5 digests, in pure Rust (RustCrypto); fine for checksums, not for security.
+md-5 = "0.11.0"
+# std.hash: HMAC-SHA-256, a keyed digest that proves a message came from someone holding the key.
+hmac = "0.13.0"
+# std.hash: CRC-32 checksums, in pure Rust, fast enough for large files.
+crc32fast = "1.5.2"
 
 [target.'cfg(not(windows))'.dependencies]
 # Elsewhere jiff reads the system time zone itself (TZ, /etc/localtime).
