@@ -93,6 +93,9 @@ cargo run -- run hello.mars
 
 Words after the file are the program's arguments, read with
 [std.cli](docs/api/std-cli.md): `marslang tool.mars --name Ada input.txt`.
+`marslang test` runs the tests in every `*_test.mars` file under the current
+folder: each top-level function named `test_...`, on its own, with
+[std.testing](docs/api/std-testing.md) assertions.
 `marslang check file.mars` parses and resolves a program without running it.
 `marslang symbols file.mars` prints what it declares, and what the packages it
 imports export, with types and docstrings, as JSON for editors (`--stdin` reads
@@ -119,6 +122,7 @@ Implemented:
 - raw strings, `r"..."`, in which a backslash is only a backslash, and
   f-strings, `f"Hello {name}"`
 - `date`, `datetime`, and `duration` kinds with time zones and daylight saving
+- `marslang test` and std.testing for testing programs
 - standard packages for math, strings, regular expressions, formatting numbers and tables, random numbers, containers, algorithms, statistics, files, paths, CSV, `.env`, INI, and TOML (`std.file`), JSON, the command line, the environment (`std.os`, `std.sys`), and object identity (`std.memory`); see [docs/api](docs/api/README.md)
 - `fasle` accepted as `false`
 

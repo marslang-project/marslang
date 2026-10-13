@@ -20,9 +20,13 @@ pub fn package() -> Value {
         })
         // core.kind(value): "int", "longint", "float", "string", "bool", "null", "array", ...
         .function("kind", 1, |args| Ok(Value::str(args[0].type_name())))
-        // Family name of an instance, or null.
+        // Family name of an instance, or of a family itself, or null.
         .function("family_name", 1, |args| Ok(match &args[0] {
             Value::Instance(o) => Value::str(&o.family.name),
+            Value::Func(f) => match f.as_ref() {
+                Callable::Family(family) => Value::str(&family.name),
+                _ => Value::Null,
+            },
             _ => Value::Null,
         }))
         // Whether a value is an instance of a family or of a family inheriting from it.

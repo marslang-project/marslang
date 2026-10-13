@@ -5,7 +5,7 @@ takepkg std.Decorator;
 @Decorator.docstring("The kind of a value as a string: \"int\", \"longint\", \"float\", \"string\", \"bool\", \"null\", \"array\", \"set\", \"map\", \"pair\", \"instance\", \"function\", or \"package\".")
 func kind(any value) => core.kind(value);
 
-@Decorator.docstring("The family name of an instance, or null for any other value.")
+@Decorator.docstring("The family name of an instance, or of a family itself, such as \"RangeError\"; null for any other value.")
 func family_name(any value) => core.family_name(value);
 
 @Decorator.docstring("Whether value is an instance of family, or of a family inheriting from it.")

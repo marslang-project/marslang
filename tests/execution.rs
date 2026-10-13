@@ -2712,3 +2712,77 @@ fn statements_go_on_over_lines_inside_brackets() {
     let error = marslang::compile("func m{\n    out(1,\n    y = 2;\n}").unwrap_err();
     assert!(error.contains("line 2: a '(' or '[' on this line is never closed"), "{error}");
 }
+
+fn test_outcomes(name: &str, source: &str) -> Result<Vec<(String, Option<String>, String)>, String> {
+    let dir = package_dir(name, &[("calc.mars", "func half(int n) => n / 2;\n"), ("calc_test.mars", source)]);
+    let compiled = marslang::compile_file(&dir.join("calc_test.mars")).expect("compile failed");
+    marslang::run_tests(compiled, "calc_test.mars".into())
+        .map(|outcomes| outcomes.into_iter().map(|o| (o.name, o.error.map(|e| e.report()), o.output)).collect())
+        .map_err(|e| e.report())
+}
+
+#[test]
+fn test_files_run_each_test_on_its_own() {
+    let outcomes = test_outcomes("tests-run", r#"takepkg calc;
+takepkg std.testing;
+out("loading");
+
+func test_half(){
+    out("checking");
+    testing.equal(calc.half(7), 3);
+}
+
+func test_passes(){ testing.equal(calc.half(8), 4); }
+func test_crash(){ x = arr(1); out(x[5]); }
+func test_with_parameter(int n){ testing.fail("not a test"); }
+func helper() => 1;
+func m{ out("not run"); }
+"#).unwrap();
+    assert_eq!(outcomes, vec![
+        ("test_half".to_string(), Some("AssertionError: expected 3, got 3.5\n    at test_half (calc_test.mars:7)".to_string()), "checking\n".to_string()),
+        ("test_passes".to_string(), None, String::new()),
+        ("test_crash".to_string(), Some("OutOfBoundsError: index 5 is out of range for an array of 1 elements\n    at test_crash (calc_test.mars:11)".to_string()), String::new()),
+    ]);
+    let broken = test_outcomes("tests-broken", "x = 1 / 0;\nfunc test_never(){}\n").unwrap_err();
+    assert_eq!(broken, "RangeError: division by zero\n    at top level (calc_test.mars:1)");
+}
+
+#[test]
+fn std_testing_assertions_explain_failures() {
+    executes(r#"
+        takepkg std.testing;
+        takepkg std.random;
+        func explain(Function f){
+            run{ f(); out("held"); } handle(testing.AssertionError e){ out(e.message); }
+        }
+        func m{
+            explain(func() => testing.equal(arr(1, map().set("a", pair(1, 2.0)), set(3)), arr(1.0, map().set("a", pair(1, 2)), set(3))));
+            explain(func() => testing.equal(arr(1, 2), arr(1, 3)));
+            explain(func() => testing.equal("3", 3));
+            explain(func() => testing.equal(map().set("a", 1), map().set("a", 1).set("b", 2)));
+            explain(func() => testing.not_equal(arr(1), arr(1)));
+            explain(func() => testing.is_true(1));
+            explain(func() => testing.is_false(false));
+            explain(func() => testing.close(0.1 + 0.2, 0.3, 1e-9));
+            explain(func() => testing.close(1.0, 1.5, 0.1));
+            explain(func() => testing.raises(RangeError, func() => random.choice(arr())).message);
+            explain(func() => testing.raises(TypeError, func() => 1 / 0));
+            explain(func() => testing.raises(Error, func() => 1));
+            explain(func() => testing.fail("unreachable"));
+        }"#,
+        concat!(
+            "held\n",
+            "expected [1, 3], got [1, 2]\n",
+            "expected 3, got \"3\"\n",
+            "expected {\"a\": 1, \"b\": 2}, got {\"a\": 1}\n",
+            "expected anything but [1]\n",
+            "expected true, got 1\n",
+            "held\n",
+            "held\n",
+            "expected 1.5 within 0.1, got 1, off by 0.5\n",
+            "held\n",
+            "expected TypeError, got RangeError: division by zero\n",
+            "expected Error, but nothing was raised\n",
+            "unreachable\n",
+        ));
+}

@@ -121,6 +121,46 @@ pub fn run_with_args(compiled: Compiled, program: String, args: Vec<String>) -> 
     })
 }
 
+/// How one test function went, from `run_tests`.
+pub struct TestOutcome {
+    pub name: String,
+    /// What it raised; `None` when it passed.
+    pub error: Option<RuntimeError>,
+    /// What it printed.
+    pub output: String,
+    pub seconds: f64,
+}
+
+/// Run a compiled test file, as `marslang test` does: its top level, then
+/// each function named `test_...` that takes no parameters, on its own, with
+/// its output captured. `Err` when the file fails before its tests can run.
+pub fn run_tests(compiled: Compiled, program: String) -> Result<Vec<TestOutcome>, RuntimeError> {
+    on_interpreter_thread(move || {
+        value::set_command_line(program, Vec::new());
+        let buffer = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut out = SharedOutput(buffer.clone());
+        let take = |buffer: &std::cell::RefCell<Vec<u8>>| String::from_utf8_lossy(&std::mem::take(&mut *buffer.borrow_mut())).into_owned();
+        let mut outcomes = Vec::new();
+        let result = interp::Interp::new(&mut out, InputSource::Text(String::new()), false).run_tests(
+            &compiled.program, &compiled.packages,
+            // What the top level printed belongs to no test.
+            &mut || { take(&buffer); },
+            &mut |name, result, elapsed| outcomes.push(TestOutcome {
+                name: name.to_string(), error: result.err(), output: take(&buffer), seconds: elapsed.as_secs_f64(),
+            }),
+        );
+        result.map(|()| outcomes)
+    })
+}
+
+/// Output gathered into a buffer that its owner can empty between tests.
+struct SharedOutput(std::rc::Rc<std::cell::RefCell<Vec<u8>>>);
+
+impl std::io::Write for SharedOutput {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> { self.0.borrow_mut().write(bytes) }
+    fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+}
+
 /// Run a compiled program with the given standard input, capturing its output.
 /// Output written before a runtime error is kept.
 pub fn run_captured(compiled: Compiled, input: &str) -> (String, Result<(), RuntimeError>) {

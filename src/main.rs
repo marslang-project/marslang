@@ -10,7 +10,7 @@ use std::process::ExitCode;
 #[global_allocator]
 static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-const USAGE: &str = "Usage: marslang <file.mars> [args...] | marslang run <file.mars> [args...] | marslang check <file.mars> | marslang lex <file.mars> | marslang repl | marslang pkgs | marslang symbols <file.mars> [--stdin] | marslang --version";
+const USAGE: &str = "Usage: marslang <file.mars> [args...] | marslang run <file.mars> [args...] | marslang test [file or folder] | marslang check <file.mars> | marslang lex <file.mars> | marslang repl | marslang pkgs | marslang symbols <file.mars> [--stdin] | marslang --version";
 
 fn main() -> ExitCode {
     match run() {
@@ -35,6 +35,7 @@ fn run() -> Result<(), String> {
             Ok(())
         }
         Some("run") => run_cmd(file(2)?, &args[3.min(args.len())..]),
+        Some("test") => test_cmd(args.get(2).map(Path::new)),
         Some("check") => {
             marslang::check_file(file(2)?)?;
             println!("ok");
@@ -81,6 +82,90 @@ fn run_cmd(input: &Path, program_args: &[String]) -> Result<(), String> {
         // cli.exit(code): output is already flushed, so stop with that status.
         Err(error) if error.exit.is_some() => std::process::exit(error.exit.unwrap()),
         result => result.map_err(|e| e.report()),
+    }
+}
+
+/// `marslang test`: run every test in one file, or in every `*_test.mars`
+/// file under a folder (the current one by default). A test is a top-level
+/// function named `test_...` that takes no parameters; what a passing test
+/// prints is hidden. Ends with status 1 when anything failed.
+fn test_cmd(target: Option<&Path>) -> Result<(), String> {
+    let target = target.unwrap_or(Path::new("."));
+    let files = if target.is_file() {
+        vec![target.to_path_buf()]
+    } else if target.is_dir() {
+        let mut found = Vec::new();
+        find_tests(target, &mut found);
+        found
+    } else {
+        return Err(format!("{} is neither a test file nor a folder", target.display()));
+    };
+    if files.is_empty() {
+        return Err(format!("no tests in {}: test files are named like math_test.mars", target.display()));
+    }
+    let started = std::time::Instant::now();
+    let (mut passed, mut failed, mut broken) = (0usize, 0usize, 0usize);
+    let indent = |text: &str, by: &str| text.lines().map(|line| format!("{by}{line}")).collect::<Vec<_>>().join("\n");
+    for file in &files {
+        let shown = file.strip_prefix(".").unwrap_or(file).display().to_string();
+        println!("{shown}");
+        let outcomes = marslang::compile_file(file)
+            .map_err(|error| format!("error: {error}"))
+            .and_then(|compiled| marslang::run_tests(compiled, shown.clone())
+                .map_err(|error| format!("error before the tests ran: {}", error.report())));
+        match outcomes {
+            Err(problem) => {
+                broken += 1;
+                println!("{}", indent(&problem, "  "));
+            }
+            Ok(outcomes) if outcomes.is_empty() => println!("  no tests: name them test_..., with no parameters"),
+            Ok(outcomes) => for outcome in outcomes {
+                match &outcome.error {
+                    None => {
+                        passed += 1;
+                        println!("  ok    {}", outcome.name);
+                    }
+                    Some(error) => {
+                        failed += 1;
+                        println!("  FAIL  {}", outcome.name);
+                        let report = match error.exit {
+                            Some(code) => format!("the test called cli.exit({code})"),
+                            None => error.report(),
+                        };
+                        println!("{}", indent(&report, "        "));
+                        if !outcome.output.is_empty() {
+                            println!("        it printed:\n{}", indent(outcome.output.trim_end(), "          "));
+                        }
+                    }
+                }
+            },
+        }
+    }
+    let mut summary = format!("{passed} passed, {failed} failed");
+    if broken > 0 { summary += &format!(", {broken} file{} could not run", if broken == 1 { "" } else { "s" }); }
+    println!("\n{summary} in {:.2}s", started.elapsed().as_secs_f64());
+    if failed + broken > 0 {
+        io::stdout().flush().map_err(|e| format!("failed to flush stdout: {e}"))?;
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+/// Every `*_test.mars` file under `dir`, sorted, leaving out hidden folders
+/// and folders of build output and installed packages.
+fn find_tests(dir: &Path, found: &mut Vec<std::path::PathBuf>) {
+    let Ok(entries) = fs::read_dir(dir) else { return };
+    let mut paths: Vec<std::path::PathBuf> = entries.filter_map(|entry| entry.ok().map(|e| e.path())).collect();
+    paths.sort();
+    for path in paths {
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        if path.is_dir() {
+            if !name.starts_with('.') && !matches!(name.as_str(), "target" | "node_modules" | "marslang_pkgs") {
+                find_tests(&path, found);
+            }
+        } else if name.ends_with("_test.mars") {
+            found.push(path);
+        }
     }
 }
 

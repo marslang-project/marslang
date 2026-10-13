@@ -1,0 +1,124 @@
+// std.testing: assertions for tests, which `marslang test` runs.
+//
+// A test is a top-level function named test_... that takes no parameters,
+// in a file named like math_test.mars. Each assertion raises AssertionError
+// when it does not hold; the runner reports the line of the assertion that
+// failed and goes on with the next test. Written in Marslang.
+takepkg std.Decorator;
+takepkg std.math;
+takepkg std.types;
+
+@Decorator.docstring("""
+    Raised by an assertion that does not hold. handle(testing.AssertionError e)
+    catches it, though a test usually lets it end the test.
+""")
+family AssertionError(Error){}
+
+@Decorator.docstring("""
+    Raise AssertionError unless actual equals expected.
+
+        testing.equal(math.max(2, 3), 3);
+        testing.equal(algorithms.sorted(arr(3, 1, 2)), arr(1, 2, 3));
+
+    Arrays, maps, sets, and pairs are equal when their contents are, unlike
+    ==, which asks whether two containers are the same one; numbers compare
+    by value, so 1 equals 1.0. Other values compare with ==. The message
+    shows both: expected [1, 2, 3], got [1, 3, 2].
+""")
+func equal(any actual, any expected){
+    if (not _same(actual, expected)){ err(AssertionError, "expected " + _show(expected) + ", got " + _show(actual)); }
+}
+
+@Decorator.docstring("Raise AssertionError if actual equals unexpected, comparing as equal does.")
+func not_equal(any actual, any unexpected){
+    if (_same(actual, unexpected)){ err(AssertionError, "expected anything but " + _show(unexpected)); }
+}
+
+@Decorator.docstring("Raise AssertionError unless value is true.")
+func is_true(any value){
+    if (value != true){ err(AssertionError, "expected true, got " + _show(value)); }
+}
+
+@Decorator.docstring("Raise AssertionError unless value is false.")
+func is_false(any value){
+    if (value != false){ err(AssertionError, "expected false, got " + _show(value)); }
+}
+
+@Decorator.docstring("""
+    Raise AssertionError unless actual is within tolerance of expected: for
+    floats, which rounding makes slightly off.
+
+        testing.close(0.1 + 0.2, 0.3, 1e-9);
+""")
+func close([int,longint,float] actual, [int,longint,float] expected, float tolerance){
+    if (not (tolerance >= 0.0)){ err(RangeError, "testing.close needs a tolerance of 0.0 or more, got " + string(tolerance)); }
+    off = math.abs(_real(actual) - _real(expected));
+    if (not (off <= tolerance)){
+        err(AssertionError, "expected " + string(expected) + " within " + string(tolerance) + ", got " + string(actual) + ", off by " + string(off));
+    }
+}
+
+@Decorator.docstring("""
+    Call f, which takes no arguments, and raise AssertionError unless it
+    raises an error of family kind, or of a family inheriting from it. Returns
+    the error, to check its message.
+
+        func empty_choice() => random.choice(arr());
+        e = testing.raises(RangeError, empty_choice);
+        testing.equal(e.message, "random.choice needs at least one item");
+""")
+func raises(Family kind, Function f){
+    run{
+        f();
+    } handle(Error e){
+        if (types.is_instance(e, kind)){ ret e; }
+        err(AssertionError, "expected " + types.family_name(kind) + ", got " + types.family_name(e) + ": " + e.message);
+    }
+    err(AssertionError, "expected " + types.family_name(kind) + ", but nothing was raised");
+}
+
+@Decorator.docstring("Raise AssertionError with message: for a test that reached a place it should not.")
+func fail(string message){ err(AssertionError, message); }
+
+@Decorator.private
+func _real(float value) => value;
+
+// Equality by contents, as equal describes.
+@Decorator.private
+func _same(any a, any b){
+    kind = types.kind(a);
+    if (kind != types.kind(b)){
+        if (types.is_number(a) and types.is_number(b)){ ret a == b; }
+        ret false;
+    }
+    if (kind == "array"){
+        if (a.len() != b.len()){ ret false; }
+        for (i = 0, i < a.len(), i++){
+            if (not _same(a[i], b[i])){ ret false; }
+        }
+        ret true;
+    }
+    if (kind == "map"){
+        if (a.len() != b.len()){ ret false; }
+        for (key, a){
+            if (not b.has(key) or not _same(a.get(key), b.get(key))){ ret false; }
+        }
+        ret true;
+    }
+    if (kind == "set"){
+        if (a.len() != b.len()){ ret false; }
+        for (item, a){
+            if (not b.has(item)){ ret false; }
+        }
+        ret true;
+    }
+    if (kind == "pair"){ ret _same(a.first, b.first) and _same(a.second, b.second); }
+    ret a == b;
+}
+
+// A value as a message shows it: strings in quotes, so "3" and 3 differ.
+@Decorator.private
+func _show(any value){
+    if (types.kind(value) == "string"){ ret "\"" + value + "\""; }
+    ret string(value);
+}

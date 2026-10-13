@@ -16,6 +16,6 @@ func m{
 | Function | Result |
 | --- | --- |
 | `kind(value)` | `"int"`, `"longint"`, `"float"`, `"string"`, `"bool"`, `"null"`, `"array"`, `"set"`, `"map"`, `"pair"`, `"instance"`, `"function"`, or `"package"` |
-| `family_name(value)` | The family name of an instance, or `null` |
+| `family_name(value)` | The family name of an instance, or of a family itself (`family_name(RangeError)` is `"RangeError"`), or `null` |
 | `is_instance(value, Family)` | Whether `value` is an instance of `Family` or of a family inheriting from it |
 | `is_number(value)` | Whether `value` is an `int`, `longint`, or `float` |

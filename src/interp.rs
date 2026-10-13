@@ -120,15 +120,28 @@ impl<'o> Interp<'o> {
     /// Afterwards every value the run created is released, including cycles.
     pub(crate) fn run(&mut self, program: &Program, packages: &[LoadedPackage]) -> RResult<()> {
         let result = self.run_program(program, packages);
+        self.finish();
+        result
+    }
+
+    /// Release everything a run created, cycles included.
+    fn finish(&mut self) {
         self.units.clear();
         self.packages.clear();
         self.raised = None;
         self.last_error = None;
         crate::gc::collect();
-        result
     }
 
     fn run_program(&mut self, program: &Program, packages: &[LoadedPackage]) -> RResult<()> {
+        let unit = self.load_program(program, packages)?;
+        let entry = self.units[unit].functions.get("m").cloned();
+        if let Some(entry) = entry { self.call_function(&entry, None, Vec::new(), None)?; }
+        Ok(())
+    }
+
+    /// Load the packages, then the program, and run its top-level statements.
+    fn load_program(&mut self, program: &Program, packages: &[LoadedPackage]) -> RResult<usize> {
         for package in packages {
             let value = match &package.source {
                 Source::Native(package) => package(),
@@ -139,8 +152,35 @@ impl<'o> Interp<'o> {
         let file = Some(crate::value::program_path()).filter(|path| !path.is_empty());
         let unit = self.load_unit(program, None, file, false)?;
         self.run_top_level(program, unit)?;
-        let entry = self.units[unit].functions.get("m").cloned();
-        if let Some(entry) = entry { self.call_function(&entry, None, Vec::new(), None)?; }
+        Ok(unit)
+    }
+
+    /// `marslang test`: load the program as `run` does, without calling `m`,
+    /// then call each test on its own, in the order written: every top-level
+    /// function named `test_...` that takes no parameters. A test that fails
+    /// does not stop the others. `loaded` runs once the top level has, and
+    /// `tested` after each test, with its result and how long it took.
+    pub(crate) fn run_tests(&mut self, program: &Program, packages: &[LoadedPackage],
+                            loaded: &mut dyn FnMut(), tested: &mut dyn FnMut(&str, RResult<()>, std::time::Duration)) -> RResult<()> {
+        let result = self.run_test_functions(program, packages, loaded, tested);
+        self.finish();
+        result
+    }
+
+    fn run_test_functions(&mut self, program: &Program, packages: &[LoadedPackage],
+                          loaded: &mut dyn FnMut(), tested: &mut dyn FnMut(&str, RResult<()>, std::time::Duration)) -> RResult<()> {
+        let unit = self.load_program(program, packages)?;
+        loaded();
+        let tests: Vec<Rc<Function>> = program.items.iter().filter_map(|item| match item {
+            Item::Func(f) if f.name.starts_with("test_") && f.params.is_empty() => self.units[unit].functions.get(&f.name).cloned(),
+            _ => None,
+        }).collect();
+        for test in tests {
+            let started = std::time::Instant::now();
+            let result = self.call_function(&test, None, Vec::new(), None).map(drop);
+            self.raised = None;
+            tested(&test.decl.name, result, started.elapsed());
+        }
         Ok(())
     }
 
