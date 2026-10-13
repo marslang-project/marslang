@@ -1,7 +1,7 @@
 use crate::ast::Expr;
 
 #[derive(Clone, Debug)]
-enum Token { Name(String), Number(String), String(String), Op(String), Lambda(String), End }
+enum Token { Name(String), Number(String), String(String), Template(String), Op(String), Lambda(String), End }
 
 pub fn parse(text: &str) -> Result<Expr, String> {
     let mut tokens = Vec::new();
@@ -44,6 +44,24 @@ pub fn parse(text: &str) -> Result<Expr, String> {
                     chars = ahead;
                     tokens.push(Token::Lambda(text[open + 1..close].to_string()));
                     continue;
+                }
+            }
+            if let Some((_, quote @ ('"' | '\''))) = chars.peek().copied() {
+                if word == "f" {
+                    // f"...": an f-string, kept undecoded until its braces are found.
+                    let open = chars.next().unwrap().0;
+                    let mut escaped = false; let mut end = None;
+                    for (offset, c) in chars.by_ref() {
+                        if escaped { escaped = false; }
+                        else if c == '\\' { escaped = true; }
+                        else if c == quote { end = Some(offset); break; }
+                    }
+                    let end = end.ok_or("unterminated f-string")?;
+                    tokens.push(Token::Template(text[open + 1..end].to_string()));
+                    continue;
+                }
+                if matches!(word.as_str(), "rf" | "fr") {
+                    return Err(format!("{word}\"...\" is not a kind of string: an f-string cannot also be raw"));
                 }
             }
             tokens.push(if matches!(word.as_str(), "and" | "or" | "not") {
@@ -147,6 +165,7 @@ impl Parser {
                 "null" => Expr::Null, _ => Expr::Ident(s),
             },
             Token::Number(s) => Expr::Number(s), Token::String(s) => Expr::String(s),
+            Token::Template(body) => template(&body)?,
             Token::Lambda(params) => {
                 let body = self.expr(0)?;
                 Expr::Lambda(std::sync::Arc::new(crate::parser::lambda(&params, body)?))
@@ -216,6 +235,84 @@ impl Parser {
         }
         Ok(left)
     }
+}
+
+/// An f-string's parts from its text between the quotes: the pieces of text,
+/// decoded like any string, and the expressions between braces, each parsed
+/// on its own. `{{` and `}}` are braces.
+fn template(body: &str) -> Result<Expr, String> {
+    let chars: Vec<char> = body.chars().collect();
+    let mut parts = Vec::new();
+    // The current piece of text, still escaped.
+    let mut text = String::new();
+    let mut i = 0;
+    while i < chars.len() {
+        match chars[i] {
+            '\\' => {
+                text.push('\\');
+                if let Some(&next) = chars.get(i + 1) { text.push(next); }
+                i += 2;
+            }
+            '{' if chars.get(i + 1) == Some(&'{') => { text.push('{'); i += 2; }
+            '}' if chars.get(i + 1) == Some(&'}') => { text.push('}'); i += 2; }
+            '}' => return Err("an f-string has a '}' that closes nothing; write }} for a brace".into()),
+            '{' => {
+                let (source, close) = template_expression(&chars, i + 1)?;
+                if source.trim().is_empty() {
+                    return Err("an f-string has empty braces; put an expression in them, or write {{ for a brace".into());
+                }
+                if !text.is_empty() { parts.push(Expr::String(decode_string(&std::mem::take(&mut text))?)); }
+                parts.push(parse(&source).map_err(|e| format!("in the f-string braces {{{}}}: {e}", source.trim()))?);
+                i = close + 1;
+            }
+            c => { text.push(c); i += 1; }
+        }
+    }
+    if !text.is_empty() || parts.is_empty() { parts.push(Expr::String(decode_string(&text)?)); }
+    Ok(Expr::Template(parts))
+}
+
+/// The expression in braces opened just before `start`, and where its `}`
+/// is. Within the braces `\"` and `\'` are quotes, since the f-string's own
+/// quoting needed the backslash (and a `"""` f-string adds it to every `"`),
+/// so a string can be written inside: `f"{name.replace(\"-\", \" \")}"`.
+fn template_expression(chars: &[char], start: usize) -> Result<(String, usize), String> {
+    let mut source = String::new();
+    let mut quote: Option<char> = None;
+    let mut depth = 0usize;
+    let mut i = start;
+    while i < chars.len() {
+        let mut c = chars[i];
+        if c == '\\' {
+            match chars.get(i + 1) {
+                Some(&q @ ('"' | '\'')) => { i += 1; c = q; }
+                Some(&next) if quote.is_some() => {
+                    // An escape in a string written inside the braces.
+                    source.push(c);
+                    source.push(next);
+                    i += 2;
+                    continue;
+                }
+                _ => {}
+            }
+        }
+        match quote {
+            Some(q) => if c == q { quote = None; },
+            None => match c {
+                '"' | '\'' => quote = Some(c),
+                '(' | '[' => depth += 1,
+                ')' | ']' => depth = depth.saturating_sub(1),
+                '}' if depth == 0 => return Ok((source, i)),
+                ':' if depth == 0 => return Err(
+                    "f-string braces hold one expression, with no format after ':'; \
+                     format numbers with std.format inside them, as in {format.fixed(price, 2)}".into()),
+                _ => {}
+            },
+        }
+        source.push(c);
+        i += 1;
+    }
+    Err("an f-string has a '{' with no '}' to close it. A string inside the braces needs the other kind of quote, as in f\"{scores.get('ada')}\", and {{ writes a brace".into())
 }
 
 /// Decode the escapes of a quoted literal's contents: \n \r \t \b \f \v \0,

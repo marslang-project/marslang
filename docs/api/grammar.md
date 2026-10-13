@@ -147,6 +147,9 @@ families inheriting from it. `Function` and `Family` are for parameters only.
   character, so `\"` and `\\` work in every kind of string. An `r` before the
   opening quote, `r"..."`, `r'...'`, or `r"""..."""`, makes a raw string, in
   which a backslash is only a backslash; it cannot contain its closing quote.
+  An `f` makes an f-string, `f"total {a + b}"`: each `{expression}` becomes its
+  value as text, `{{` and `}}` are braces, and a string inside the braces uses
+  the other quote, or `\"`.
 - **Limits**: one expression may nest at most 1,000 levels deep, counting
   parentheses, calls, and unary operators, and chain at most 10,000 operators
   in a row, as in `a + b + c`. Beyond either, compiling stops with an error,

@@ -268,7 +268,7 @@ impl Walker<'_> {
             Expr::Number(_) | Expr::Float(_) => "float".into(),
             Expr::Int(_) => "int".into(),
             Expr::Long(_) => "longint".into(),
-            Expr::String(_) => "string".into(),
+            Expr::String(_) | Expr::Template(_) => "string".into(),
             Expr::Bool(_) => "bool".into(),
             Expr::Typed { ty, .. } => ty.clone(),
             Expr::Lambda(_) => "Function".into(),

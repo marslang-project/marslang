@@ -218,6 +218,7 @@ impl Resolver {
                 self.expr(left)?; self.expr(right)?;
             }
             Expr::Call { callee, args } => { self.expr(callee)?; for arg in args { self.expr(arg)?; } }
+            Expr::Template(parts) => for part in parts { self.expr(part)?; },
             Expr::Member { object, .. } => self.expr(object)?,
             Expr::Index { object, index } => { self.expr(object)?; self.expr(index)?; }
             // Resolved where it stands, so it sees the variables around it.

@@ -472,6 +472,16 @@ impl<'o> Interp<'o> {
             Expr::Float(f) => Value::Float(*f),
             Expr::Number(text) => return number_literal(text),
             Expr::String(s) => Value::str(s),
+            Expr::Template(parts) => {
+                let mut text = String::new();
+                for part in parts {
+                    match part {
+                        Expr::String(piece) => text.push_str(piece),
+                        expression => text.push_str(&to_display_string(&self.eval(expression, env)?)),
+                    }
+                }
+                Value::str(&text)
+            }
             Expr::Bool(b) => Value::Bool(*b),
             Expr::Null => Value::Null,
             Expr::Ident(name) => self.lookup(name, env)?,

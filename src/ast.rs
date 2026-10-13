@@ -177,6 +177,9 @@ pub enum Expr {
     Float(f64),
     /// Decoded string contents (escapes already applied).
     String(String),
+    /// `f"Hello {name}"`: its text pieces, as `String`s, and the expressions
+    /// between braces, in order; each becomes text as `string(value)` does.
+    Template(Vec<Expr>),
     Bool(bool),
     Null,
     Ident(String),

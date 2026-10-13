@@ -2585,3 +2585,55 @@ fn runtime_errors_name_the_files_of_packages() {
     let dice = dir.join("dice.mars").display().to_string();
     assert_eq!(report, format!("RangeError: division by zero\n    at roll ({dice}:2)\n    at m (main.mars:4)"));
 }
+
+#[test]
+fn f_strings_put_values_into_text() {
+    executes(r##"
+        family Point{
+            func init(int x, int y){ me.x = x; me.y = y; }
+        }
+        func m{
+            name = "Ada";
+            age = 36;
+            out(f"Hello {name}, you are {age}");
+            out(f'{name} is {age + 1} next year; {{braces}} and }}');
+            p = Point(2, 3);
+            out(f"({p.x}, {p.y}) {arr(1, 2)} {1.0} {2.5} {null} {true} {map().set('a', 1)}");
+            out(f"""A "quoted" {name.upper()}
+and {name.replace("A", "E")} on two lines""");
+            out(f"nested {f'inner {age}'} done", f"", f"plain", f"tab\there {age}");
+            out(f"{name.replace(\"d\", \"D\")}", f"{age * 2 + 1}{age}");
+            double = func(int n) => n * 2;
+            out(f"{double(age)} {name.len()} {name[0]}");
+            count = 0;
+            func next(){ count = count + 1; ret count; }
+            out(f"{next()} {next()} {next()}");
+        }"##,
+        concat!(
+            "Hello Ada, you are 36\n",
+            "Ada is 37 next year; {braces} and }\n",
+            "(2, 3) [1, 2] 1 2.5 null true {\"a\": 1}\n",
+            "A \"quoted\" ADA\nand Eda on two lines\n",
+            "nested inner 36 done  plain tab\there 36\n",
+            "ADa 7336\n",
+            "72 3 A\n",
+            "1 2 3\n",
+        ));
+}
+
+#[test]
+fn f_string_mistakes_are_explained() {
+    for (source, message) in [
+        ("out(f\"{}\");", "line 3: an f-string has empty braces"),
+        ("out(f\"{a:.2f}\");", "no format after ':'; format numbers with std.format inside them, as in {format.fixed(price, 2)}"),
+        ("out(f\"oops }\");", "line 3: an f-string has a '}' that closes nothing; write }} for a brace"),
+        ("out(f\"open {a\");", "an f-string has a '{' with no '}' to close it"),
+        ("out(f\"{a.get(\"k\")}\");", "A string inside the braces needs the other kind of quote"),
+        ("out(f\"{1 +}\");", "in the f-string braces {1 +}"),
+        ("out(f\"{nope}\");", "line 3: unknown name 'nope'"),
+        ("out(rf\"x\");", "an f-string cannot also be raw"),
+    ] {
+        let error = marslang::compile(&format!("func m{{\n    a = 1;\n    {source}\n}}")).unwrap_err();
+        assert!(error.contains(message), "{source}: expected {message}, got {error}");
+    }
+}

@@ -34,6 +34,35 @@ lines. A raw string cannot contain its own closing quote, so a `"` goes in
 character without an escape of its own stands for that character, so `"\d"`
 is just `d`, which is why patterns need raw strings.
 
+## f-strings
+
+An `f` before the opening quote puts values into the text: each `{expression}`
+is replaced by its value, written as `string(value)` writes it.
+
+```mars
+func m{
+    name = "Ada";
+    age = 36;
+    out(f"{name} is {age}, and {age + 1} next year");   // Ada is 36, and 37 next year
+    out(f"{name.upper()} has {name.len()} letters");     // ADA has 3 letters
+    out(f"{{braces}} are written twice");               // {braces} are written twice
+}
+```
+
+Any expression works between the braces: arithmetic, calls, methods, members,
+and indexes. The expressions run from left to right, once each. `{{` and `}}`
+are braces themselves, and escapes such as `\t` work in the text as in any
+string. All three quotes work: `f"..."`, `f'...'`, and `f"""..."""`, which spans
+lines.
+
+A string inside the braces needs the other kind of quote, since the first `"`
+would end the f-string: `f"{scores.get('ada')}"`, or `\"` as in
+`f"{name.replace(\"-\", \" \")}"`. In `f"""..."""`, plain `"` works.
+
+There is no format after a `:` as in other languages; format a number with
+[std.format](std-format.md) inside the braces:
+`f"Total: {format.fixed(price, 2)}"`. An f-string cannot also be raw.
+
 ## Characters
 
 A character is one Unicode extended grapheme cluster: a visible character can
