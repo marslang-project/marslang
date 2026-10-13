@@ -58,8 +58,9 @@ log file, or to measure text. `strip(bold(red(text)))` is always `text`.
 `terminal.colors()` says whether the styles above add codes or return plain
 text. It is decided once, the first time it is needed:
 
-1. If `FORCE_COLOR` is set and not empty, colours are **on**, even when output
-   is a file or a pipe.
+1. If `FORCE_COLOR` is set to anything but empty, `0`, or `false`, colours are
+   **on**, even when output is a file or a pipe. `FORCE_COLOR=0` means "do not
+   force", as in Node and most tools that read it.
 2. Otherwise, if `NO_COLOR` is set and not empty, they are **off**
    (see [no-color.org](https://no-color.org)).
 3. Otherwise they are on when standard output is a terminal and, on Windows,

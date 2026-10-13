@@ -55,7 +55,7 @@ pub fn package() -> Value {
 /// intermediate bytes (space to /), and a final byte (@ to ~), as std.terminal's
 /// `strip` finds them. An ESC that does not start a whole sequence stays.
 fn without_escapes(text: &str) -> std::borrow::Cow<'_, str> {
-    if !text.contains('') { return std::borrow::Cow::Borrowed(text); }
+    if !text.contains('\x1b') { return std::borrow::Cow::Borrowed(text); }
     let bytes = text.as_bytes();
     let mut kept = String::with_capacity(text.len());
     let mut copied = 0;
@@ -119,11 +119,11 @@ mod tests {
     #[test]
     fn escape_sequences_are_not_text() {
         assert_eq!(without_escapes("plain"), "plain");
-        assert_eq!(without_escapes("[1m[31mhi[0m"), "hi");
-        assert_eq!(without_escapes("a[38;2;1;2;3mb[2J[Hc"), "abc");
+        assert_eq!(without_escapes("\x1b[1m\x1b[31mhi\x1b[0m"), "hi");
+        assert_eq!(without_escapes("a\x1b[38;2;1;2;3mb\x1b[2J\x1b[Hc"), "abc");
         // Not whole sequences: left as they are.
-        assert_eq!(without_escapes("[31"), "[31");
-        assert_eq!(without_escapes("m"), "m");
-        assert_eq!(without_escapes("你[1m好"), "你好");
+        assert_eq!(without_escapes("\x1b[31"), "\x1b[31");
+        assert_eq!(without_escapes("\x1bm\x1b"), "\x1bm\x1b");
+        assert_eq!(without_escapes("你\x1b[1m好"), "你好");
     }
 }

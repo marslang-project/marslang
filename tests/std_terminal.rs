@@ -328,6 +328,14 @@ fn no_color_keeps_them_off_and_force_color_turns_them_on() {
 }
 
 #[test]
+fn force_color_zero_or_false_does_not_force() {
+    assert_eq!(run_program(SHOW_COLORS, &[("FORCE_COLOR", "0")]), "false false x\n");
+    assert_eq!(run_program(SHOW_COLORS, &[("FORCE_COLOR", "false")]), "false false x\n");
+    assert_eq!(run_program(SHOW_COLORS, &[("FORCE_COLOR", "FALSE")]), "false false x\n");
+    assert_eq!(run_program(SHOW_COLORS, &[("FORCE_COLOR", "true")]), "true false \x1b[1mx\x1b[0m\n");
+}
+
+#[test]
 fn empty_environment_variables_count_as_unset() {
     assert_eq!(run_program(SHOW_COLORS, &[("FORCE_COLOR", "")]), "false false x\n");
     assert_eq!(run_program(SHOW_COLORS, &[("NO_COLOR", ""), ("FORCE_COLOR", "")]), "false false x\n");

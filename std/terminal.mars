@@ -30,8 +30,9 @@ _colors = null;
 
         if (terminal.colors()){ out("in colour"); }
 
-    It is decided once, the first time it is needed. FORCE_COLOR, set and not
-    empty, turns colours on even when output is a file or a pipe. Otherwise
+    It is decided once, the first time it is needed. FORCE_COLOR, set to
+    anything but "", "0", or "false", turns colours on even when output is a
+    file or a pipe. Otherwise
     they are on when standard output is a terminal and NO_COLOR is not set
     (or is empty), and on Windows when the console takes ANSI codes.
     terminal.set_colors overrides the answer.
@@ -57,7 +58,9 @@ func set_colors(bool on){
 @Decorator.private
 func _detect(){
     force = os.env("FORCE_COLOR");
-    if (force != null and force != ""){
+    // FORCE_COLOR=0 and FORCE_COLOR=false mean "do not force", as in Node and
+    // most tools that read it.
+    if (force != null and force != "" and force != "0" and force.lower() != "false"){
         // Turns ANSI on in a Windows console; piped output needs nothing.
         native.enable_colors();
         ret true;
