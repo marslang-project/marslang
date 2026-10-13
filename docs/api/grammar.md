@@ -150,6 +150,10 @@ families inheriting from it. `Function` and `Family` are for parameters only.
   An `f` makes an f-string, `f"total {a + b}"`: each `{expression}` becomes its
   value as text, `{{` and `}}` are braces, and a string inside the braces uses
   the other quote, or `\"`.
+- **Lines**: a statement ends at `;`, `{`, or `}`, and also at the end of a
+  line, except inside `( )` or `[ ]`, where it goes on, so a long call, array,
+  or parameter list can be laid out over several lines. A bracket left open
+  before a `{` or `}` is reported on the line where the statement started.
 - **Limits**: one expression may nest at most 1,000 levels deep, counting
   parentheses, calls, and unary operators, and chain at most 10,000 operators
   in a row, as in `a + b + c`. Beyond either, compiling stops with an error,

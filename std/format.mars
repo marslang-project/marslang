@@ -1,0 +1,230 @@
+// std.format: numbers and values made ready to show: decimal places,
+// thousands, percentages, columns, tables, ordinals, and other bases.
+//
+// Rounding to decimal places is native (std/rs/format.rs), since it needs a
+// float's exact value; everything else is Marslang, below. Use these inside
+// f-strings: f"Total: {format.number(total, 2)}".
+takepkg rs.format = native;
+takepkg std.Decorator;
+takepkg std.strings;
+takepkg std.types;
+
+// Digits for every base up to 36.
+fixed _DIGITS (string) = "0123456789abcdefghijklmnopqrstuvwxyz";
+
+// ----- numbers -----
+
+@Decorator.docstring("""
+    The number rounded to places decimal places, every place written.
+
+        format.fixed(3.14159, 2)   // "3.14"
+        format.fixed(2, 2)         // "2.00"
+        format.fixed(2.5, 0)       // "2"
+
+    Rounding uses the number's exact value, so 2.675, which a float stores as
+    2.67499..., gives "2.67"; a value exactly halfway rounds to the even
+    digit. -0.001 gives "0.00", with no sign. places is 0 to 100.
+""")
+func fixed([int,longint,float] x, int places) => native.fixed(x, places);
+
+@Decorator.docstring("""
+    The number rounded to places decimal places, with commas between
+    thousands: the way to show money and counts.
+
+        format.number(1234567.891, 2)   // "1,234,567.89"
+        format.number(1500, 0)          // "1,500"
+""")
+func number([int,longint,float] x, int places) => _group(native.fixed(x, places));
+
+@Decorator.docstring("""
+    The number as string(x) writes it, with commas between thousands.
+
+        format.thousands(1234567)    // "1,234,567"
+        format.thousands(-9876.5)    // "-9,876.5"
+
+    A float so large or small that it is written with an exponent, such as
+    1e+21, is left as it is.
+""")
+func thousands([int,longint,float] x) => _group(string(x));
+
+@Decorator.docstring("""
+    A fraction as a percentage with places decimal places: 1.0 is "100%".
+
+        format.percent(0.256, 1)   // "25.6%"
+        format.percent(1, 0)       // "100%"
+""")
+func percent([int,longint,float] x, int places) => native.fixed(x * 100, places) + "%";
+
+@Decorator.docstring("""
+    The number in scientific notation, one digit before the point and places
+    after it, then the power of ten.
+
+        format.scientific(123456, 2)    // "1.23e+5"
+        format.scientific(0.00042, 1)   // "4.2e-4"
+""")
+func scientific([int,longint,float] x, int places) => native.scientific(x, places);
+
+// Commas between groups of three digits before the point.
+@Decorator.private
+func _group(string text){
+    if (text.contains("e") or text.contains("N") or text.contains("I")){ ret text; }
+    sign = "";
+    if (strings.starts_with(text, "-")){
+        sign = "-";
+        text = text.slice(1, text.len());
+    }
+    whole = text;
+    rest = "";
+    point = strings.find(text, ".");
+    if (point >= 0){
+        whole = text.slice(0, point);
+        rest = text.slice(point, text.len());
+    }
+    first = whole.len() % 3;
+    if (first == 0){ first = 3; }
+    pieces = arr(whole.slice(0, first));
+    for (at = first, at < whole.len(), at += 3){ pieces.add(whole.slice(at, at + 3)); }
+    ret sign + strings.join(pieces, ",") + rest;
+}
+
+// ----- columns and tables -----
+
+@Decorator.docstring("""
+    How many columns the value takes in a terminal, as text: most characters
+    take one, Chinese, Japanese, and Korean characters and most emoji take
+    two, and combining accents none. left, right, center, and table pad to
+    this width, so columns line up whatever the text.
+
+        format.width("Ada")    // 3
+        format.width("你好")   // 4
+""")
+func width(any value) => native.width(string(value));
+
+@Decorator.docstring("""
+    The value as text, with spaces after it to fill columns columns, as
+    format.width counts them; longer text is left whole.
+
+        out(format.left("Ada", 6) + "|")   // "Ada   |"
+""")
+func left(any value, int columns){
+    text = string(value);
+    ret text + _spaces(columns - native.width(text));
+}
+
+@Decorator.docstring("""
+    The value as text, with spaces before it to fill columns columns, so
+    numbers line up on the right; longer text is left whole.
+
+        out(format.right(42, 6))   // "    42"
+""")
+func right(any value, int columns){
+    text = string(value);
+    ret _spaces(columns - native.width(text)) + text;
+}
+
+@Decorator.docstring("The value as text, centred in columns columns; an odd space goes after it.")
+func center(any value, int columns){
+    text = string(value);
+    gap = columns - native.width(text);
+    if (gap <= 0){ ret text; }
+    before = (gap - gap % 2) / 2;
+    ret _spaces(before) + text + _spaces(gap - before);
+}
+
+@Decorator.private
+func _spaces(int count){
+    if (count <= 0){ ret ""; }
+    ret strings.repeated(" ", count);
+}
+
+@Decorator.docstring("""
+    Rows of values as a table of text, one line per row, with each column as
+    wide as its widest cell, as format.width counts it, and two spaces
+    between columns. Numbers line up
+    on the right and everything else on the left.
+
+        out(format.table(arr(
+            arr("Name", "Age"),
+            arr("Ada", 36),
+            arr("Grace", 85)
+        )));
+
+    prints
+
+        Name   Age
+        Ada     36
+        Grace   85
+
+    A row may have fewer cells than others. Lines end without spaces.
+""")
+func table(array rows){
+    widths = arr();
+    for (row, rows){
+        if (types.kind(row) != "array"){ err(TypeError, "format.table needs an array of rows, each an array, got a " + types.kind(row)); }
+        for (i = 0, i < row.len(), i++){
+            size = native.width(string(row[i]));
+            if (i == widths.len()){ widths.add(size); } elif (size > widths[i]){ widths.modify(i, size); }
+        }
+    }
+    lines = arr();
+    for (row, rows){
+        cells = arr();
+        for (i = 0, i < row.len(), i++){
+            cell = row[i];
+            if (types.is_number(cell)){ cells.add(right(cell, widths[i])); } else { cells.add(left(cell, widths[i])); }
+        }
+        lines.add(strings.trim_end(strings.join(cells, "  ")));
+    }
+    ret strings.join(lines, "\n");
+}
+
+// ----- whole numbers -----
+
+@Decorator.docstring("""
+    The number with its English ordinal ending.
+
+        format.ordinal(1)    // "1st"
+        format.ordinal(22)   // "22nd"
+        format.ordinal(13)   // "13th"
+""")
+func ordinal([int,longint] n){
+    last_two = n % 100;
+    if (last_two < 0){ last_two = -last_two; }
+    last = last_two % 10;
+    ending = "th";
+    if (last_two < 11 or last_two > 13){
+        if (last == 1){ ending = "st"; } elif (last == 2){ ending = "nd"; } elif (last == 3){ ending = "rd"; }
+    }
+    ret string(n) + ending;
+}
+
+@Decorator.docstring("""
+    The number in hexadecimal, in lower case, with no prefix: 255 is "ff".
+    Negative numbers start with -. Write "0x" + format.hex(n) for the prefix.
+""")
+func hex([int,longint] n) => base(n, 16);
+
+@Decorator.docstring("The number in binary, with no prefix: 10 is \"1010\". Negative numbers start with -.")
+func binary([int,longint] n) => base(n, 2);
+
+@Decorator.docstring("""
+    The number written in another base, from 2 to 36, using the digits 0-9
+    and then the letters a-z: format.base(35, 36) is "z". Negative numbers
+    start with -; another base raises RangeError.
+""")
+func base([int,longint] n, int radix){
+    if (radix < 2 or radix > 36){ err(RangeError, "format.base needs a base from 2 to 36, got " + string(radix)); }
+    if (n == 0){ ret "0"; }
+    // Counted on the negative side, which has room for every longint, so
+    // the smallest one needs no special case. % keeps the sign of n.
+    rest = n;
+    if (n > 0){ rest = -n; }
+    text = "";
+    while (rest != 0){
+        remainder = rest % radix;
+        text = _DIGITS[-remainder] + text;
+        rest = (rest - remainder) / radix;
+    }
+    if (n < 0){ ret "-" + text; }
+    ret text;
+}

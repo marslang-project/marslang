@@ -288,16 +288,31 @@ fn preprocess(input: &str) -> PResult<Vec<Line>> {
     let mut quote = None;
     let mut escaped = false;
     let mut depth = 0usize;
+    // Whether the statement being gathered went on past a line break.
+    let mut continued = false;
     for ch in clean.chars() {
         if ch == LINE_MARK {
             source += 1;
             continue;
         }
         if ch == '\n' {
-            lines.push(Line { text: std::mem::take(&mut text), number });
             source += 1;
+            // Inside ( ) or [ ] the statement goes on, so a long call, an
+            // array, or a parameter list can be laid out over several lines.
+            if depth > 0 && quote.is_none() {
+                text.push(' ');
+                continued = true;
+                continue;
+            }
+            lines.push(Line { text: std::mem::take(&mut text), number });
+            continued = false;
             number = source;
             continue;
+        }
+        // No brace belongs inside ( ) or [ ], so one there, after a line
+        // break, means a bracket was left open on an earlier line.
+        if continued && depth > 0 && quote.is_none() && matches!(ch, '{' | '}') {
+            return Err(format!("line {number}: a '(' or '[' on this line is never closed"));
         }
         if text.is_empty() { number = source; }
         text.push(ch);
@@ -313,6 +328,7 @@ fn preprocess(input: &str) -> PResult<Vec<Line>> {
             ')' | ']' => depth = depth.saturating_sub(1),
             '{' | '}' | ';' if depth == 0 => {
                 lines.push(Line { text: std::mem::take(&mut text), number });
+                continued = false;
             }
             _ => {}
         }

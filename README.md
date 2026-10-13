@@ -119,7 +119,7 @@ Implemented:
 - raw strings, `r"..."`, in which a backslash is only a backslash, and
   f-strings, `f"Hello {name}"`
 - `date`, `datetime`, and `duration` kinds with time zones and daylight saving
-- standard packages for math, strings, regular expressions, random numbers, containers, algorithms, statistics, files, paths, CSV, `.env`, INI, and TOML (`std.file`), JSON, the command line, the environment (`std.os`, `std.sys`), and object identity (`std.memory`); see [docs/api](docs/api/README.md)
+- standard packages for math, strings, regular expressions, formatting numbers and tables, random numbers, containers, algorithms, statistics, files, paths, CSV, `.env`, INI, and TOML (`std.file`), JSON, the command line, the environment (`std.os`, `std.sys`), and object identity (`std.memory`); see [docs/api](docs/api/README.md)
 - `fasle` accepted as `false`
 
 Not yet:

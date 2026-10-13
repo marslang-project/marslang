@@ -22,6 +22,7 @@ notes elsewhere under `docs/` remain local.
 - [std.random](std-random.md): random numbers, choices, shuffles, samples, weights, and seeds.
 - [std.strings](std-strings.md): splitting, searching, trimming, case, and padding.
 - [std.regex](std-regex.md): regular expressions: checking, finding, replacing, and splitting by pattern.
+- [std.format](std-format.md): decimal places, thousands, percentages, aligned columns, and tables.
 - [std.types](std-types.md): a value's kind, family checks.
 - [std.memory](std-memory.md): addresses, object identity, and the cycle collector.
 - [std.file](std-file.md): reading, writing, listing, copying, moving, and removing files and directories.

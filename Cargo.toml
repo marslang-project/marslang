@@ -24,6 +24,9 @@ toml = { version = "1.1.6", features = ["preserve_order"] }
 # pattern an error is.
 regex = "1.13.1"
 regex-syntax = "0.8.11"
+# std.format: how many terminal columns text takes, so tables line up when
+# they hold Chinese, Japanese, Korean, or emoji, which take two.
+unicode-width = "0.2.2"
 
 [target.'cfg(not(windows))'.dependencies]
 # Elsewhere jiff reads the system time zone itself (TZ, /etc/localtime).

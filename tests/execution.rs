@@ -1724,7 +1724,7 @@ fn triple_quoted_strings_span_lines() {
         "first\n  \"second\"\tand\tescapes\nthird\n0\nab\n");
     // Lines after a multi-line string keep their numbers.
     let error = marslang::compile("func m{\n    s = \"\"\"a\nb\nc\"\"\";\n    out(1 +;\n}").unwrap_err();
-    assert!(error.contains("line 5: expected expression"), "{error}");
+    assert!(error.contains("line 5: a '(' or '[' on this line is never closed"), "{error}");
     let error = marslang::compile("func m{\n    s = \"\"\"open;\n}").unwrap_err();
     assert!(error.contains("line 2: unterminated string starting at column 9"), "{error}");
 }
@@ -2636,4 +2636,79 @@ fn f_string_mistakes_are_explained() {
         let error = marslang::compile(&format!("func m{{\n    a = 1;\n    {source}\n}}")).unwrap_err();
         assert!(error.contains(message), "{source}: expected {message}, got {error}");
     }
+}
+
+#[test]
+fn std_format_writes_numbers() {
+    executes(r#"
+        takepkg std.format;
+        func m{
+            out(format.fixed(3.14159, 2), format.fixed(2, 2), format.fixed(2.5, 0), format.fixed(3.5, 0), format.fixed(2.675, 2), format.fixed(-0.001, 2));
+            out(format.fixed(float("inf"), 2), format.fixed(9007199254740993, 1), format.fixed(-7, 0));
+            out(format.number(1234567.891, 2), format.number(1500, 0), format.number(-999, 0), format.number(-1000, 1), format.number(0.5, 2));
+            out(format.thousands(1234567), format.thousands(-9876.5), format.thousands(1e21), format.thousands(123), format.thousands(9223372036854775807));
+            out(format.percent(0.256, 1), format.percent(1, 0), format.scientific(123456, 2), format.scientific(0.00042, 1), format.scientific(-0.0, 1));
+            out(format.ordinal(1), format.ordinal(2), format.ordinal(3), format.ordinal(4), format.ordinal(11), format.ordinal(12), format.ordinal(13), format.ordinal(21), format.ordinal(22), format.ordinal(111), format.ordinal(-1), format.ordinal(0));
+            out(format.hex(255), format.binary(10), format.base(35, 36), format.hex(-255), format.hex(-9223372036854775807 - 1), format.hex(9223372036854775807), format.base(0, 2));
+            price = 1234.5;
+            out(f"Total: {format.number(price, 2)} ({format.percent(0.075, 1)} tax)");
+        }"#,
+        concat!(
+            "3.14 2.00 2 4 2.67 0.00\n",
+            "Infinity 9007199254740993.0 -7\n",
+            "1,234,567.89 1,500 -999 -1,000.0 0.50\n",
+            "1,234,567 -9,876.5 1e+21 123 9,223,372,036,854,775,807\n",
+            "25.6% 100% 1.23e+5 4.2e-4 0.0e+0\n",
+            "1st 2nd 3rd 4th 11th 12th 13th 21st 22nd 111th -1st 0th\n",
+            "ff 1010 z -ff -8000000000000000 7fffffffffffffff 0\n",
+            "Total: 1,234.50 (7.5% tax)\n",
+        ));
+}
+
+#[test]
+fn std_format_lines_up_columns() {
+    executes(r#"
+        takepkg std.format;
+        func m{
+            out(format.left("Ada", 6) + "|", format.right(42, 6) + "|", format.center("ab", 7) + "|", format.left("toolong", 3) + "|");
+            out(format.width("Ada"), format.width("你好"), format.width("👨‍👩‍👧‍👦"), format.width("é"), format.width(12345));
+            out(format.right("你好", 6) + "|");
+            out(format.table(arr(arr("Name", "City", "Age"), arr("Ada", "London", 36), arr("李华", "北京", 20), arr("Grace"))));
+            out(format.table(arr()) == "");
+        }"#,
+        concat!(
+            "Ada   |     42|   ab   | toolong|\n",
+            "3 4 2 1 5\n",
+            "  你好|\n",
+            "Name   City    Age\n",
+            "Ada    London   36\n",
+            "李华   北京     20\n",
+            "Grace\n",
+            "true\n",
+        ));
+}
+
+#[test]
+fn std_format_mistakes_are_explained() {
+    for (source, message) in [
+        ("format.fixed(1.5, -1);", "format.fixed takes 0 to 100 decimal places, got -1"),
+        ("format.fixed(1.5, 101);", "format.fixed takes 0 to 100 decimal places, got 101"),
+        ("format.fixed(\"1.5\", 2);", "TypeError"),
+        ("format.base(10, 1);", "format.base needs a base from 2 to 36, got 1"),
+        ("format.base(10, 37);", "format.base needs a base from 2 to 36, got 37"),
+        ("format.table(arr(1, 2));", "format.table needs an array of rows, each an array, got a int"),
+    ] {
+        runtime_error(&format!("takepkg std.format;\nfunc m{{ {source} }}"), message);
+    }
+}
+
+#[test]
+fn statements_go_on_over_lines_inside_brackets() {
+    executes("func add(int a,\n        int b) => a + b;\nfunc m{\n    out(1 +\n        2);\n    x = arr(\n        1,   // one\n        2\n    );\n    out(x, add(\n        3, 4));\n}",
+        "3\n[1, 2] 7\n");
+    // Lines after keep their numbers, and a bracket left open says where it was.
+    let error = marslang::compile("func m{\n    x = arr(\n        1);\n    out(nope);\n}").unwrap_err();
+    assert!(error.contains("line 4: unknown name 'nope'"), "{error}");
+    let error = marslang::compile("func m{\n    out(1,\n    y = 2;\n}").unwrap_err();
+    assert!(error.contains("line 2: a '(' or '[' on this line is never closed"), "{error}");
 }
