@@ -170,10 +170,12 @@ pub struct Handler {
 
 #[derive(Debug, Clone)]
 pub enum Expr {
-    /// Numeric literal source text; resolution lowers it to Int/Long/Float.
+    /// Numeric literal source text; resolution lowers it to Int/Long/Big/Float.
     Number(String),
     Int(i64),
     Long(i64),
+    /// A whole-number literal beyond longint.
+    Big(num_bigint::BigInt),
     Float(f64),
     /// Decoded string contents (escapes already applied).
     String(String),

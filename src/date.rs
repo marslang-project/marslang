@@ -167,6 +167,8 @@ fn number(value: &Value, what: &str) -> RResult<f64> {
         Value::Int(n) | Value::Long(n) => Ok(*n as f64),
         Value::Float(f) if f.is_finite() => Ok(*f),
         Value::Float(_) => range_err(format!("{what} must be finite")),
+        // Any bigint a duration can use is within a float's range.
+        Value::Big(b) => crate::bigint::nearest_float(b),
         other => type_err(format!("{what} must be a number, not {} {}", article(other.type_name()), other.type_name())),
     }
 }

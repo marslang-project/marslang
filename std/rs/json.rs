@@ -281,11 +281,19 @@ impl Parser {
         }
         let text: String = self.chars[start..self.at].iter().collect();
         if whole {
-            // The same rule as literals in a program: int when it fits in 32 bits.
+            // The same rule as literals in a program: int when it fits in 32
+            // bits, longint in 64, and bigint beyond.
             return match text.parse::<i64>() {
                 Ok(n) if i32::try_from(n).is_ok() => Ok(Value::Int(n)),
                 Ok(n) => Ok(Value::Long(n)),
-                Err(_) => range_err(format!("the JSON number {text} is beyond longint; write it as a string to keep every digit")),
+                Err(_) => {
+                    let (negative, digits) = match text.strip_prefix('-') { Some(rest) => (true, rest), None => (false, text.as_str()) };
+                    match crate::bigint::from_decimal(digits, negative) {
+                        Some(n) => Ok(Value::Big(std::rc::Rc::new(n))),
+                        None => range_err(format!("the JSON number {} is too large: a bigint holds at most {} bits, about a million digits",
+                            crate::bigint::quote(&text), crate::bigint::MAX_BITS)),
+                    }
+                }
             };
         }
         let value: f64 = text.parse().expect("the digits were checked");
@@ -321,6 +329,8 @@ impl Writer {
             Value::Null => self.out.push_str("null"),
             Value::Bool(b) => self.out.push_str(if *b { "true" } else { "false" }),
             Value::Int(n) | Value::Long(n) => { let _ = write!(self.out, "{n}"); }
+            // Every digit: JSON numbers have no size limit, though some readers round.
+            Value::Big(n) => { let _ = write!(self.out, "{n}"); }
             Value::Float(f) if f.is_finite() => {
                 // {:?} is the shortest text that reads back as the same float
                 // and always has '.' or 'e', so 1.0 stays a float when read back.

@@ -16,8 +16,9 @@ func m{
 
 Every result is a float, because an average is rarely a whole number. Floats
 print without a trailing `.0`, so `5` above is the float `5.0`. The numbers may
-be `int`, `longint`, or `float` in any mixture; anything else raises
-`TypeError`, and too few numbers raises `RangeError`.
+be `int`, `longint`, `float`, or `bigint` in any mixture, each taken as the
+nearest float; anything else raises `TypeError`, and too few numbers raises
+`RangeError`, as does a bigint beyond a float's range.
 
 ## What is typical
 

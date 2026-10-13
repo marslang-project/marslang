@@ -31,15 +31,15 @@ func m{
 | object | `map`, keeping the order of its keys |
 | array | `array` |
 | string | `string` |
-| whole number | `int` when it fits in 32 bits, otherwise `longint` |
+| whole number | `int` when it fits in 32 bits, `longint` in 64, otherwise [`bigint`](std-bigint.md) |
 | number with `.` or an exponent | `float` |
 | `true`, `false`, `null` | themselves |
 
 Whole numbers follow the rule for number literals in a program, so `3000000000`
-is a `longint`. A whole number beyond `longint` raises `RangeError` rather than
-silently losing digits; a service that sends such IDs usually sends them as
-strings for that reason. A key that appears twice keeps its first position and
-its last value.
+is a `longint` and `123456789012345678901234567890` a `bigint`, with every digit
+kept. Only a number of more than about a million digits, beyond a bigint's
+limit, raises `RangeError`. A key that appears twice keeps its first position
+and its last value.
 
 Reading is strict, as RFC 8259 says: no comments, no trailing commas, no single
 quotes, no `NaN` or `Infinity`, and no leading zeros. Text that is not JSON
@@ -71,7 +71,9 @@ out(json.pretty(json.parse("{\"a\": [1, {}], \"b\": []}")));
 
 Floats are written as the shortest text that reads back as the same number, and
 always with a `.` or an exponent, so `1.0` is written `1.0` and stays a float
-when read back. Strings are written as they are, with quotes, backslashes, and
+when read back. A bigint is written as a number with every digit, and reads
+back as the same bigint; some other readers, JavaScript's among them, round
+whole numbers beyond 2^53, which is why many services send such IDs as strings. Strings are written as they are, with quotes, backslashes, and
 control characters escaped; other characters, such as `é` or `😀`, are written
 directly.
 

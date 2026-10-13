@@ -262,12 +262,14 @@ impl Walker<'_> {
                 match text.parse::<i64>() {
                     Ok(n) if n <= i32::MAX as i64 => "int",
                     Ok(_) => "longint",
-                    Err(_) => return None,
+                    // Only digits, so it failed by being too large.
+                    Err(_) => "bigint",
                 }.to_string()
             }
             Expr::Number(_) | Expr::Float(_) => "float".into(),
             Expr::Int(_) => "int".into(),
             Expr::Long(_) => "longint".into(),
+            Expr::Big(_) => "bigint".into(),
             Expr::String(_) | Expr::Template(_) => "string".into(),
             Expr::Bool(_) => "bool".into(),
             Expr::Typed { ty, .. } => ty.clone(),
@@ -291,7 +293,7 @@ impl Walker<'_> {
                     "set" | "s" => "set".into(),
                     "pair" | "p" => "pair".into(),
                     "map" | "dict" => "map".into(),
-                    "int" | "longint" | "float" | "string" => name.clone(),
+                    "int" | "longint" | "float" | "bigint" | "string" => name.clone(),
                     "in" | "inln" | "chr" => "string".into(),
                     "ord" => "int".into(),
                     "date" | "datetime" | "duration" => name.clone(),

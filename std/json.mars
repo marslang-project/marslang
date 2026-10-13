@@ -12,9 +12,9 @@ takepkg std.file;
 
     Objects become maps, keeping their key order; arrays become arrays;
     true, false, and null stay themselves. A whole number is an int when it
-    fits in 32 bits and a longint when it fits in 64; one with a fraction or
-    exponent is a float. Text that is not JSON raises SyntaxError with the line
-    and column; a number beyond longint raises RangeError.
+    fits in 32 bits, a longint when it fits in 64, and a bigint beyond; one
+    with a fraction or exponent is a float. Text that is not JSON raises
+    SyntaxError with the line and column.
 """)
 func parse(string text) => native.parse(text);
 

@@ -39,6 +39,12 @@ hmac = "0.13.0"
 crc32fast = "1.5.2"
 # std.http: HTTP(S) over rustls with ring (not aws-lc-rs, which needs cmake) and built-in root certificates; SOCKS proxies too.
 ureq = { version = "3.4.2", default-features = false, features = ["rustls", "socks-proxy"] }
+# bigint: whole numbers of any size, and their arithmetic, in pure Rust.
+num-bigint = "0.5.1"
+# bigint: num-bigint's conversions to and from ints and floats, and its zero, one, and sign.
+num-traits = "0.2.19"
+# bigint: num-bigint's division with remainder, and whether a number is odd.
+num-integer = "0.1.47"
 
 [target.'cfg(not(windows))'.dependencies]
 # Elsewhere jiff reads the system time zone itself (TZ, /etc/localtime).

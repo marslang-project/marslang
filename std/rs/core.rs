@@ -18,7 +18,7 @@ pub fn package() -> Value {
                 None => type_err(format!("{} is not an error family; error families inherit from Error", family.name)),
             }
         })
-        // core.kind(value): "int", "longint", "float", "string", "bool", "null", "array", ...
+        // core.kind(value): "int", "longint", "float", "bigint", "string", "bool", "null", "array", ...
         .function("kind", 1, |args| Ok(Value::str(args[0].type_name())))
         // Family name of an instance, or of a family itself, or null.
         .function("family_name", 1, |args| Ok(match &args[0] {

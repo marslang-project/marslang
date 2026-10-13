@@ -111,7 +111,7 @@ A lambda's body is a whole expression, so it extends as far as it can:
 
 ```text
 type         = simple | "[" type { "," type } "]" | collection ;
-simple       = "int" | "longint" | "float" | "string" | "bool" | "any"
+simple       = "int" | "longint" | "float" | "bigint" | "string" | "bool" | "any"
              | "date" | "datetime" | "duration"
              | "Function" | "Family" | NAME | NAME "." NAME ;
 collection   = ( "array" | "set" ) [ "[" type "]" ]
@@ -137,10 +137,14 @@ families inheriting from it. `Function` and `Family` are for parameters only.
   `repeat` `for` `break` `continue` `run` `handle` `then` `fixed` `hot` `cold`
   `and` `or` `not` `also` `true` `false` `fasle` `null` `me`.
 - **Numbers**: `42`, `3.5`, `1e9`, `2.5E-3`. A whole number is an `int` when it
-  fits in 32 bits (-2,147,483,648 to 2,147,483,647) and a `longint` otherwise,
-  so `3000000000 + 1` is the longint `3000000001`; one with a `.` or an
-  exponent is a `float`. There are no hexadecimal, binary, or digit-separator
-  forms, and a leading `-` is the unary operator.
+  fits in 32 bits (-2,147,483,648 to 2,147,483,647), a `longint` when it fits
+  in 64 bits, and a [`bigint`](std-bigint.md) otherwise, so `3000000000 + 1` is
+  the longint `3000000001` and `9223372036854775808` is a bigint; one with a `.`
+  or an exponent is a `float`. A bigint literal may have up to about a million
+  digits; a longer one raises `RangeError` when it is reached. There are no
+  hexadecimal, binary, or digit-separator forms, and a leading `-` is the unary
+  operator, though `-` before a whole number is read with it, so
+  `-2147483648` is an int and `-9223372036854775808` a longint.
 - **Strings**: `"..."`, `'...'`, and `"""..."""`, which may span lines and
   contain `"`. Escapes: `\n` `\r` `\t` `\b` `\f` `\v` `\0`, `\xHH`, `\uHHHH`,
   `\u{H...}`, and a backslash before any other character stands for that

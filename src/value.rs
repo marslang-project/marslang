@@ -22,6 +22,10 @@ pub enum Value {
     Long(i64),
     /// `float` kind, retained even for integral values such as `1.0`.
     Float(f64),
+    /// `bigint` kind: a whole number of any size (see `crate::bigint`), boxed
+    /// so that `Value` stays as small as it was. Results stay bigints even
+    /// when they are small.
+    Big(Rc<num_bigint::BigInt>),
     Str(Rc<str>),
     Array(Rc<Array>),
     Set(Rc<Set>),
@@ -39,11 +43,11 @@ pub enum Value {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum NumKind { Int, Long, Float }
+pub enum NumKind { Int, Long, Float, Big }
 
 impl NumKind {
     pub fn name(self) -> &'static str {
-        match self { NumKind::Int => "int", NumKind::Long => "longint", NumKind::Float => "float" }
+        match self { NumKind::Int => "int", NumKind::Long => "longint", NumKind::Float => "float", NumKind::Big => "bigint" }
     }
 }
 
@@ -55,6 +59,7 @@ impl Value {
             Value::Int(_) => Some(NumKind::Int),
             Value::Long(_) => Some(NumKind::Long),
             Value::Float(_) => Some(NumKind::Float),
+            Value::Big(_) => Some(NumKind::Big),
             _ => None,
         }
     }
@@ -69,6 +74,7 @@ impl Value {
             Value::Null | Value::Bool(false) => false,
             Value::Int(0) | Value::Long(0) => false,
             Value::Float(f) => *f != 0.0,
+            Value::Big(b) => !num_traits::Zero::is_zero(b.as_ref()),
             Value::Duration(d) => !d.is_zero(),
             _ => true,
         }
@@ -77,7 +83,7 @@ impl Value {
     pub fn type_name(&self) -> &'static str {
         match self {
             Value::Null => "null", Value::Bool(_) => "bool", Value::Int(_) => "int",
-            Value::Long(_) => "longint", Value::Float(_) => "float", Value::Str(_) => "string",
+            Value::Long(_) => "longint", Value::Float(_) => "float", Value::Big(_) => "bigint", Value::Str(_) => "string",
             Value::Array(_) => "array", Value::Set(_) => "set", Value::Map(_) => "map",
             Value::Pair(_) => "pair", Value::Instance(_) => "instance", Value::Func(_) => "function",
             Value::Package(_) => "package", Value::Date(_) => "date", Value::DateTime(_) => "datetime",
@@ -109,8 +115,8 @@ impl Value {
     }
 }
 
-/// Equality: numbers compare by exact value across int, longint, and float;
-/// strings by contents; objects by identity.
+/// Equality: numbers compare by exact value across int, longint, float, and
+/// bigint; strings by contents; objects by identity.
 pub fn equal(a: &Value, b: &Value) -> bool {
     match (a, b) {
         (Value::Null, Value::Null) => true,
@@ -134,7 +140,8 @@ pub fn compare_numbers(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
         (Value::Float(x), Value::Float(y)) => x.partial_cmp(y),
         (Value::Int(i) | Value::Long(i), Value::Float(f)) => compare_integer_float(*i, *f),
         (Value::Float(f), Value::Int(i) | Value::Long(i)) => compare_integer_float(*i, *f).map(|o| o.reverse()),
-        _ => None,
+        // Last, so that comparing ints costs nothing more than before.
+        _ => crate::bigint::compare(a, b),
     }
 }
 
@@ -155,6 +162,9 @@ pub enum Key {
     Null, Bool(bool), Integer(i64), Num(u64), Str(Rc<str>), Obj(usize),
     /// A day as year * 10000 + month * 100 + day; a moment and a length in nanoseconds.
     Date(i32), Moment(i128), Length(i128),
+    /// A bigint beyond longint that no float equals; others take the key of
+    /// the longint or float they equal (`crate::bigint::key`).
+    Big(Rc<num_bigint::BigInt>),
 }
 
 impl Key {
@@ -167,6 +177,7 @@ impl Key {
                 Key::Integer(*f as i64)
             }
             Value::Float(f) => Key::Num(if f.is_nan() { f64::NAN.to_bits() } else { f.to_bits() }),
+            Value::Big(b) => crate::bigint::key(b),
             Value::Str(s) => Key::Str(s.clone()),
             Value::Date(d) => Key::Date(d.year() as i32 * 10_000 + d.month() as i32 * 100 + d.day() as i32),
             Value::DateTime(t) => Key::Moment(t.timestamp().as_nanosecond()),
@@ -294,7 +305,7 @@ impl Family {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Builtin {
     Out, Slout, In, Inln, Arr, Set, Pair, Map, Int, Long, Float, String, Err, LastErr, Ord, Chr,
-    Date, DateTime, Duration,
+    Date, DateTime, Duration, Bigint,
 }
 
 impl Builtin {
@@ -303,7 +314,7 @@ impl Builtin {
             "out" => Builtin::Out, "slout" => Builtin::Slout, "in" => Builtin::In, "inln" => Builtin::Inln,
             "arr" | "a" => Builtin::Arr, "set" | "s" => Builtin::Set, "pair" | "p" => Builtin::Pair,
             "map" | "dict" => Builtin::Map, "int" => Builtin::Int, "longint" => Builtin::Long,
-            "float" => Builtin::Float, "string" => Builtin::String,
+            "float" => Builtin::Float, "bigint" => Builtin::Bigint, "string" => Builtin::String,
             "err" => Builtin::Err, "lasterr" => Builtin::LastErr,
             "ord" => Builtin::Ord, "chr" => Builtin::Chr,
             "date" => Builtin::Date, "datetime" => Builtin::DateTime, "duration" => Builtin::Duration,
@@ -610,6 +621,7 @@ fn write_value(value: &Value, out: &mut String, seen: &mut Vec<usize>, nested: b
         Value::Null => out.push_str("null"),
         Value::Bool(b) => { let _ = write!(out, "{b}"); }
         Value::Int(i) | Value::Long(i) => { let _ = write!(out, "{i}"); }
+        Value::Big(b) => { let _ = write!(out, "{b}"); }
         Value::Float(f) if *f == 0.0 && f.is_sign_negative() => out.push_str("-0"),
         Value::Float(f) => out.push_str(&format_float(*f)),
         Value::Date(d) => out.push_str(&crate::date::show_date(d)),

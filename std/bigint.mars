@@ -1,0 +1,190 @@
+// std.bigint: whole numbers of any size. The bigint kind, with its operators
+// and conversions, is built into the language (src/bigint.rs); this package
+// adds floor division, gcd and lcm, powers, factorials, square roots, signs,
+// and other bases. Square roots and bases are native (std/rs/bigint.rs),
+// being far too slow digit by digit in Marslang; the rest is Marslang.
+//
+// Importing this package names it bigint in your file, so there the built-in
+// bigint(x) is bigint.of(x); `takepkg std.bigint = big;` keeps the bare name.
+takepkg rs.bigint = native;
+takepkg std.Decorator;
+
+// The largest n whose factorial is within a bigint's size limit of 3321929
+// bits: 205022! has 3321926 of them.
+fixed _FACTORIAL_LIMIT = 205022;
+
+@Decorator.docstring("""
+    The built-in bigint(value), for files that import std.bigint, where the
+    name bigint is this package.
+
+        takepkg std.bigint;
+        out(bigint.of("123456789012345678901234567890") + 1);   // 123456789012345678901234567891
+
+    value is an int, longint, bigint, whole float, or string of decimal digits.
+""")
+func of(any value) => bigint(value);
+
+@Decorator.docstring("""
+    base to the power exponent, as a bigint. exponent must be 0 or more.
+
+        out(bigint.pow(2, 100));   // 1267650600228229401496703205376
+
+    The same as bigint(base) ** exponent, except that a negative exponent
+    raises RangeError instead of giving a float.
+""")
+func pow([int,longint,bigint] base, [int,longint,bigint] exponent){
+    if (exponent < 0){ err(RangeError, "bigint.pow needs an exponent of 0 or more, got " + string(exponent)); }
+    ret bigint(base) ** exponent;
+}
+
+@Decorator.private
+func _gcd(bigint a, bigint b){
+    // Euclid: the remainder shrinks at least as fast as the Fibonacci numbers.
+    while (b != 0){
+        rest = a % b;
+        a = b;
+        b = rest;
+    }
+    ret _abs(a);
+}
+
+@Decorator.private
+func _abs(bigint n){
+    if (n < 0){ ret -n; }
+    ret n;
+}
+
+@Decorator.docstring("""
+    The greatest common divisor of a and b: the largest bigint that divides
+    both. Never negative; gcd(0, 0) is 0.
+
+        out(bigint.gcd(bigint(2) ** 100, bigint(6) ** 50));   // 1125899906842624
+""")
+func gcd([int,longint,bigint] a, [int,longint,bigint] b) => _gcd(a, b);
+
+@Decorator.docstring("""
+    The least common multiple of a and b: the smallest bigint both divide.
+    Never negative; 0 when either is 0.
+
+        out(bigint.lcm(4, 6), bigint.lcm(-3, 5));   // 12 15
+""")
+func lcm([int,longint,bigint] a, [int,longint,bigint] b) => _lcm(a, b);
+
+@Decorator.private
+func _lcm(bigint a, bigint b){
+    if (a == 0 or b == 0){ ret bigint(0); }
+    ret _abs(a / _gcd(a, b) * b);
+}
+
+@Decorator.docstring("""
+    The integer square root of n: the largest bigint whose square is at most
+    n. A negative n raises RangeError.
+
+        out(bigint.sqrt(bigint(10) ** 40 + 12345));   // 100000000000000000000
+""")
+func sqrt([int,longint,bigint] n) => native.sqrt(bigint(n));
+
+@Decorator.docstring("""
+    n!, the product 1 * 2 * ... * n, as a bigint. n is from 0 to 205022,
+    whose factorial has about a million digits; a negative or larger n
+    raises RangeError.
+
+        out(bigint.factorial(25));   // 15511210043330985984000000
+""")
+func factorial([int,longint,bigint] n){
+    if (n < 0){ err(RangeError, "bigint.factorial needs n of 0 or more, got " + string(n)); }
+    if (n > _FACTORIAL_LIMIT){
+        err(RangeError, "bigint.factorial(n) has more than a million digits for n above 205022, beyond a bigint's limit");
+    }
+    if (n < 2){ ret bigint(1); }
+    ret _product(2, int(n));
+}
+
+// The product of low to high, halving the range so that most multiplications
+// are of two numbers of similar size: much faster for large n than
+// multiplying one number in at a time.
+@Decorator.private
+func _product(int low, int high){
+    if (high - low < 16){
+        result = bigint(low);
+        for (i = low + 1, i <= high, i++){ result = result * i; }
+        ret result;
+    }
+    middle = (low + high - (low + high) % 2) / 2;
+    ret _product(low, middle) * _product(middle + 1, high);
+}
+
+@Decorator.docstring("""
+    a divided by b, rounded down, toward negative infinity, as a bigint. A
+    zero b raises RangeError.
+
+        out(bigint.divide(7, 2), bigint.divide(-7, 2));   // 3 -4
+
+    bigint.remainder gives what is left over. The / operator instead gives a
+    float when the division is not exact.
+""")
+func divide([int,longint,bigint] a, [int,longint,bigint] b) => _divide(a, b);
+
+@Decorator.private
+func _divide(bigint a, bigint b){
+    if (b == 0){ err(RangeError, "division by zero"); }
+    rest = a % b;
+    quotient = (a - rest) / b;
+    if (rest != 0 and (rest < 0) != (b < 0)){ ret quotient - 1; }
+    ret quotient;
+}
+
+@Decorator.docstring("""
+    What is left of a after bigint.divide(a, b): a - b * bigint.divide(a, b),
+    as a bigint with the sign of b. A zero b raises RangeError.
+
+        out(bigint.remainder(7, 2), bigint.remainder(-7, 2));   // 1 1
+
+    The % operator keeps the sign of a instead: -7 % 2 is -1.
+""")
+func remainder([int,longint,bigint] a, [int,longint,bigint] b) => _remainder(a, b);
+
+@Decorator.private
+func _remainder(bigint a, bigint b){
+    if (b == 0){ err(RangeError, "division by zero"); }
+    rest = a % b;
+    if (rest != 0 and (rest < 0) != (b < 0)){ ret rest + b; }
+    ret rest;
+}
+
+@Decorator.docstring("""
+    The number text is written as in a base from 2 to 36, as a bigint. The
+    letters a to z are the digits from 10 up, in either case, and a - in
+    front makes it negative.
+
+        out(bigint.parse("ff", 16), bigint.parse("-101", 2));   // 255 -5
+
+    Anything else in the text, even a space or 0x, raises SyntaxError.
+""")
+func parse(string text, int base) => native.parse(text, base);
+
+@Decorator.docstring("""
+    The digits of n in a base from 2 to 36, as a string: lower-case letters
+    for the digits from 10 up, and a - in front of a negative number.
+
+        out(bigint.digits(255, 16), bigint.digits(-5, 2));   // ff -101
+""")
+func digits([int,longint,bigint] n, int base) => native.digits(bigint(n), base);
+
+@Decorator.docstring("""
+    The absolute value of n, as a bigint.
+
+        out(bigint.abs(-5));   // 5
+""")
+func abs([int,longint,bigint] n) => _abs(n);
+
+@Decorator.docstring("""
+    -1, 0, or 1, as a bigint, by the sign of n.
+
+        out(bigint.sign(-12345678901234567890));   // -1
+""")
+func sign([int,longint,bigint] n){
+    if (n < 0){ ret bigint(-1); }
+    if (n > 0){ ret bigint(1); }
+    ret bigint(0);
+}

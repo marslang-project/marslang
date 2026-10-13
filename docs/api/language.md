@@ -34,7 +34,8 @@ Place `fixed` before `hot` or `cold` when combining modifiers. The keyword is
 fixed status. `.copy()` creates a mutable deep copy of a container.
 
 Supported runtime types include `int` (signed 32-bit), `longint` (signed 64-bit),
-`float`, `string`, `array`, `set`, `pair`, `map`/`dict`, and the calendar kinds
+`float`, `bigint` (a whole number of any size, [std.bigint](std-bigint.md)),
+`string`, `array`, `set`, `pair`, `map`/`dict`, and the calendar kinds
 `date`, `datetime`, and `duration` ([dates and times](dates.md)). `any` accepts every
 value, for parameters that work with anything, such as `func push(any item)`. Collection restrictions
 use forms such as `array[int]`, `pair[string,int]`, and `map[string,int]`.
@@ -49,16 +50,22 @@ Numeric values retain their kind through calls, returns, fields, and containers.
 `1.0`, `1e0`, and `float(1)` remain floats even though their value is integral.
 Numeric unions prefer the actual kind instead of converting a float to the first
 integer alternative. Numeric annotation/conversion boundaries retain their checked
-conversion behavior: for example, assigning `1` to a `float` binding yields a float.
+conversion behavior: for example, assigning `1` to a `float` binding yields a float,
+and to a `bigint` binding a bigint. Conversions only widen: a bigint passed to an
+`int`, `longint`, or `float` parameter is a `TypeError` until it is converted with
+`int(...)`, `longint(...)`, or `float(...)`.
 For exact matching between arguments, see [std.math](std-math.md).
 
 Arithmetic follows the runtime operand kinds. An operation involving a float
 produces a float; non-integral number division also produces a float. Integer
-arithmetic checks overflow, including through union-typed parameters. Mixed
-longint/float arithmetic requires an explicit conversion. Equality and ordering
-compare numbers by exact value across all kinds: `1 == 1.0`, `1 == longint(1)`, and
-`longint(5) < 10` are all true, and equal numbers are the same set element or map key.
-Strings are never coerced to numbers for equality.
+arithmetic checks overflow, including through union-typed parameters: an int or
+longint result that does not fit raises `RangeError` and never becomes a bigint.
+An operation involving a bigint and an int or longint produces a bigint, exactly.
+Mixed longint/float and bigint/float arithmetic require an explicit conversion.
+Equality and ordering compare numbers by exact value across all kinds: `1 == 1.0`,
+`1 == longint(1)`, `bigint(1) == 1.0`, and `longint(5) < 10` are all true, and equal
+numbers are the same set element or map key. Strings are never coerced to numbers
+for equality.
 
 ## Functions and families
 

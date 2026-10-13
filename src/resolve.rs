@@ -55,15 +55,17 @@ fn typed(value: Expr, ty: &Option<String>) -> Expr {
 }
 
 /// Lower numeric literal text to its runtime kind, following the numeric contract:
-/// decimal integers that fit in 32 bits are `int`, larger ones `longint`, and literals with
-/// a fraction or exponent are `float`. Out-of-range longints stay as text and raise
-/// `longint overflow` when evaluated.
+/// decimal integers that fit in 32 bits are `int`, in 64 bits `longint`, larger ones
+/// `bigint`, and literals with a fraction or exponent are `float`. A literal beyond even
+/// a bigint's size limit stays as text and raises `RangeError` when evaluated.
 fn number(text: &str, negative: bool) -> Option<Expr> {
     if text.chars().all(|c| c.is_ascii_digit()) {
-        let magnitude: i128 = text.parse().ok()?;
-        let value = if negative { -magnitude } else { magnitude };
-        if i32::try_from(value).is_ok() { return Some(Expr::Int(value as i64)); }
-        return i64::try_from(value).ok().map(Expr::Long);
+        if let Ok(magnitude) = text.parse::<i128>() {
+            let value = if negative { -magnitude } else { magnitude };
+            if i32::try_from(value).is_ok() { return Some(Expr::Int(value as i64)); }
+            if let Ok(long) = i64::try_from(value) { return Some(Expr::Long(long)); }
+        }
+        return crate::bigint::from_decimal(text, negative).map(Expr::Big);
     }
     let value: f64 = text.parse().ok()?;
     Some(Expr::Float(if negative { -value } else { value }))
@@ -208,7 +210,7 @@ impl Resolver {
             Expr::Ident(name) => {
                 if let Some(binding) = self.find(name) {
                     *e = binding.hot.unwrap_or(Expr::Ident(binding.name));
-                } else if !matches!(name.as_str(), "me" | "out" | "slout" | "in" | "inln" | "arr" | "set" | "pair" | "map" | "dict" | "a" | "s" | "p" | "int" | "longint" | "float" | "string"
+                } else if !matches!(name.as_str(), "me" | "out" | "slout" | "in" | "inln" | "arr" | "set" | "pair" | "map" | "dict" | "a" | "s" | "p" | "int" | "longint" | "float" | "bigint" | "string"
                     | "err" | "lasterr" | "ord" | "chr" | "date" | "datetime" | "duration" | "Error" | "TypeError" | "RangeError" | "OutOfBoundsError" | "SyntaxError") {
                     return Err(format!("unknown name '{name}'"));
                 }
@@ -234,7 +236,7 @@ impl Resolver {
 }
 fn constant(e: &Expr) -> bool {
     match e {
-        Expr::Number(_) | Expr::Int(_) | Expr::Long(_) | Expr::Float(_)
+        Expr::Number(_) | Expr::Int(_) | Expr::Long(_) | Expr::Big(_) | Expr::Float(_)
         | Expr::String(_) | Expr::Bool(_) | Expr::Null => true,
         Expr::Unary { value, .. } | Expr::Typed { value, .. } => constant(value),
         Expr::Binary { left, right, .. } => constant(left) && constant(right),

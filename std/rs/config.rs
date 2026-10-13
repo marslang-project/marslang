@@ -47,7 +47,7 @@ fn entries(value: &Value, what: &str) -> RResult<Vec<(String, Value)>> {
 fn scalar(value: &Value, what: &str) -> RResult<String> {
     match value {
         Value::Str(text) => Ok(text.to_string()),
-        Value::Int(_) | Value::Long(_) | Value::Float(_) | Value::Bool(_) => Ok(to_display_string(value)),
+        Value::Int(_) | Value::Long(_) | Value::Float(_) | Value::Big(_) | Value::Bool(_) => Ok(to_display_string(value)),
         Value::Date(_) | Value::DateTime(_) | Value::Duration(_) => Ok(to_display_string(value)),
         other => type_err(format!("{what} values are text, numbers, or booleans, not {} {}", article(other.type_name()), other.type_name())),
     }

@@ -253,7 +253,8 @@ fn bundled_example_executes() {
 #[test]
 fn large_integer_literals_do_not_round_before_type_checks() {
     executes("func f(longint n){out(n);} func m{f(9223372036854775807);f(-9223372036854775808);}", "9223372036854775807\n-9223372036854775808\n");
-    runtime_error("func m{out(9223372036854775808);}", "longint overflow");
+    // Beyond longint a literal is a bigint (tests/std_bigint.rs), which a longint parameter refuses.
+    runtime_error("func f(longint n){out(n);} func m{f(9223372036854775808);}", "expected exact longint");
     runtime_error("func m{out(9223372036854775807+1);}", "longint overflow");
 }
 
@@ -2206,7 +2207,8 @@ fn std_json_reads_and_writes_values() {
     ] {
         runtime_error(&format!("takepkg std.json;\nfunc m{{ json.parse(\"{text}\"); }}"), message);
     }
-    runtime_error("takepkg std.json;\nfunc m{ json.parse(\"123456789012345678901234\"); }", "is beyond longint");
+    // Beyond longint, a bigint (more in tests/std_bigint.rs).
+    executes("takepkg std.json;\nfunc m{ out(json.parse(\"123456789012345678901234\")); }", "123456789012345678901234\n");
     runtime_error(&format!("takepkg std.json;\nfunc m{{ json.parse(\"{}1{}\"); }}", "[".repeat(600), "]".repeat(600)), "nested more than 512 levels deep");
 
     for (value, message) in [

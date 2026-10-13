@@ -25,12 +25,19 @@ or the program ends.
 | `int(value)` | Convert to a number, then require an integer within signed 32-bit bounds |
 | `longint(value)` | Require an exact signed 64-bit integer; decimal integer strings are accepted |
 | `float(value)` | Convert to float, including `"inf"`, `"-inf"`, and `"nan"` strings |
+| `bigint(value)` | An exact whole number of any size, from an int, longint, bigint, whole finite float, or string of decimal digits with an optional leading `-` |
 | `string(value)` | Convert to text: numbers as `out` prints them (but `-0.0` gives `"0"`), containers in display form |
 | `value.copy()` | Deep-copy containers/objects; immutable scalar values are returned as values |
 
 Prefer decimal strings for converting very large numbers to `longint`, so they
 cannot be rounded before conversion. Full conversion semantics, including all
 invalid-string cases, are not yet a portable language contract.
+
+`int`, `longint`, and `float` of a [bigint](std-bigint.md) give the same number,
+or the nearest float, and raise `RangeError` when it does not fit; `float` of a
+bigint beyond about 1.8e308 raises rather than giving infinity. `bigint` of a
+float with a fraction, infinity, or NaN raises `RangeError`, and of any other
+string `SyntaxError`.
 
 There is no `inf` keyword. Use `float("inf")` or `float("-inf")` to construct
 infinity. Infinity spellings accept either case, surrounding whitespace, and
@@ -85,7 +92,7 @@ as `Error.TypeError`, `Error.RangeError`, and so on.
 | `RangeError` | Integer overflow, division by zero, invalid array element indices |
 | `Error` | Mutation through a fixed alias and other runtime contract violations |
 
-`SyntaxError` is raised for invalid `longint(...)` strings. An error that no
+`SyntaxError` is raised for invalid `longint(...)` and `bigint(...)` strings. An error that no
 `handle` block catches ends the program with exit status 1, printing
 `error: <Family>: <message>` on standard error and then where it happened: the
 line, and the calls that led there, innermost first.

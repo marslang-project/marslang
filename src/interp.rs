@@ -510,6 +510,7 @@ impl<'o> Interp<'o> {
             Expr::Int(i) => Value::Int(*i),
             Expr::Long(l) => Value::Long(*l),
             Expr::Float(f) => Value::Float(*f),
+            Expr::Big(b) => Value::Big(Rc::new(b.clone())),
             Expr::Number(text) => return number_literal(text),
             Expr::String(s) => Value::str(s),
             Expr::Template(parts) => {
@@ -622,6 +623,13 @@ impl<'o> Interp<'o> {
 
     fn call_value(&mut self, function: &Value, args: Vec<Value>) -> RResult<Value> {
         let Value::Func(callable) = function else {
+            if let Value::Package(package) = function {
+                // Importing std.bigint takes the name of the built-in bigint().
+                if package.name == "std.bigint" {
+                    return type_err("bigint here is the package std.bigint, which takes the built-in's name: \
+                        use bigint.of(x), or import it as takepkg std.bigint = big;");
+                }
+            }
             return type_err(format!("{} is not callable", function.type_name()));
         };
         match callable.as_ref() {
@@ -837,6 +845,7 @@ impl<'o> Interp<'o> {
             Builtin::Map => { arity(0)?; Ok(Value::new_map(IndexMap::new(), Meta::default())) }
             Builtin::Int => {
                 arity(1)?;
+                if let Value::Big(b) = &args[0] { return crate::bigint::to_int(b); }
                 let number = to_number(&args[0]);
                 let value = if number.is_finite() && number.fract() == 0.0 { Value::Int(number as i64) } else { Value::Float(number) };
                 // Conversion requires an exact integer: 2.5 is rejected, not truncated.
@@ -846,12 +855,19 @@ impl<'o> Interp<'o> {
             Builtin::Long => {
                 arity(1)?;
                 let value = match &args[0] {
-                    Value::Str(text) => parse_bigint(text)?,
+                    Value::Str(text) => parse_longint(text)?,
+                    // Explicit, so it narrows; a longint annotation does not.
+                    Value::Big(b) => return crate::bigint::to_long(b),
                     other => other.clone(),
                 };
                 self.typed(value, "longint", 0)
             }
-            Builtin::Float => { arity(1)?; Ok(Value::Float(to_float(&args[0]))) }
+            Builtin::Float => {
+                arity(1)?;
+                if let Value::Big(b) = &args[0] { return crate::bigint::to_float(b); }
+                Ok(Value::Float(to_float(&args[0])))
+            }
+            Builtin::Bigint => { arity(1)?; crate::bigint::construct(&args[0]) }
             Builtin::String => { arity(1)?; Ok(Value::str(&to_display_string(&args[0]))) }
             Builtin::Err => {
                 if args.is_empty() || args.len() > 2 { return type_err(format!("err() expects 1 or 2 argument(s), got {}", args.len())); }
@@ -1104,6 +1120,17 @@ impl<'o> Interp<'o> {
                 }
                 choices.taken.truncate(point);
             }
+            // Functions written for the other numeric kinds, such as std.math's, say what to write.
+            if matches!(value, Value::Big(_)) {
+                let conversions: Vec<String> = options.iter()
+                    .filter(|o| matches!(o.as_str(), "int" | "longint" | "float"))
+                    .map(|o| format!("{o}(...)"))
+                    .collect();
+                if let Some((last, rest)) = conversions.split_last() {
+                    let list = if rest.is_empty() { last.clone() } else { format!("{}{} or {last}", rest.join(", "), if rest.len() > 1 { "," } else { "" }) };
+                    return type_err(format!("a bigint does not match {ty}; convert it with {list}"));
+                }
+            }
             return type_err(format!("value does not match {ty}"));
         }
         match ty {
@@ -1114,11 +1141,14 @@ impl<'o> Interp<'o> {
                 }
                 // A literal such as 3000000000 is a longint because it does not fit.
                 Value::Long(l) if i32::try_from(l).is_err() => range_err("int overflow"),
+                // Narrowing a bigint is never implicit, as for a longint.
+                Value::Big(_) => type_err("expected int, got bigint; convert it with int(...)"),
                 _ => type_err("expected int"),
             },
             "longint" => match value {
                 Value::Int(i) | Value::Long(i) => Ok(Value::Long(i)),
                 Value::Float(f) if f.fract() == 0.0 && f.abs() <= MAX_SAFE as f64 => Ok(Value::Long(f as i64)),
+                Value::Big(_) => type_err("expected exact longint, got bigint; convert it with longint(...)"),
                 _ => type_err("expected exact longint"),
             },
             "float" => match value {
@@ -1126,7 +1156,16 @@ impl<'o> Interp<'o> {
                 // Exactly representable longints convert, as ints do.
                 Value::Long(l) if l.abs() <= MAX_SAFE => Ok(Value::Float(l as f64)),
                 Value::Float(_) => Ok(value),
+                Value::Big(_) => type_err("expected float, got bigint; convert it with float(...)"),
                 _ => type_err("expected float"),
+            },
+            // Widening: ints and longints convert, as an int does to float, and
+            // so do whole floats a longint annotation would take.
+            "bigint" => match value {
+                Value::Int(i) | Value::Long(i) => Ok(Value::Big(Rc::new(num_bigint::BigInt::from(i)))),
+                Value::Float(f) if f.fract() == 0.0 && f.abs() <= MAX_SAFE as f64 => Ok(Value::Big(Rc::new(num_bigint::BigInt::from(f as i64)))),
+                Value::Big(_) => Ok(value),
+                _ => type_err(format!("expected bigint, got {}", value.type_name())),
             },
             "string" => match value { Value::Str(_) => Ok(value), _ => type_err("expected string") },
             "bool" => match value { Value::Bool(_) => Ok(value), _ => type_err(format!("expected bool, got {}", value.type_name())) },
@@ -1305,6 +1344,7 @@ impl<'o> Interp<'o> {
         }
         if let Some(result) = crate::date::arithmetic(op, &a, &b) { return result; }
         if a.num_kind().is_none() || b.num_kind().is_none() { return type_err("arithmetic requires numbers"); }
+        if matches!(a, Value::Big(_)) || matches!(b, Value::Big(_)) { return crate::bigint::arithmetic(op, &a, &b); }
         let floating = matches!(a, Value::Float(_)) || matches!(b, Value::Float(_));
         let long = matches!(a, Value::Long(_)) || matches!(b, Value::Long(_));
         if floating && long { return type_err("mixed longint/float arithmetic"); }
@@ -1448,8 +1488,9 @@ fn display_name(name: &str) -> &str {
         .map_or(name, |(_, original)| original)
 }
 
+/// A literal that resolving could not lower: one too large even for a bigint.
 fn number_literal(text: &str) -> RResult<Value> {
-    if text.chars().all(|c| c.is_ascii_digit()) { return range_err("longint overflow"); }
+    if text.chars().all(|c| c.is_ascii_digit()) { return crate::bigint::too_large(); }
     text.parse().map(Value::Float).or_else(|_| type_err(format!("invalid number literal {text}")))
 }
 
@@ -1496,6 +1537,8 @@ fn unary(op: &str, value: Value) -> RResult<Value> {
         Value::Int(i) => int_in_range(if negate { -(i as i128) } else { i as i128 }),
         Value::Long(l) => long_in_range(if negate { -(l as i128) } else { l as i128 }),
         Value::Float(f) => Ok(Value::Float(if negate { -f } else { f })),
+        Value::Big(b) if negate => Ok(crate::bigint::negate(&b)),
+        Value::Big(_) => Ok(value),
         _ => type_err("unary arithmetic requires a number"),
     }
 }
@@ -1899,7 +1942,7 @@ fn to_float(value: &Value) -> f64 {
 }
 
 /// Exact integer from a decimal, hex, octal, or binary string for `longint(...)`.
-fn parse_bigint(text: &str) -> RResult<Value> {
+fn parse_longint(text: &str) -> RResult<Value> {
     let trimmed = text.trim();
     let invalid = || err(ErrorKind::SyntaxError, format!("cannot convert {text:?} to a longint"));
     if trimmed.is_empty() { return Ok(Value::Long(0)); }
