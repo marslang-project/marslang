@@ -1,0 +1,240 @@
+// std.terminal: coloured and styled text, the terminal's size, clearing the
+// screen, and progress bars, for command-line tools and games.
+//
+// Rust (std/rs/terminal.rs) answers only what the operating system alone can:
+// whether output is a terminal, its size, and on Windows turning ANSI escape
+// codes on. Everything else is Marslang, below: the escape sequences, the
+// styles and colours, deciding when colours are on, stripping them from
+// text, and drawing progress bars.
+//
+//     out(terminal.bold(terminal.red("error:")) + " the file is missing");
+//     slout("\r" + terminal.progress(done / total, 30));
+takepkg rs.terminal = native;
+takepkg std.Decorator;
+takepkg std.math;
+takepkg std.os;
+takepkg std.regex;
+takepkg std.strings;
+
+// The colour names, in the order the error message lists them.
+fixed _COLOR_NAMES (array) = arr("red", "green", "yellow", "blue", "magenta", "cyan", "gray");
+
+// Whether colours are on: null until first needed, then true or false.
+_colors = null;
+
+// ----- when colours are on -----
+
+@Decorator.docstring("""
+    Whether styles and colours are on: whether bold, red, and the others add
+    escape codes to text, or return it plain.
+
+        if (terminal.colors()){ out("in colour"); }
+
+    It is decided once, the first time it is needed. FORCE_COLOR, set and not
+    empty, turns colours on even when output is a file or a pipe. Otherwise
+    they are on when standard output is a terminal and NO_COLOR is not set
+    (or is empty), and on Windows when the console takes ANSI codes.
+    terminal.set_colors overrides the answer.
+""")
+func colors(){
+    if (_colors == null){ _colors = _detect(); }
+    ret _colors;
+}
+
+@Decorator.docstring("""
+    Turn colours on or off for the rest of the run, whatever the terminal and
+    the environment say: for a --color flag, or to see colour codes in a test.
+    Returns null.
+
+        terminal.set_colors(false);
+        out(terminal.red("plain"));   // plain
+""")
+func set_colors(bool on){
+    _colors = on;
+    ret null;
+}
+
+@Decorator.private
+func _detect(){
+    force = os.env("FORCE_COLOR");
+    if (force != null and force != ""){
+        // Turns ANSI on in a Windows console; piped output needs nothing.
+        native.enable_colors();
+        ret true;
+    }
+    no_color = os.env("NO_COLOR");
+    if (no_color != null and no_color != ""){ ret false; }
+    if (not native.is_terminal()){ ret false; }
+    ret native.enable_colors();
+}
+
+// ----- styles and colours -----
+
+// The text between a start code and a reset. Where the text has a reset of
+// its own, from a style inside it, the start code comes back after it, so
+// red("a" + bold("b") + "c") keeps "c" red.
+@Decorator.private
+func _wrap(any value, string codes){
+    text = string(value);
+    if (not colors()){ ret text; }
+    start = chr(27) + "[" + codes + "m";
+    reset = chr(27) + "[0m";
+    if (text.contains(reset)){
+        text = strings.replace(text, reset, reset + start);
+        // A reset at the very end needs no start code after it.
+        if (strings.ends_with(text, reset + start)){ text = text.slice(0, text.len() - start.len()); }
+    }
+    ret start + text + reset;
+}
+
+@Decorator.docstring("""
+    The text in bold. Like every style here it takes any value, as text, and
+    gives plain text when colours are off.
+
+        out(terminal.bold("Done"));
+""")
+func bold(any text) => _wrap(text, "1");
+
+@Decorator.docstring("The text dimmed, fainter than normal.")
+func dim(any text) => _wrap(text, "2");
+
+@Decorator.docstring("The text in italics. A few terminals do not show italics.")
+func italic(any text) => _wrap(text, "3");
+
+@Decorator.docstring("The text underlined.")
+func underline(any text) => _wrap(text, "4");
+
+@Decorator.docstring("""
+    The text in red. Styles nest: terminal.bold(terminal.red("x")) is bold
+    and red.
+""")
+func red(any text) => _wrap(text, "31");
+
+@Decorator.docstring("The text in green.")
+func green(any text) => _wrap(text, "32");
+
+@Decorator.docstring("The text in yellow.")
+func yellow(any text) => _wrap(text, "33");
+
+@Decorator.docstring("The text in blue.")
+func blue(any text) => _wrap(text, "34");
+
+@Decorator.docstring("The text in magenta.")
+func magenta(any text) => _wrap(text, "35");
+
+@Decorator.docstring("The text in cyan.")
+func cyan(any text) => _wrap(text, "36");
+
+@Decorator.docstring("The text in gray, the bright form of black.")
+func gray(any text) => _wrap(text, "90");
+
+@Decorator.docstring("""
+    The text in a colour chosen by name, for a colour held in a variable or
+    read from a setting: one of red, green, yellow, blue, magenta, cyan, and
+    gray.
+
+        out(terminal.color("warning", "yellow"));
+
+    Any other name raises RangeError, listing these.
+""")
+func color(any text, string name){
+    codes = _code(name);
+    if (codes == null){
+        err(RangeError, "terminal.color does not know the colour \"" + name + "\"; the colours are " + strings.join(_COLOR_NAMES, ", "));
+    }
+    ret _wrap(text, codes);
+}
+
+@Decorator.private
+func _code(string name){
+    if (name == "red"){ ret "31"; }
+    if (name == "green"){ ret "32"; }
+    if (name == "yellow"){ ret "33"; }
+    if (name == "blue"){ ret "34"; }
+    if (name == "magenta"){ ret "35"; }
+    if (name == "cyan"){ ret "36"; }
+    if (name == "gray"){ ret "90"; }
+    ret null;
+}
+
+@Decorator.docstring("""
+    The text in a 24-bit colour, each of r, g, and b from 0 to 255. Terminals
+    that cannot show it use the nearest colour they have.
+
+        out(terminal.rgb("orange", 255, 165, 0));
+
+    A value outside 0 to 255 raises RangeError.
+""")
+func rgb(any text, int r, int g, int b){
+    for (part, arr(r, g, b)){
+        if (part < 0 or part > 255){ err(RangeError, "terminal.rgb needs r, g, and b from 0 to 255, got " + string(part)); }
+    }
+    ret _wrap(text, "38;2;" + string(r) + ";" + string(g) + ";" + string(b));
+}
+
+@Decorator.docstring("""
+    The text without its ANSI escape sequences: the styles and colours that
+    were added, and cursor and screen codes too. What a log file or a width
+    count should see.
+
+        terminal.strip(terminal.bold("Done"))   // "Done"
+""")
+func strip(any text) => regex.replace(r"\x1b\[[0-?]*[ -/]*[@-~]", string(text), "");
+
+// ----- the terminal -----
+
+@Decorator.docstring("""
+    Whether standard output is a terminal, rather than a file or a pipe.
+
+        if (not terminal.is_terminal()){ out("writing to a file"); }
+""")
+func is_terminal() => native.is_terminal();
+
+@Decorator.docstring("""
+    How many columns wide the terminal is. When output is not a terminal, or
+    the size is unknown, the COLUMNS environment variable, and otherwise 80.
+""")
+func columns() => native.columns();
+
+@Decorator.docstring("""
+    How many rows high the terminal is. When output is not a terminal, or the
+    size is unknown, the LINES environment variable, and otherwise 24.
+""")
+func rows() => native.rows();
+
+@Decorator.docstring("""
+    Clear the screen and move to its top left corner. Does nothing when
+    colours are off, as in a file or a pipe, where the codes would be
+    clutter. Returns null.
+
+        terminal.clear();
+""")
+func clear(){
+    if (colors()){ slout(chr(27) + "[2J" + chr(27) + "[H"); }
+    ret null;
+}
+
+@Decorator.docstring("""
+    A progress bar as text: fraction from 0.0 to 1.0, drawn width cells wide
+    inside the brackets, then the percentage.
+
+        terminal.progress(0.5, 20)   // "[##########----------]  50%"
+
+    A bar fills only when the work is done: 0.99 is not yet full, nor 100%.
+    To redraw one in place, start the line with a carriage return, and end
+    with a newline once at the end:
+
+        slout("\r" + terminal.progress(done / total, 30));
+
+    A fraction outside 0 to 1, and a width below 1, raise RangeError.
+""")
+func progress([int,longint,float] fraction, int width){
+    if (not (fraction >= 0 and fraction <= 1)){ err(RangeError, "terminal.progress needs a fraction from 0 to 1, got " + string(fraction)); }
+    if (width < 1){ err(RangeError, "terminal.progress needs a width of at least 1, got " + string(width)); }
+    // Rounded down, with a little allowance for float error: 0.29 * 100 is
+    // 28.999999999999996 and should still read 29%.
+    filled = int(math.floor(fraction * width + 0.000000001));
+    percent = int(math.floor(fraction * 100 + 0.000000001));
+    bar = strings.repeated("#", filled) + strings.repeated("-", width - filled);
+    ret "[" + bar + "] " + strings.pad_start(string(percent) + "%", 4, " ");
+}

@@ -59,7 +59,9 @@ number that rounds to zero shows no sign: `fixed(-0.001, 2)` is `"0.00"`.
 Widths are terminal columns, not characters: Chinese, Japanese, and Korean
 characters and most emoji take two, and combining accents none, so
 `format.width("你好")` is `4` and tables line up whatever they hold. Text
-longer than the width is left whole.
+longer than the width is left whole. ANSI escape sequences, such as the colours
+of [std.terminal](std-terminal.md), take no columns, so coloured text lines up
+too.
 
 `table` makes each column as wide as its widest cell, with two spaces between
 columns. Numbers line up on the right and everything else on the left; a row

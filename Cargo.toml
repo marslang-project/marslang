@@ -41,6 +41,10 @@ crc32fast = "1.5.2"
 [target.'cfg(not(windows))'.dependencies]
 # Elsewhere jiff reads the system time zone itself (TZ, /etc/localtime).
 jiff = { version = "0.2.37", default-features = false, features = ["tz-system"] }
+# std.terminal: the terminal's size on Linux and macOS. On Windows
+# std/rs/terminal.rs asks the console itself, as src/date.rs asks for the
+# time zone, to stay clear of windows-sys, which links through raw-dylib.
+terminal_size = "0.4.3"
 
 [target.'cfg(target_env = "musl")'.dependencies]
 # The Linux releases are static musl binaries, which run on every distribution.
