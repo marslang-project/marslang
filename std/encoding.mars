@@ -1,0 +1,175 @@
+// std.encoding: base64, hex, URL encoding, query strings, and raw bytes.
+//
+// Native (std/rs/encoding.rs), because Marslang strings are grapheme clusters
+// with no byte access: turning text into UTF-8 bytes and back, base64, hex,
+// and percent-encoding and decoding. Marslang, below: the public surface and
+// its documentation, and query strings (building "a=1&b=2" and taking it
+// apart), which are built on the native percent-encoding.
+takepkg rs.encoding = native;
+takepkg std.Decorator;
+takepkg std.strings;
+
+// ----- base64 -----
+
+@Decorator.docstring("""
+    Text as base64 (RFC 4648), written from its UTF-8 bytes, padded with =.
+
+        encoding.base64("foobar")   // "Zm9vYmFy"
+        encoding.base64("fo")       // "Zm8="
+""")
+func base64(string text) => native.base64_encode(text, false, "encoding.base64");
+
+@Decorator.docstring("""
+    Text from base64. The decoded bytes must be UTF-8 text.
+
+        encoding.from_base64("Zm9vYmFy")   // "foobar"
+        encoding.from_base64("Zm8")        // "fo"
+
+    Padding is optional, and spaces, tabs, and line breaks are skipped, so
+    pasted data wrapped over lines works. Anything else outside the standard
+    alphabet (A-Z a-z 0-9 + /) raises SyntaxError with its position. Bytes that
+    are not valid UTF-8 raise SyntaxError suggesting from_base64_bytes.
+""")
+func from_base64(string text) => native.base64_decode(text, false, true, "encoding.from_base64");
+
+@Decorator.docstring("""
+    Text as URL-safe base64: - and _ in place of + and /, with no padding.
+
+        encoding.base64_url("foob")   // "Zm9vYg"
+""")
+func base64_url(string text) => native.base64_encode(text, true, "encoding.base64_url");
+
+@Decorator.docstring("""
+    Text from URL-safe base64, as from_base64 but with the - and _ alphabet.
+    Padding is optional here too; whitespace is skipped.
+
+        encoding.from_base64_url("Zm9vYg")   // "foob"
+""")
+func from_base64_url(string text) => native.base64_decode(text, true, true, "encoding.from_base64_url");
+
+@Decorator.docstring("""
+    An array of bytes as base64, for binary data. Each byte is an int from 0
+    to 255; anything else raises RangeError or TypeError saying which.
+
+        encoding.base64_bytes(arr(0, 255, 16))   // "AP8Q"
+""")
+func base64_bytes(array data) => native.base64_encode(data, false, "encoding.base64_bytes");
+
+@Decorator.docstring("""
+    Base64 text as an array of bytes, for binary data that need not be text.
+    Accepts what from_base64 accepts.
+
+        encoding.from_base64_bytes("AP8Q")   // [0, 255, 16]
+""")
+func from_base64_bytes(string text) => native.base64_decode(text, false, false, "encoding.from_base64_bytes");
+
+// ----- hex -----
+
+@Decorator.docstring("""
+    The UTF-8 bytes of the text as lowercase hex, two digits per byte.
+
+        encoding.hex("foo")   // "666f6f"
+        encoding.hex("é")     // "c3a9"
+""")
+func hex(string text) => native.hex_encode(text);
+
+@Decorator.docstring("""
+    Text from hex, in either case. An odd number of digits or a character
+    that is not a hex digit raises SyntaxError with its position; bytes that
+    are not valid UTF-8 raise SyntaxError too.
+
+        encoding.from_hex("666F6f")   // "foo"
+""")
+func from_hex(string text) => native.hex_decode(text);
+
+// ----- bytes -----
+
+@Decorator.docstring("""
+    The UTF-8 bytes of the text, as an array of ints from 0 to 255.
+
+        encoding.bytes("hé")   // [104, 195, 169]
+""")
+func bytes(string text) => native.bytes(text);
+
+@Decorator.docstring("""
+    Text from an array of UTF-8 bytes.
+
+        encoding.from_bytes(arr(104, 195, 169))   // "hé"
+
+    A value outside 0 to 255 raises RangeError, and one that is not an int
+    TypeError, saying which byte. Bytes that are not valid UTF-8 raise
+    SyntaxError.
+""")
+func from_bytes(array data) => native.from_bytes(data);
+
+// ----- URLs -----
+
+@Decorator.docstring("""
+    Text made safe as one part of a URL, a path segment or a query value.
+    A-Z a-z 0-9 - . _ ~ stay as they are; every other character becomes %XX
+    for each of its UTF-8 bytes, in uppercase hex. A space is %20.
+
+        encoding.url("a b/c")   // "a%20b%2Fc"
+        encoding.url("é")       // "%C3%A9"
+""")
+func url(string text) => native.url_encode(text);
+
+@Decorator.docstring("""
+    Text from percent-encoding: each %XX, in either case, is a byte, and the
+    bytes must be UTF-8. A + stays a +; only from_query reads it as a space.
+
+        encoding.from_url("a%20b%2fc+d")   // "a b/c+d"
+
+    A % without two hex digits after it raises SyntaxError with its position,
+    as do bytes that are not valid UTF-8.
+""")
+func from_url(string text) => native.url_decode(text, false, "encoding.from_url", 0);
+
+// ----- query strings -----
+
+@Decorator.docstring("""
+    A map as a query string, keys in the map's order, each key and value
+    turned into text with string() and percent-encoded.
+
+        encoding.query(map().set("q", "two words").set("page", 2))   // "q=two%20words&page=2"
+""")
+func query(map values){
+    parts = arr();
+    for (key, values){
+        parts.add(native.url_encode(string(key)) + "=" + native.url_encode(string(values.get(key))));
+    }
+    ret strings.join(parts, "&");
+}
+
+@Decorator.docstring("""
+    A query string as a map from text to text, in the order the keys first
+    appear.
+
+        encoding.from_query("?q=two+words&page=2&debug")
+        // {"q": "two words", "page": "2", "debug": ""}
+
+    A leading ? is ignored, + means a space, and %XX is decoded. A key with no
+    = has the value "", and empty pieces such as the one in a&&b are skipped.
+    When a key repeats, the last value wins. A bad % escape raises
+    SyntaxError with its position in the whole text.
+""")
+func from_query(string text){
+    found = map();
+    at = 0;
+    if (text.starts_with("?")){ at = 1; }
+    for (piece, text.slice(at, text.len()).split("&")){
+        start = at;
+        at = at + piece.len() + 1;
+        if (piece == ""){ continue; }
+        cut = piece.find("=");
+        if (cut < 0){
+            found.set(_decode(piece, start), "");
+        } else {
+            found.set(_decode(piece.slice(0, cut), start), _decode(piece.slice(cut + 1, piece.len()), start + cut + 1));
+        }
+    }
+    ret found;
+}
+
+@Decorator.private
+func _decode(string piece, int offset) => native.url_decode(piece, true, "encoding.from_query", offset);
