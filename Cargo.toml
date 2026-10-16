@@ -49,6 +49,9 @@ num-bigint = "0.4.6"
 num-traits = "0.2.19"
 # bigint: num-bigint's division with remainder, and whether a number is odd.
 num-integer = "0.1.47"
+# std.sqlite: SQLite itself, compiled from its bundled C source (needs only a C
+# compiler, which every release target has), so there is no library to install.
+rusqlite = { version = "0.40.2", default-features = false, features = ["bundled"] }
 
 [target.'cfg(not(windows))'.dependencies]
 # Elsewhere jiff reads the system time zone itself (TZ, /etc/localtime).

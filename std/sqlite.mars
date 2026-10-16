@@ -1,0 +1,213 @@
+// std.sqlite: a SQL database in one file, or in memory, through SQLite.
+//
+// Native (std/rs/sqlite.rs), because they need SQLite itself: opening and
+// closing a database, running a statement with its parameters, reading the
+// rows, and converting values between Marslang and SQL. Marslang, below: the
+// Database family, transactions with their nesting, and raising the errors.
+//
+// A native package cannot hold Marslang objects, so each open database is a
+// number the native side keeps a connection under (std/rs/sqlite.rs); a
+// Database holds that number. Each native call returns [true, value] or
+// [false, kind, message], and _check raises the family kind names, as std.file
+// does, because a native package can raise only built-in errors.
+takepkg rs.sqlite = native;
+takepkg std.Decorator;
+takepkg std.file;
+
+@Decorator.docstring(r"""
+    SQLite refused a statement: the SQL has a mistake, a constraint such as
+    UNIQUE or NOT NULL failed, the parameters do not match the placeholders,
+    or the database is closed. The message is SQLite's own, followed by the
+    SQL cut to 80 characters unless a constraint failed.
+
+        run{
+            db.run("INSERT INTO users(email) VALUES (?)", arr("a@b.c"));
+        } handle(sqlite.SqlError e){
+            out(e.message);   // UNIQUE constraint failed: users.email
+        }
+""")
+family SqlError(Error){}
+
+@Decorator.private
+func _check(array result, string path){
+    if (result[0]){ ret result[1]; }
+    kind = result[1];
+    message = result[2];
+    if (kind == "Closed"){ err(SqlError, "the database " + path + " is closed; open it again with sqlite.open"); }
+    if (kind == "NotFound"){ err(file.NotFoundError, message); }
+    if (kind == "IsDirectory"){ err(file.IsDirectoryError, message); }
+    err(SqlError, message);
+}
+
+@Decorator.docstring(r"""
+    An open database, made by sqlite.open.
+
+        db = sqlite.open(":memory:");
+        db.run("CREATE TABLE t(n INTEGER)", arr());
+        db.run("INSERT INTO t VALUES (?)", arr(7));
+        out(db.value("SELECT n FROM t", arr()));   // 7
+        db.close();
+
+    Every SQL method takes the statement, with a ? for each value, and an
+    array of those values in order: arr() when there are none. Never build SQL
+    by joining or formatting values into the text; that lets input rewrite
+    the statement. path is what it was opened with.
+""")
+family Database{
+    @Decorator.docstring("Made by sqlite.open from the number its connection is kept under; not called directly.")
+    func init(int id, string path){
+        me.id = id;
+        me.path = path;
+        me.depth = 0;
+    }
+
+    @Decorator.docstring(r"""
+        Run a statement that returns no rows: CREATE, INSERT, UPDATE, DELETE.
+        Returns the number of rows it changed, 0 for CREATE and the like.
+
+            changed = db.run("UPDATE users SET active = ? WHERE age < ?", arr(false, 18));
+    """)
+    func run(string sql, array params) => _check(native.run(me.id, sql, params), me.path);
+
+    @Decorator.docstring(r"""
+        Run a statement and return its rows as an array of maps, column name
+        to value, in column order. Empty when there are none.
+
+            for (row, db.query("SELECT name, age FROM users WHERE age > ?", arr(30))){
+                out(row.get("name"), row.get("age"));
+            }
+
+        If two columns share a name, as in SELECT a.id, b.id, the map keeps the
+        first position and the last value; rename one with AS.
+    """)
+    func query(string sql, array params) => _check(native.query(me.id, sql, params, -1), me.path);
+
+    @Decorator.docstring("The first row of the statement as a map, or null when it returns none.")
+    func query_one(string sql, array params){
+        rows = _check(native.query(me.id, sql, params, 1), me.path);
+        if (rows.len() == 0){ ret null; }
+        ret rows[0];
+    }
+
+    @Decorator.docstring(r"""
+        The first column of the first row, or null when there is no row.
+
+            how_many = db.value("SELECT count(*) FROM users", arr());
+    """)
+    func value(string sql, array params) => _check(native.value(me.id, sql, params), me.path);
+
+    @Decorator.docstring("The rowid SQLite gave the last row inserted through this database, 0 before any insert.")
+    func last_id() => _check(native.last_id(me.id), me.path);
+
+    @Decorator.docstring(r"""
+        Run several statements separated by ;, for a schema file. There are no
+        parameters. Stops at the first statement that fails, keeping the ones
+        before it unless a transaction is open.
+
+            db.script("CREATE TABLE a(x); CREATE TABLE b(y); INSERT INTO a VALUES (1);");
+    """)
+    func script(string sql) => _check(native.script(me.id, sql), me.path);
+
+    @Decorator.docstring(r"""
+        Call f, with no arguments, in a transaction: BEGIN, f, then COMMIT.
+        If f raises, ROLLBACK and raise the same error again, so either all
+        of its changes happen or none do. Returns what f returns.
+
+            func transfer(){
+                db.run("UPDATE accounts SET balance = balance - ? WHERE id = ?", arr(50, 1));
+                db.run("UPDATE accounts SET balance = balance + ? WHERE id = ?", arr(50, 2));
+            }
+            db.transaction(transfer);
+
+        A transaction inside f is a SAVEPOINT of the outer one: if it raises,
+        only its own changes are undone, and the error goes on to the outer
+        transaction, which rolls back too unless f handles it.
+    """)
+    func transaction(Function f){
+        me._enter();
+        result = null;
+        run{
+            result = f();
+        } handle(Error e){
+            me._leave(false);
+            err(e);
+        }
+        me._leave(true);
+        ret result;
+    }
+
+    @Decorator.private
+    func _enter(){
+        if (me.depth == 0){
+            me.run("BEGIN", arr());
+        } else {
+            me.run("SAVEPOINT " + me._savepoint(), arr());
+        }
+        me.depth = me.depth + 1;
+    }
+
+    @Decorator.private
+    func _savepoint() => "marslang_depth_" + string(me.depth);
+
+    // Ends the innermost transaction: commit it, or undo it. Undoing does not
+    // raise when the body already ended the transaction itself (say, by running
+    // ROLLBACK), so the error that is going out is the one the caller sees.
+    @Decorator.private
+    func _leave(bool commit){
+        me.depth = me.depth - 1;
+        if (me.depth == 0){
+            if (commit){
+                run{
+                    me.run("COMMIT", arr());
+                } handle(Error e){
+                    me._undo();
+                    err(e);
+                }
+            } else {
+                me._undo();
+            }
+        } else {
+            name = me._savepoint();
+            if (commit){
+                me.run("RELEASE " + name, arr());
+            } else {
+                if (_check(native.in_transaction(me.id), me.path)){
+                    me.run("ROLLBACK TO " + name, arr());
+                    me.run("RELEASE " + name, arr());
+                }
+            }
+        }
+    }
+
+    @Decorator.private
+    func _undo(){
+        if (_check(native.in_transaction(me.id), me.path)){ me.run("ROLLBACK", arr()); }
+    }
+
+    @Decorator.docstring(r"""
+        Close the database. Anything not committed is discarded. Closing a
+        database that is already closed does nothing. Any other use of it
+        afterwards raises SqlError.
+
+        A database left open is closed when the program ends.
+    """)
+    func close(){
+        native.close(me.id);
+        me.depth = 0;
+    }
+}
+
+@Decorator.docstring(r"""
+    Open the database in the file at path, creating the file if it is missing,
+    and return it as a Database. ":memory:" opens a new database in memory,
+    which is gone when it is closed; each call gives a separate one.
+
+        db = sqlite.open("notes.db");
+        db.script("CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY, body TEXT)");
+
+    A directory that does not exist raises file.NotFoundError, and a path that
+    is a directory file.IsDirectoryError, as std.file does; SQLite refusing the
+    file for another reason raises SqlError. Foreign keys are enforced, which
+    SQLite leaves off unless asked.
+""")
+func open(string path) => Database(_check(native.open(path), path), path);
