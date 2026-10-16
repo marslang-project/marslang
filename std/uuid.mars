@@ -1,0 +1,121 @@
+// std.uuid: UUIDs, the 128-bit IDs of RFC 9562: random ones (version 4) and
+// time-ordered ones (version 7), plus checking and reading their version.
+//
+// Everything here is Marslang. The random bytes come from std.secrets, and the
+// version and variant bits are set by arithmetic on the byte values, since
+// Marslang has no bitwise operators. The text is lowercase 8-4-4-4-12 hex.
+takepkg std.Decorator;
+takepkg std.math;
+takepkg std.secrets;
+takepkg std.strings;
+takepkg std.time;
+
+_HEX = "0123456789abcdef";
+_HEX_ANY = "0123456789abcdefABCDEF";
+
+@Decorator.docstring("""
+    A random UUID (version 4): 122 random bits, in lowercase 8-4-4-4-12 form.
+    Random UUIDs are so unlikely to repeat that they serve well as IDs, keys,
+    and file names, without checking for clashes.
+
+        id = uuid.v4();   // for example "5b1e9c2a-7d40-4f3e-9a61-0c8d2e7f4b13"
+""")
+func v4(){
+    data = secrets.bytes(16);
+    // Byte 6 gets version 4 in its top four bits; byte 8 gets variant 10 in its top two.
+    data.modify(6, data[6] % 16 + 64);
+    data.modify(8, data[8] % 64 + 128);
+    ret _text(data);
+}
+
+@Decorator.docstring("""
+    A time-ordered UUID (version 7): the first 48 bits are the Unix time in
+    milliseconds, so a UUID made later sorts after one made earlier, as text
+    too. The other 74 bits are random.
+
+        id = uuid.v7();   // for example "018f3c2a-7d40-7f3e-9a61-0c8d2e7f4b13"
+
+    UUIDs made in the same millisecond are not guaranteed to sort in the order
+    they were made: their random bits decide between them. Across milliseconds
+    the order holds, unless the system clock is set back.
+""")
+func v7(){
+    data = _millis_bytes(longint(math.floor(time.now() * 1000)));
+    tail = secrets.bytes(10);
+    for (digit, tail){ data.add(digit); }
+    data.modify(6, data[6] % 16 + 112);
+    data.modify(8, data[8] % 64 + 128);
+    ret _text(data);
+}
+
+@Decorator.docstring("""
+    Whether text is a UUID in 8-4-4-4-12 hex form: 36 characters, hyphens in
+    the four places, and hex digits (0-9, a-f, or A-F) everywhere else. The
+    version and variant are not checked.
+
+        out(uuid.valid(uuid.v4()));    // true
+        out(uuid.valid("not-a-uuid")); // false
+""")
+func valid(string text){
+    if (text.len() != 36){ ret false; }
+    for (i = 0, i < 36, i++){
+        ch = text[i];
+        if (i == 8 or i == 13 or i == 18 or i == 23){
+            if (ch != "-"){ ret false; }
+        } else {
+            if (not _HEX_ANY.contains(ch)){ ret false; }
+        }
+    }
+    ret true;
+}
+
+@Decorator.docstring("""
+    The version of a UUID as an int: 4 for a random one, 7 for a time-ordered
+    one. Raises SyntaxError when text is not a UUID in 8-4-4-4-12 hex form.
+
+        out(uuid.version(uuid.v4()));   // 4
+""")
+func version(string text){
+    if (not valid(text)){
+        err(SyntaxError, "uuid.version needs a UUID in 8-4-4-4-12 hex form, got " + string(text));
+    }
+    ret _HEX.find(text[14].lower());
+}
+
+@Decorator.docstring("""
+    The nil UUID, all zeros: "00000000-0000-0000-0000-000000000000". A
+    placeholder for "no ID yet", which no generated UUID equals.
+""")
+func nil(){ ret "00000000-0000-0000-0000-000000000000"; }
+
+// The 16 bytes as the lowercase 8-4-4-4-12 form.
+@Decorator.private
+func _text(array data){
+    hex = _hex(data);
+    ret strings.join(arr(hex.slice(0, 8), hex.slice(8, 12), hex.slice(12, 16), hex.slice(16, 20), hex.slice(20, 32)), "-");
+}
+
+// Each byte as two lowercase hex digits.
+@Decorator.private
+func _hex(array data){
+    parts = arr();
+    for (digit, data){
+        high = (digit - digit % 16) / 16;
+        parts.add(_HEX[high]);
+        parts.add(_HEX[digit % 16]);
+    }
+    ret strings.join(parts, "");
+}
+
+// The six bytes of a Unix time in milliseconds, most significant first.
+@Decorator.private
+func _millis_bytes(longint millis){
+    least_first = arr();
+    rest = millis;
+    repeat 6 {
+        digit = rest % 256;
+        least_first.add(int(digit));
+        rest = (rest - digit) / 256;
+    }
+    ret least_first.rev();
+}

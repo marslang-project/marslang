@@ -329,6 +329,7 @@ name = "marslang"
 version = "0.17.0"
 dependencies = [
  "crc32fast",
+ "getrandom",
  "hmac",
  "indexmap",
  "jiff",

@@ -37,6 +37,9 @@ md-5 = "0.11.0"
 hmac = "0.13.0"
 # std.hash: CRC-32 checksums, in pure Rust, fast enough for large files.
 crc32fast = "1.5.2"
+# std.secrets: the operating system's cryptographically secure random bytes, for passwords, keys, and tokens.
+# Version 0.2 is already in Cargo.lock through ring; 0.3+ links through raw-dylib on Windows, which this machine cannot build.
+getrandom = "0.2.17"
 # std.http: HTTP(S) over rustls with ring (not aws-lc-rs, which needs cmake) and built-in root certificates; SOCKS proxies too.
 ureq = { version = "3.4.2", default-features = false, features = ["rustls", "socks-proxy"] }
 # bigint: whole numbers of any size, and their arithmetic, in pure Rust. The
