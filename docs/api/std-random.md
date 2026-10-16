@@ -119,7 +119,7 @@ cannot change.
 ## Not for secrets
 
 `std.random` is not for passwords, keys, tokens, or anything an attacker must
-not guess: after enough of its output, the rest can be worked out. Its
+not guess; use [std.secrets](std-secrets.md) for those: after enough of its output, the rest can be worked out. Its
 generator is chosen for speed and statistical quality, as in most languages'
 standard random packages.
 

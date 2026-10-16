@@ -30,6 +30,9 @@ notes elsewhere under `docs/` remain local.
 - [std.http](std-http.md): fetching pages, calling JSON APIs, and downloading files, over HTTPS.
 - [std.log](std-log.md): leveled logging with timestamps, to standard error or a file.
 - [std.terminal](std-terminal.md): colours and styles, the terminal's size, and progress bars.
+- [std.sqlite](std-sqlite.md): SQL databases in a file or in memory, with parameters and transactions.
+- [std.secrets](std-secrets.md): secure tokens, passwords, and choices, for anything an attacker must not guess.
+- [std.uuid](std-uuid.md): random (v4) and time-ordered (v7) UUIDs.
 - [std.types](std-types.md): a value's kind, family checks.
 - [std.memory](std-memory.md): addresses, object identity, and the cycle collector.
 - [std.file](std-file.md): reading, writing, listing, copying, moving, and removing files and directories.
