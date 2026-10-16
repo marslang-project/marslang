@@ -157,6 +157,36 @@ pub enum StmtKind {
         handlers: Vec<Handler>,
         then_block: Option<Vec<Stmt>>,
     },
+    /// `match (subject){ pattern => statement; ... }`: the first arm that
+    /// matches runs; when none does, nothing happens.
+    Match {
+        subject: Expr,
+        arms: Vec<MatchArm<Vec<Stmt>>>,
+    },
+}
+
+/// One arm of a `match`: its pattern, an optional `if (guard)`, and its body,
+/// which is statements in the statement form and an expression in the
+/// expression form.
+#[derive(Debug, Clone)]
+pub struct MatchArm<B> {
+    pub pattern: Pattern,
+    pub guard: Option<Expr>,
+    pub body: B,
+    /// Source line of the arm, for errors; 0 when the whole match was written
+    /// inside one expression, where the enclosing statement's line holds.
+    pub line: usize,
+}
+
+#[derive(Debug, Clone)]
+pub enum Pattern {
+    /// `1`, `"quit"`, `2, 3`, `null`: equal (`==`) to one of the literals.
+    Literals(Vec<Expr>),
+    /// `_`: anything.
+    Wildcard,
+    /// `int n`, `Circle c`, `[int, float] x`, `string`: a value of one of the
+    /// types, bound to `name` for the arm when one is given.
+    Type { types: Vec<String>, name: Option<String> },
 }
 
 /// One `handle(...)` block: the error family names it catches and, for the
@@ -206,6 +236,12 @@ pub enum Expr {
     /// `func(int x) => x + 1`: an anonymous function, closing over the
     /// variables around it.
     Lambda(std::sync::Arc<FuncDecl>),
+    /// `match (subject){ pattern => value; ... }`: the value of the first arm
+    /// that matches; a `RangeError` when none does.
+    Match {
+        subject: Box<Expr>,
+        arms: Vec<MatchArm<Expr>>,
+    },
     Binary {
         left: Box<Expr>,
         op: String,

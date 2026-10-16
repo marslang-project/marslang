@@ -38,7 +38,7 @@ in order, after the packages they import. Several decorators may share a line.
 block        = "{" { statement } "}" ;
 statement    = declaration | assignment | update | expression ";"
              | "ret" expression ";" | "break" ";" | "continue" ";"
-             | if | while | repeat | for | run | function ;
+             | if | while | repeat | for | run | match | function ;
 declaration  = [ "fixed" ] [ "hot" | "cold" ] NAME [ "(" type ")" ] "=" expression ";" ;
 assignment   = target "=" expression ";" ;
 target       = NAME | postfix "." NAME ;
@@ -53,6 +53,13 @@ step         = a declaration, assignment, update, or expression, without its ";"
 run          = "run" block { handler } [ "then" block ] ;
 handler      = "handle" "(" handled ")" block ;
 handled      = type NAME | "[" type { "," type } "]" NAME | type { "," type } ;
+match        = "match" "(" expression ")" "{" arm { arm } "}" ;
+arm          = pattern [ guard ] "=>" ( statement | block ) ;
+pattern      = "_" | literal { "," literal } | kind [ NAME ] ;
+guard        = "if" "(" expression ")" ;
+literal      = [ "-" ] NUMBER | STRING | "true" | "false" | "fasle" | "null" ;
+kind         = plain | "[" plain { "," plain } "]" ;
+plain        = simple | "array" | "set" | "pair" | "map" | "dict" ;
 ```
 
 - `name = value;` both declares and assigns: it updates the nearest existing
@@ -66,6 +73,10 @@ handled      = type NAME | "[" type { "," type } "]" NAME | type { "," type } ;
   variables around it; see [functions as values](language.md#functions-as-values).
 - `run` needs at least one `handle` or a `then`. `break` and `continue` must be
   inside a loop, and not inside a function nested in it.
+- A `match` needs at least one arm. An arm's body starts on the line of its
+  `=>`, and the last arm may leave out the `;` before the closing brace. A
+  pattern's type may not be `Function` or `Family`, and `_`, or `any`
+  without a guard, must be the last arm. See [match](language.md#match).
 
 ## Expressions
 
@@ -82,8 +93,10 @@ power        = postfix [ "**" sign ] ;
 postfix      = primary { "." NAME | "(" [ arguments ] ")" | "[" expression "]" } ;
 arguments    = expression { "," expression } [ "," "reverse" "=" expression ] ;
 primary      = NUMBER | STRING | "true" | "false" | "fasle" | "null" | NAME
-             | "(" expression ")" | lambda ;
+             | "(" expression ")" | lambda | matchvalue ;
 lambda       = "func" "(" [ params ] ")" "=>" expression ;
+matchvalue   = "match" "(" expression ")" "{" valuearm { ";" valuearm } [ ";" ] "}" ;
+valuearm     = pattern [ guard ] "=>" expression ;
 ```
 
 ### Precedence
@@ -106,6 +119,9 @@ left to right, except `**`.
 A lambda's body is a whole expression, so it extends as far as it can:
 `func(int x) => x + 1` inside a call ends at the next `,` or `)`.
 `reverse=` is the only named argument, and only in `slice` and `lenslice`.
+A `matchvalue` raises `RangeError` when no arm matches. It may span lines where
+a statement can (after `=`, `ret`, or `=>`); inside `( )` or `[ ]` it must fit
+on one line.
 
 ## Types
 
@@ -134,8 +150,10 @@ families inheriting from it. `Function` and `Family` are for parameters only.
   family marked `@Decorator.private`. A method name starting with `_` is only a
   convention; privacy for methods is `@Decorator.private` as well.
 - **Keywords**: `func` `family` `takepkg` `ret` `if` `elif` `else` `while`
-  `repeat` `for` `break` `continue` `run` `handle` `then` `fixed` `hot` `cold`
-  `and` `or` `not` `also` `true` `false` `fasle` `null` `me`.
+  `repeat` `for` `break` `continue` `run` `handle` `then` `match` `fixed` `hot`
+  `cold` `and` `or` `not` `also` `true` `false` `fasle` `null` `me`. `match`
+  became a keyword with the `match` statement: it can no longer name a
+  variable, parameter, function, or family, though `x.match` is still a member.
 - **Numbers**: `42`, `3.5`, `1e9`, `2.5E-3`. A whole number is an `int` when it
   fits in 32 bits (-2,147,483,648 to 2,147,483,647), a `longint` when it fits
   in 64 bits, and a [`bigint`](std-bigint.md) otherwise, so `3000000000 + 1` is

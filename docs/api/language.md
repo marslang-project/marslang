@@ -183,6 +183,173 @@ are truthy. `fasle` is an accepted alias of `false`.
 `inf` is not a keyword. Use `float("inf")`, `float("-inf")`, or `float("nan")`
 for non-finite float values; see [math classification](std-math.md#infinity-nan-and-classification).
 
+## match
+
+`match` compares one value with a list of patterns and runs the first arm that
+fits: a clean replacement for a long `if`/`elif` chain.
+
+```mars
+family Shape{}
+family Circle(Shape){
+    func init(float r){ me.r = r; }
+    func width() => me.r * 2;
+}
+
+func describe(any value){
+    match (value){
+        1 => ret "one";
+        2, 3 => ret "two or three";
+        "quit" => { out("cleaning up"); ret "bye"; }
+        int n if (n > 100) => ret f"big {n}";
+        string s => ret "text " + s;
+        Circle c => ret f"a circle {c.width()} wide";
+        Shape => ret "some other shape";
+        null => ret "nothing";
+        _ => ret "anything else";
+    }
+}
+
+func m{
+    out(describe(1));               // one
+    out(describe(3.0));             // two or three
+    out(describe(500));             // big 500
+    out(describe("hi"));            // text hi
+    out(describe(Circle(1.5)));     // a circle 3 wide
+    out(describe(Shape()));         // some other shape
+    out(describe(null));            // nothing
+    out(describe(7));               // anything else
+}
+```
+
+The value in parentheses, the subject, is evaluated once. The arms are tried
+from top to bottom, and the first whose pattern matches, and whose guard holds
+if it has one, runs; there is no fall-through to the next arm. When no arm
+matches, nothing happens.
+
+An arm is `pattern => body`. The body is one statement, ending in `;`, or a
+`{ ... }` block, and starts on the line of its `=>`. `ret`, `break`, `continue`,
+and errors behave as in an `if` block: `ret` returns from the function, and
+`break` leaves the loop around the match. The last arm may leave out its `;`
+before the closing brace.
+
+### Patterns
+
+| Pattern | Matches |
+| --- | --- |
+| `1`, `-2.5`, `"quit"`, `true`, `null` | A value equal to the literal, as `==` says: `1` matches `1`, `1.0`, `longint(1)`, and `bigint(1)`, but not `"1"` |
+| `2, 3, 5` | A value equal to any of the literals |
+| `_` | Any value |
+| `int n` | A value of that type, bound to `n` for the arm |
+| `string` | A value of that type, without a name |
+| `[int, float] n` | A value of any of the listed types |
+| `Circle c` | An instance of the family `Circle`, or of a family inheriting from it |
+| `geo.Circle c` | The same, for a family from the imported package `geo` |
+| `pattern if (condition)` | What the pattern matches, when the condition is also true |
+
+The types are `int`, `longint`, `bigint`, `float`, `string`, `bool`, `array`,
+`set`, `map` (or `dict`), `pair`, `date`, `datetime`, `duration`, `any`, and
+families, including the error families. Literals are numbers, strings, `true`,
+`false`, and `null`. A variable is not a pattern; compare with one in a guard:
+`_ if (value == limit) => ...`.
+
+A type pattern converts nothing. An annotation turns `1` into `1.0` for a
+`float` parameter, but `float f` matches only floats: it does not match `1`, and
+`int n` does not match `1.0` or `longint(1)`. Write `[int, float] n` to accept
+both. Families work as in annotations: `Shape s` matches instances of `Shape`
+and of every family inheriting from it. `any` matches every value, `null`
+included. Patterns do not check elements, so there is no `array[int] a`; write
+`array a` and check the elements in a guard or in the body.
+
+### Guards and names
+
+```mars
+func m{
+    k = "outer";
+    for (n, arr(-3, 4, 0)){
+        match (n){
+            int k if (k < 0) => out(f"negative {k}");    // negative -3
+            int k if (k % 2 == 1) => out(f"odd {k}");
+            int k if (k > 0) => out(f"positive {k}");    // positive 4
+            _ => out("zero");                            // zero
+        }
+    }
+    out(k);                                              // outer
+}
+```
+
+A guard, `if (condition)` after any pattern, is checked only when the pattern
+matches; when it is false, the next arm is tried. A type pattern binds its name
+before the guard runs, so the guard and the body can both use it.
+
+The name belongs to its arm, as the item of `for (item, ...)` and the error of
+`handle(Type e)` belong to theirs: it is a new variable that hides an outer
+variable of the same name inside the arm only, and it is unknown after the arm.
+Assigning to it in the arm changes the arm's variable, never the outer one.
+
+### match as a value
+
+`match` also makes a value. Each arm's body is then an expression, and the
+result is the value of the arm that matches.
+
+```mars
+func label(int n) => match (n){
+    1 => "one";
+    2, 3 => "a few";
+    int k if (k > 100) => "lots";
+    _ => "some"
+};
+
+func m{
+    out(label(2), label(500), label(7));                    // a few lots some
+    word = match (label(1)){ "one" => "uno"; _ => "?" };
+    out(word);                                              // uno
+    out(match (word){ "uno" => 1; _ => 0 } + 1);            // 2
+}
+```
+
+An expression `match` with no matching arm has no value to give, so it raises
+`RangeError: no match arm matches 7 (an int)`; end with a `_` arm when every
+value needs an answer. It may span several lines after `=`, `ret`, a
+function's `=>`, or another arm's `=>`. Inside parentheses, as in a call's
+argument, it must fit on one line, since a `{` there cannot follow a line
+break; give it a variable first when it is longer.
+
+### Errors
+
+These are compile errors, and each names its line:
+
+| Written | Error |
+| --- | --- |
+| `match (x){ }` | The match has no arms |
+| `1 out("one");` | An arm needs `=>` |
+| `_ => ...;` before another arm | The arms after it can never run; so does `any v` without a guard |
+| `1 => ...; 2, 1.0 => ...;` | `1` appears twice; a repeat after an arm with a guard is allowed |
+| `Cirle c => ...;` | Unknown type |
+| `limit => ...;` | Unknown type: a bare name is a type, so compare with a variable in a guard |
+| `array[int] a => ...;` | Patterns do not check element types |
+| `int, float => ...;` | Only literals are listed with commas; write `[int, float]` |
+
+At run time, an error in an arm's guard or body is reported on the arm's own
+line, and an expression `match` without a matching arm raises `RangeError` on
+the line of the statement it is in.
+
+`match` is a keyword. It cannot name a variable, parameter, function, family,
+loop variable, or handled error, so a program that used it as a name must
+rename it (the standard library never did). After a dot it is still an
+ordinary name, so a field such as `result.match` keeps working.
+
+### How it works
+
+The parser reads each arm into a pattern, an optional guard, and a body, and
+the resolver gives a type pattern's name a scope of its own, as it does for the
+item of a `for`. Literal patterns become values when the program is compiled,
+so matching one compares the subject with it directly; the `if`/`elif` chain a
+match replaces evaluates its variable, and builds each string literal, again
+for every comparison, so a match over literals is never slower and usually
+faster. A type pattern checks the value's kind, walking the family chain for a
+family. All of it is in the Rust interpreter (`src/parser.rs`,
+`src/resolve.rs`, and `src/interp.rs`).
+
 ## Private methods
 
 ```mars

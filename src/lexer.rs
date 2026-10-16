@@ -86,7 +86,7 @@ pub fn lex(input: &str) -> Vec<Token> {
             let s: String = chars[start..i].iter().collect();
             let kind = if matches!(
                 s.as_str(),
-                "func" | "family" | "hot" | "cold" | "fixed" | "ret" | "takepkg"
+                "func" | "family" | "hot" | "cold" | "fixed" | "ret" | "takepkg" | "match"
             ) {
                 TokenKind::Keyword(s)
             } else {

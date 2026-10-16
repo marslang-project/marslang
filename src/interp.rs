@@ -407,8 +407,63 @@ impl<'o> Interp<'o> {
                 }
             }
             StmtKind::Run { body, handlers, then_block } => return self.exec_run(body, handlers, then_block.as_deref(), env),
+            StmtKind::Match { subject, arms } => {
+                let value = self.eval(subject, env)?;
+                if let Some(arm) = self.select_arm(&value, arms, env)? { return self.exec_block(&arm.body, env); }
+            }
         }
         Ok(Flow::Next)
+    }
+
+    /// The first arm whose pattern matches `value` and whose guard, if it has
+    /// one, holds. A type pattern's name is bound before its guard runs.
+    fn select_arm<'a, B>(&mut self, value: &Value, arms: &'a [MatchArm<B>], env: &mut Env) -> RResult<Option<&'a MatchArm<B>>> {
+        for arm in arms {
+            let matched = match &arm.pattern {
+                Pattern::Literals(literals) => literals.iter().any(|literal| literal_equals(value, literal)),
+                Pattern::Wildcard => true,
+                Pattern::Type { types, name } => {
+                    let mut matched = false;
+                    for ty in types {
+                        if self.has_kind(value, ty, env.unit).map_err(|error| at_arm(error, arm.line))? { matched = true; break; }
+                    }
+                    if let (true, Some(name)) = (matched, name) { self.declare(env, name, value.clone()); }
+                    matched
+                }
+            };
+            if !matched { continue; }
+            if let Some(guard) = &arm.guard {
+                if !self.eval(guard, env).map_err(|error| at_arm(error, arm.line))?.truth() { continue; }
+            }
+            return Ok(Some(arm));
+        }
+        Ok(None)
+    }
+
+    /// Whether `value` is of the kind a type pattern names. Unlike an
+    /// annotation it converts nothing: `float` matches only floats. A family
+    /// matches its instances and those of families inheriting from it.
+    fn has_kind(&self, value: &Value, ty: &str, unit: usize) -> RResult<bool> {
+        Ok(match ty {
+            "int" => matches!(value, Value::Int(_)),
+            "longint" => matches!(value, Value::Long(_)),
+            "bigint" => matches!(value, Value::Big(_)),
+            "float" => matches!(value, Value::Float(_)),
+            "string" => matches!(value, Value::Str(_)),
+            "bool" => matches!(value, Value::Bool(_)),
+            "array" => matches!(value, Value::Array(_)),
+            "set" => matches!(value, Value::Set(_)),
+            "map" | "dict" => matches!(value, Value::Map(_)),
+            "pair" => matches!(value, Value::Pair(_)),
+            "date" => matches!(value, Value::Date(_)),
+            "datetime" => matches!(value, Value::DateTime(_)),
+            "duration" => matches!(value, Value::Duration(_)),
+            "any" => true,
+            _ => match self.family_named(ty, unit) {
+                Some(family) => matches!(value, Value::Instance(instance) if descends(&instance.family, &family)),
+                None => return type_err(format!("unknown type {ty} in a match pattern")),
+            },
+        })
     }
 
     /// `run{} handle(...){} ... then{}`: the first handler whose error family
@@ -567,6 +622,16 @@ impl<'o> Interp<'o> {
                 }
             }
             Expr::Lambda(decl) => self.closure(decl, env),
+            Expr::Match { subject, arms } => {
+                let value = self.eval(subject, env)?;
+                match self.select_arm(&value, arms, env)? {
+                    Some(arm) => self.eval(&arm.body, env).map_err(|error| at_arm(error, arm.line))?,
+                    None => {
+                        let shown = match &value { Value::Str(text) => format!("{text:?}"), other => to_display_string(other) };
+                        return range_err(format!("no match arm matches {shown} ({} {})", article(value.type_name()), value.type_name()));
+                    }
+                }
+            }
             Expr::Call { callee, args } => return self.eval_call(callee, args, env),
         })
     }
@@ -1478,6 +1543,28 @@ fn descends(family: &Rc<Family>, ancestor: &Rc<Family>) -> bool {
         current = candidate.parent.clone();
     }
     false
+}
+
+/// An error from inside a match arm happened on the arm's line, when it has one.
+fn at_arm(error: RuntimeError, line: usize) -> RuntimeError {
+    if line > 0 { error.at_line(line) } else { error }
+}
+
+/// Whether `value == literal`, for a match pattern's literal, without making
+/// a value of the literal where it can be avoided.
+fn literal_equals(value: &Value, literal: &Expr) -> bool {
+    match (literal, value) {
+        (Expr::Int(x), Value::Int(y)) => x == y,
+        (Expr::String(x), Value::Str(y)) => x.as_str() == &**y,
+        (Expr::String(_), _) => false,
+        (Expr::Bool(x), _) => matches!(value, Value::Bool(y) if x == y),
+        (Expr::Null, _) => matches!(value, Value::Null),
+        (Expr::Int(x), _) => equal(value, &Value::Int(*x)),
+        (Expr::Long(x), _) => equal(value, &Value::Long(*x)),
+        (Expr::Float(x), _) => equal(value, &Value::Float(*x)),
+        (Expr::Big(x), _) => value.num_kind().is_some() && equal(value, &Value::Big(Rc::new(x.clone()))),
+        _ => false,
+    }
 }
 
 /// Undo resolver renaming (`__v3_count` -> `count`) for diagnostics.

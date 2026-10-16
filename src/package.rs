@@ -212,7 +212,8 @@ impl Loader {
             Item::Var(v) if v.is_fixed || v.temp == TempKind::Hot => Some((index, v.name.clone())),
             _ => None,
         }).collect();
-        crate::resolve::resolve(&mut program)?;
+        let imported = imported_types(&program, &self.packages);
+        crate::resolve::resolve(&mut program, &imported)?;
         let mut exports = Vec::new();
         for (index, name) in constants {
             let Item::Var(v) = &program.items[index] else { unreachable!("explicit declarations stay declarations") };
@@ -232,6 +233,23 @@ impl Loader {
         exports.retain(|(name, _)| !name.starts_with('_'));
         Ok((program, exports))
     }
+}
+
+/// `alias.Name` for everything but functions that the packages `program`
+/// imports export: the families, and the values that may hold one (std.Error
+/// exports its families as values), which match patterns may name.
+pub(crate) fn imported_types(program: &Program, packages: &[LoadedPackage]) -> HashSet<String> {
+    let mut types = HashSet::new();
+    for item in &program.items {
+        let Item::Import(import) = item else { continue };
+        let (Some(alias), Some(key)) = (&import.alias, &import.key) else { continue };
+        for package in packages.iter().filter(|package| &package.key == key) {
+            for (name, export) in &package.exports {
+                if !matches!(export, Export::Function(_)) { types.insert(format!("{alias}.{name}")); }
+            }
+        }
+    }
+    types
 }
 
 fn init_file(root: &Path, module: &str) -> PathBuf {

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use crate::ast::*;
 
 #[derive(Clone)]
@@ -9,10 +9,18 @@ struct Resolver {
     /// The line of the statement being resolved, which an anonymous function
     /// written in it takes as its own, for runtime errors.
     line: usize,
+    /// Families a match pattern may name: the program's own and the built-in
+    /// error families, and `alias.Name` for what its imported packages export.
+    families: HashSet<String>,
+    imported: HashSet<String>,
 }
 
-pub fn resolve(program: &mut Program) -> Result<(), String> {
-    let mut resolver = Resolver { scopes: vec![HashMap::new()], next: 0, line: 0 };
+/// `imported` holds `alias.Name` for each family (or value, which may hold a
+/// family) that the program's imported packages export.
+pub fn resolve(program: &mut Program, imported: &HashSet<String>) -> Result<(), String> {
+    let mut families: HashSet<String> = crate::value::ErrorKind::ALL.iter().map(|kind| kind.name().to_string()).collect();
+    families.extend(program.items.iter().filter_map(|item| match item { Item::Family(f) => Some(f.name.clone()), _ => None }));
+    let mut resolver = Resolver { scopes: vec![HashMap::new()], next: 0, line: 0, families, imported: imported.clone() };
     for item in &program.items {
         let name = match item { Item::Func(f) => Some(&f.name), Item::Family(f) => Some(&f.name), _ => None };
         if let Some(name) = name {
@@ -191,9 +199,53 @@ impl Resolver {
                 }
                 if let Some(body) = then_block { self.block(body)?; }
             }
+            StmtKind::Match { subject, arms } => {
+                self.expr(subject)?;
+                for arm in arms.iter_mut() {
+                    self.scopes.push(HashMap::new());
+                    let line = arm.line;
+                    self.arm_head(&mut arm.pattern, &mut arm.guard, line)?;
+                    for s in &mut arm.body { self.stmt(s)?; }
+                    self.scopes.pop();
+                }
+                repeated_literals(arms.iter().map(|arm| (&arm.pattern, arm.guard.is_some(), arm.line)))?;
+            }
             _ => {}
         }
         Ok(())
+    }
+
+    /// An arm's pattern and guard, in the arm's own scope: literals become
+    /// values, type names are checked, and a type pattern's name is bound.
+    fn arm_head(&mut self, pattern: &mut Pattern, guard: &mut Option<Expr>, line: usize) -> Result<(), String> {
+        let at = |message: String| if line > 0 { crate::parser::at_line(line, message) } else { message };
+        match pattern {
+            Pattern::Literals(literals) => for literal in literals.iter_mut() {
+                self.expr(literal).map_err(at)?;
+                fold_negation(literal);
+            },
+            Pattern::Type { types, name } => {
+                for ty in types.iter() { self.pattern_type(ty).map_err(at)?; }
+                if let Some(name) = name { *name = self.bind(name, false, None, None).map_err(at)?.name; }
+            }
+            Pattern::Wildcard => {}
+        }
+        if let Some(guard) = guard { self.expr(guard).map_err(at)?; }
+        Ok(())
+    }
+
+    /// Whether a type pattern names a type: a built-in kind or a family that is
+    /// declared here, built in, or exported by an imported package.
+    fn pattern_type(&self, ty: &str) -> Result<(), String> {
+        if PATTERN_TYPES.contains(&ty) || self.families.contains(ty) || self.imported.contains(ty) { return Ok(()); }
+        if matches!(ty, "Function" | "Family") {
+            return Err(format!("{ty} is a parameter type, not a pattern; match a function or family with any"));
+        }
+        if let Some((alias, name)) = ty.split_once('.') {
+            return Err(format!("unknown type '{ty}' in a match pattern: {alias} is not an imported package that exports a family {name}"));
+        }
+        Err(format!("unknown type '{ty}' in a match pattern; a type pattern is a built-in type such as int or string, \
+                     or a family. To compare with a variable, use a guard: _ if (value == {ty})"))
     }
     fn expr(&mut self, e: &mut Expr) -> Result<(), String> {
         match e {
@@ -229,11 +281,78 @@ impl Resolver {
                 if decl.line == 0 { (decl.line, decl.end_line) = (self.line, self.line); }
                 self.function(decl)?;
             }
+            Expr::Match { subject, arms } => {
+                self.expr(subject)?;
+                for arm in arms.iter_mut() {
+                    self.scopes.push(HashMap::new());
+                    let line = arm.line;
+                    self.arm_head(&mut arm.pattern, &mut arm.guard, line)?;
+                    let at = |message: String| if line > 0 { crate::parser::at_line(line, message) } else { message };
+                    self.expr(&mut arm.body).map_err(at)?;
+                    self.scopes.pop();
+                }
+                repeated_literals(arms.iter().map(|arm| (&arm.pattern, arm.guard.is_some(), arm.line)))?;
+            }
             _ => {}
         }
         Ok(())
     }
 }
+/// The types a match pattern may name besides families.
+const PATTERN_TYPES: [&str; 15] = ["int", "longint", "bigint", "float", "string", "bool", "array", "set", "map", "dict",
+    "pair", "date", "datetime", "duration", "any"];
+
+/// `-5` in a pattern is the literal -5, so it compares without arithmetic.
+fn fold_negation(literal: &mut Expr) {
+    let Expr::Unary { op, value } = literal else { return };
+    if op != "-" { return; }
+    let folded = match value.as_ref() {
+        Expr::Int(i) => Expr::Int(-i),
+        Expr::Long(l) => Expr::Long(-l),
+        Expr::Float(f) => Expr::Float(-f),
+        Expr::Big(b) => Expr::Big(-b.clone()),
+        _ => return,
+    };
+    *literal = folded;
+}
+
+/// A literal's value as text that equal values share (`1`, `1.0`, and a
+/// bigint 1 are one value, as `==` says), and as the program wrote it.
+fn literal_key(literal: &Expr) -> Option<(String, String)> {
+    Some(match literal {
+        Expr::Int(i) | Expr::Long(i) => (i.to_string(), i.to_string()),
+        Expr::Big(b) => (b.to_string(), b.to_string()),
+        Expr::Float(f) if *f == 0.0 => ("0".into(), crate::value::format_float(*f)),
+        Expr::Float(f) if f.is_finite() && f.fract() == 0.0 => (format!("{f:.0}"), crate::value::format_float(*f)),
+        Expr::Float(f) => (format!("float {f:?}"), crate::value::format_float(*f)),
+        Expr::String(s) => (format!("string {s}"), format!("{s:?}")),
+        Expr::Bool(b) => (format!("bool {b}"), b.to_string()),
+        Expr::Null => ("null".into(), "null".into()),
+        _ => return None,
+    })
+}
+
+/// A literal that an earlier arm without a guard, or the same arm, already
+/// matches: its arm could never run for that value.
+fn repeated_literals<'a>(arms: impl Iterator<Item = (&'a Pattern, bool, usize)>) -> Result<(), String> {
+    let mut seen: HashMap<String, usize> = HashMap::new();
+    for (pattern, guarded, line) in arms {
+        let Pattern::Literals(literals) = pattern else { continue };
+        let mut here = Vec::new();
+        for literal in literals {
+            let Some((key, written)) = literal_key(literal) else { continue };
+            if let Some(first) = seen.get(&key).copied().or_else(|| here.contains(&key).then_some(line)) {
+                let earlier = if first == line || first == 0 { "earlier in this match".to_string() } else { format!("on line {first}") };
+                let message = format!("{written} appears twice in this match: it is already matched {earlier}, so this arm can never run for it");
+                return Err(if line > 0 { crate::parser::at_line(line, message) } else { message });
+            }
+            here.push(key);
+        }
+        if !guarded { for key in here { seen.insert(key, line); } }
+    }
+    Ok(())
+}
+
 fn constant(e: &Expr) -> bool {
     match e {
         Expr::Number(_) | Expr::Int(_) | Expr::Long(_) | Expr::Big(_) | Expr::Float(_)

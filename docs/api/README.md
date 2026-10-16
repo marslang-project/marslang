@@ -93,7 +93,7 @@ and check their output. The example above is also an execution test.
 
 Programs run in a Rust tree-walking interpreter. The language is not self-hosted yet.
 Additional standard-library packages, the remaining decorators (`static`, `class`,
-`overload`), `match`, and async remain unimplemented. General named arguments
+`overload`), and async remain unimplemented. General named arguments
 are deferred; only slicing accepts `reverse=`. Proposed packages are not APIs.
 
 The `lex` command uses a separate lexer from the parser. The REPL reruns its

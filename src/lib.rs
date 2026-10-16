@@ -71,7 +71,8 @@ fn compile_here(source: &str, base: &std::path::Path) -> Result<Compiled, String
     let mut loader = package::Loader::new(base);
     loader.load_imports(&mut program, None)?;
     package::apply_decorators(&mut program, &loader.markers())?;
-    resolve::resolve(&mut program)?;
+    let imported = package::imported_types(&program, &loader.packages);
+    resolve::resolve(&mut program, &imported)?;
     Ok(Compiled { program, packages: loader.packages })
 }
 

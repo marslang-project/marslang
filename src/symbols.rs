@@ -233,6 +233,15 @@ impl Walker<'_> {
                 }
                 if let Some(block) = then_block { self.block(block, scope, known); }
             }
+            // `int n => ...`: n holds the value, of that type, within the arm.
+            StmtKind::Match { arms, .. } => for arm in arms {
+                if let Pattern::Type { types, name: Some(name) } = &arm.pattern {
+                    if known.insert(name.clone()) {
+                        self.variable(name, "match", Some(types.join(" | ")), false, Some(scope));
+                    }
+                }
+                self.block(&arm.body, scope, known);
+            },
             _ => {}
         }
     }
@@ -275,6 +284,12 @@ impl Walker<'_> {
             Expr::Typed { ty, .. } => ty.clone(),
             Expr::Lambda(_) => "Function".into(),
             Expr::Freeze(value) => return self.infer(value),
+            // The type every arm's value shows, when they agree.
+            Expr::Match { arms, .. } => {
+                let mut types = arms.iter().map(|arm| self.infer(&arm.body));
+                let first = types.next()??;
+                return types.all(|ty| ty.as_deref() == Some(first.as_str())).then_some(first);
+            }
             Expr::Unary { op, .. } if op == "!" || op == "not" => "bool".into(),
             Expr::Unary { value, .. } => return self.infer(value),
             Expr::Binary { op, .. } if matches!(op.as_str(), "==" | "!=" | "<" | "<=" | ">" | ">=" | "&&" | "||") => "bool".into(),

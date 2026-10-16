@@ -1,7 +1,12 @@
 use crate::ast::Expr;
 
 #[derive(Clone, Debug)]
-enum Token { Name(String), Number(String), String(String), Template(String), Op(String), Lambda(String), End }
+enum Token {
+    Name(String), Number(String), String(String), Template(String), Op(String), Lambda(String),
+    /// `match (subject){ arms }`: the text of the subject and of the arms.
+    Match(String, String),
+    End,
+}
 
 pub fn parse(text: &str) -> Result<Expr, String> {
     let mut tokens = Vec::new();
@@ -45,6 +50,15 @@ pub fn parse(text: &str) -> Result<Expr, String> {
                     tokens.push(Token::Lambda(text[open + 1..close].to_string()));
                     continue;
                 }
+            }
+            // A member may be named match, as in obj.match, but nothing else.
+            if word == "match" && !matches!(tokens.last(), Some(Token::Op(op)) if op == ".") {
+                let from = chars.peek().map_or(text.len(), |(at, _)| *at);
+                let (subject, body, end) = match_parts(text, from).ok_or(
+                    "'match' is a keyword: a match expression is written match (value){ pattern => result; ... }")?;
+                while chars.peek().is_some_and(|(at, _)| *at < end) { chars.next(); }
+                tokens.push(Token::Match(subject, body));
+                continue;
             }
             if let Some((_, quote @ ('"' | '\''))) = chars.peek().copied() {
                 if word == "f" {
@@ -170,6 +184,7 @@ impl Parser {
                 let body = self.expr(0)?;
                 Expr::Lambda(std::sync::Arc::new(crate::parser::lambda(&params, body)?))
             }
+            Token::Match(subject, body) => crate::parser::match_expression(&subject, &body)?,
             Token::Op(s) if s == "(" => { let v = self.expr(0)?; self.expect(")")?; v }
             Token::Op(op) if matches!(op.as_str(), "+" | "-" | "not") => {
                 let value = self.expr(if op == "not" { 3 } else { 6 })?;
@@ -235,6 +250,38 @@ impl Parser {
         }
         Ok(left)
     }
+}
+
+/// `(subject){ body }` starting at `text[from..]`, after the word `match`:
+/// the subject, the body, and where the closing brace ends.
+fn match_parts(text: &str, from: usize) -> Option<(String, String, usize)> {
+    let rest = &text[from..];
+    let open = from + rest.len() - rest.trim_start().len();
+    if !text[open..].starts_with('(') { return None; }
+    let close = closing(text, open, '(', ')')?;
+    let after = &text[close + 1..];
+    let brace = close + 1 + after.len() - after.trim_start().len();
+    if !text[brace..].starts_with('{') { return None; }
+    let end = closing(text, brace, '{', '}')?;
+    Some((text[open + 1..close].to_string(), text[brace + 1..end].to_string(), end + 1))
+}
+
+/// Where the `close` matching the `open` at `start` is, outside strings.
+fn closing(text: &str, start: usize, open: char, close: char) -> Option<usize> {
+    let (mut depth, mut quote, mut escaped) = (0usize, None, false);
+    for (i, ch) in text[start..].char_indices() {
+        if let Some(q) = quote {
+            if escaped { escaped = false; } else if ch == '\\' { escaped = true; } else if ch == q { quote = None; }
+            continue;
+        }
+        if ch == '"' || ch == '\'' { quote = Some(ch); }
+        else if ch == open { depth += 1; }
+        else if ch == close {
+            depth -= 1;
+            if depth == 0 { return Some(start + i); }
+        }
+    }
+    None
 }
 
 /// An f-string's parts from its text between the quotes: the pieces of text,

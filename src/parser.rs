@@ -113,6 +113,9 @@ fn validate_loop_control(body: &[Stmt], depth: usize) -> PResult<()> {
                 for handler in handlers { validate_loop_control(&handler.body, depth)?; }
                 if let Some(body) = then_block { validate_loop_control(body, depth)?; }
             }
+            StmtKind::Match { arms, .. } => {
+                for arm in arms { validate_loop_control(&arm.body, depth)?; }
+            }
             _ => {}
         }
     }
@@ -381,6 +384,7 @@ fn parse_family_from(header: &str, lines: &[Line], start: usize) -> PResult<(Fam
     } else {
         (header.trim().to_string(), None)
     };
+    reserved(&name, "family")?;
 
     let mut methods = Vec::new();
     let mut i = start + 1;
@@ -505,18 +509,23 @@ fn parse_func_from(header: &str, lines: &[Line], start: usize) -> PResult<(FuncD
             .split_once("=>")
             .ok_or_else(|| "invalid single-line function".to_string())?;
         let (name, params) = parse_func_signature(left.trim_start_matches("func").trim())?;
+        // `func f(int x) => match (x){` takes the lines of the match with it.
+        let (body, next) = match match_expression_start(right.trim()) {
+            Some(at) => gather_match_expression(right.trim(), at, lines, start)?,
+            None => (parse_expr(right.trim())?, start + 1),
+        };
         return Ok((
             FuncDecl {
                 name,
                 params,
-                body: FuncBody::Expr(parse_expr(right.trim())?),
+                body: FuncBody::Expr(body),
                 decorators: Vec::new(),
                 access: Access::Public,
                 doc: None,
                 line: lines[start].number,
-                end_line: lines[start].number,
+                end_line: lines[next - 1].number,
             },
-            start + 1,
+            next,
         ));
     }
 
@@ -569,6 +578,7 @@ fn parse_func_signature(sig: &str) -> PResult<(String, Vec<Param>)> {
     if !is_bare_ident(function_name) {
         return Err(format!("invalid function name '{function_name}'"));
     }
+    reserved(function_name, "function")?;
     if let Some((name, rest)) = sig.split_once('(') {
         let params_part = rest.trim().strip_suffix(')')
             .ok_or_else(|| "function parameter list must end with ')'".to_string())?
@@ -613,6 +623,7 @@ fn parse_func_signature(sig: &str) -> PResult<(String, Vec<Param>)> {
             }) || name.is_empty() {
                 return Err(format!("invalid function parameter '{p}'"));
             }
+            reserved(name, "parameter")?;
             params.push(Param {
                 ty: ty.to_string(),
                 name: name.to_string(),
@@ -684,6 +695,7 @@ fn parse_handle_header(header: &str) -> PResult<(Vec<String>, Option<String>)> {
                 Some(list) => split_top_level(list, ',').iter().map(|t| type_name(t)).collect::<PResult<Vec<_>>>()?,
                 None => vec![type_name(ty)?],
             };
+            reserved(name, "handled error")?;
             return Ok((types, Some(name.to_string())));
         }
     }
@@ -702,11 +714,22 @@ fn parse_stmt_at(lines: &[Line], idx: usize) -> PResult<(Stmt, usize)> {
 }
 
 fn parse_stmt_from(lines: &[Line], idx: usize) -> PResult<(StmtKind, usize)> {
-    let l = lines[idx].trim();
+    parse_stmt_text(lines[idx].trim(), lines, idx)
+}
+
+/// Parse the statement that starts at `lines[idx]`, whose text is `l`: the
+/// line itself, or, for a match arm, what follows its `=>`.
+fn parse_stmt_text(l: &str, lines: &[Line], idx: usize) -> PResult<(StmtKind, usize)> {
+    if starts_with_word(l, "match") {
+        if !l.ends_with('{') {
+            return Err("'match' is a keyword: a match is written match (value){ pattern => ...; }".into());
+        }
+        return parse_match_stmt(l, lines, idx);
+    }
 
     // A func inside a block: a closure over the variables around it.
     if l.starts_with("func ") {
-        let (decl, next) = parse_func(lines, idx)?;
+        let (decl, next) = parse_func_from(l, lines, idx)?;
         validate_function_loops(&decl)?;
         return Ok((StmtKind::Func { name: decl.name.clone(), decl: std::sync::Arc::new(decl) }, next));
     }
@@ -743,6 +766,7 @@ fn parse_stmt_from(lines: &[Line], idx: usize) -> PResult<(StmtKind, usize)> {
         if !is_bare_ident(name) || parts[1].trim().is_empty() {
             return Err("expected for (itemname, iterable)".into());
         }
+        reserved(name, "loop variable")?;
         let iterable = parse_expr(parts[1].trim())?;
         let mut next = idx + 1;
         let body = parse_block_stmts(lines, &mut next)?;
@@ -750,12 +774,351 @@ fn parse_stmt_from(lines: &[Line], idx: usize) -> PResult<(StmtKind, usize)> {
     }
 
     if l.starts_with("if ") || l.starts_with("if(") {
-        return parse_if_stmt(lines, idx);
+        return parse_if_stmt(l, lines, idx);
     }
     if l.starts_with("repeat ") {
-        return parse_repeat_stmt(lines, idx);
+        return parse_repeat_stmt(l, lines, idx);
+    }
+    // `label = match (x){`: a match expression over the lines that follow.
+    if let Some(at) = match_expression_start(l) {
+        return parse_match_expression_stmt(l, at, lines, idx);
     }
     Ok((parse_stmt_line(l)?, idx + 1))
+}
+
+// ----- match -----
+
+/// Stands in for a match expression written over several lines while the
+/// statement around it is parsed; the parsed match then replaces it.
+const MATCH_PLACEHOLDER: &str = "__match_expression__";
+
+/// Whether `text` starts with the word `word`, not merely with those letters.
+fn starts_with_word(text: &str, word: &str) -> bool {
+    text.strip_prefix(word).is_some_and(|rest| !rest.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_'))
+}
+
+/// `match` cannot name anything a program declares.
+fn reserved(name: &str, what: &str) -> PResult<()> {
+    if name == "match" { return Err(format!("'match' is a keyword and cannot name a {what}")); }
+    Ok(())
+}
+
+/// Where the match expression starts in a line that ends with its header,
+/// such as `label = match (x){`; `None` for any other line.
+fn match_expression_start(text: &str) -> Option<usize> {
+    let header = text.strip_suffix('{')?.trim_end();
+    if !header.ends_with(')') { return None; }
+    // The '(' that the final ')' closes.
+    let (mut opens, mut quote, mut escaped, mut open) = (Vec::new(), None, false, None);
+    for (i, ch) in header.char_indices() {
+        if let Some(q) = quote {
+            if escaped { escaped = false; } else if ch == '\\' { escaped = true; } else if ch == q { quote = None; }
+            continue;
+        }
+        match ch {
+            '\'' | '"' => quote = Some(ch),
+            '(' => opens.push(i),
+            ')' => open = opens.pop(),
+            _ => {}
+        }
+    }
+    let before = header[..open?].trim_end();
+    let at = before.strip_suffix("match")?.len();
+    let boundary = !before[..at].ends_with(|c: char| c.is_ascii_alphanumeric() || c == '_' || c == '.');
+    boundary.then_some(at)
+}
+
+/// `match (subject){` (or `match(subject) {`): the subject.
+fn match_subject(header: &str) -> PResult<Expr> {
+    let usage = "a match is written match (value){ pattern => ...; }";
+    let after = header.trim().strip_prefix("match").ok_or(usage)?.trim_start();
+    if !after.starts_with('(') { return Err(usage.into()); }
+    let close = find_matching_paren(after)?;
+    if after[close + 1..].trim() != "{" { return Err(usage.into()); }
+    let inner = after[1..close].trim();
+    if inner.is_empty() { return Err("match needs the value to match between its parentheses".into()); }
+    parse_expr(inner)
+}
+
+/// The first `=>` outside strings and brackets, splitting an arm into its
+/// pattern (with any guard) and its body.
+fn split_arm(text: &str) -> Option<(&str, &str)> {
+    let (mut depth, mut quote, mut escaped) = (0usize, None, false);
+    let mut chars = text.char_indices().peekable();
+    while let Some((i, ch)) = chars.next() {
+        if let Some(q) = quote {
+            if escaped { escaped = false; } else if ch == '\\' { escaped = true; } else if ch == q { quote = None; }
+            continue;
+        }
+        match ch {
+            '\'' | '"' => quote = Some(ch),
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth = depth.saturating_sub(1),
+            '=' if depth == 0 && matches!(chars.peek(), Some((_, '>'))) => return Some((&text[..i], &text[i + 2..])),
+            _ => {}
+        }
+    }
+    None
+}
+
+const NO_ARROW: &str = "a match arm needs '=>' between its pattern and its body, as in 1 => out(\"one\");";
+
+/// Where the word `word` stands in `text`, outside strings and brackets.
+fn find_word(text: &str, word: &str) -> Option<usize> {
+    let (mut depth, mut quote, mut escaped) = (0usize, None, false);
+    let ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    for (i, ch) in text.char_indices() {
+        if let Some(q) = quote {
+            if escaped { escaped = false; } else if ch == '\\' { escaped = true; } else if ch == q { quote = None; }
+            continue;
+        }
+        match ch {
+            '\'' | '"' => quote = Some(ch),
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth = depth.saturating_sub(1),
+            _ if depth == 0 && text[i..].starts_with(word)
+                && !text[..i].ends_with(ident) && !text[i + word.len()..].starts_with(ident) => return Some(i),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// The pattern and guard of a match arm, from the text before its `=>`.
+fn parse_arm_head(head: &str) -> PResult<(Pattern, Option<Expr>)> {
+    let head = head.trim();
+    let (pattern, guard) = match find_word(head, "if") {
+        Some(at) => {
+            let condition = head[at + 2..].trim();
+            if !condition.starts_with('(') || find_matching_paren(condition)? != condition.len() - 1 {
+                return Err("a match guard is written if (condition), with the condition in parentheses".into());
+            }
+            (head[..at].trim(), Some(parse_expr(&condition[1..condition.len() - 1])?))
+        }
+        None => (head, None),
+    };
+    Ok((parse_pattern(pattern)?, guard))
+}
+
+fn parse_pattern(text: &str) -> PResult<Pattern> {
+    if text.is_empty() { return Err("a match arm needs a pattern before '=>'".into()); }
+    if text == "_" { return Ok(Pattern::Wildcard); }
+    let first_word = text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).next().unwrap_or("");
+    let literal = !text.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_' || c == '[')
+        || matches!(first_word, "true" | "false" | "fasle" | "null")
+        || text.starts_with("f\"") || text.starts_with("f'");
+    if literal {
+        let mut literals = Vec::new();
+        for part in split_top_level(text, ',') {
+            let part = part.trim();
+            if part.is_empty() {
+                return Err("a list of literals in a match pattern has an empty item; separate the literals with single commas".into());
+            }
+            let not_literal = || format!("'{part}' is not a literal; a match pattern is literals such as 1 or \"quit\", _, or a type and a name such as int n");
+            let value = parse_expr(part).map_err(|_| not_literal())?;
+            let plain = match &value {
+                Expr::Number(_) | Expr::String(_) | Expr::Bool(_) | Expr::Null => true,
+                Expr::Unary { op, value } => op == "-" && matches!(value.as_ref(), Expr::Number(_)),
+                _ => false,
+            };
+            if !plain { return Err(not_literal()); }
+            literals.push(value);
+        }
+        return Ok(Pattern::Literals(literals));
+    }
+    if split_top_level(text, ',').len() > 1 {
+        return Err("only literals can be listed with commas; for several types write a union, such as [int, float] n".into());
+    }
+    let (types_text, name) = if let Some(inner) = text.strip_prefix('[') {
+        let close = inner.find(']').ok_or("a union of types in a match pattern needs its closing ']'")?;
+        (&text[..close + 2], inner[close + 1..].trim())
+    } else {
+        match text.split_once(char::is_whitespace) {
+            Some((ty, name)) => (ty, name.trim()),
+            None => (text, ""),
+        }
+    };
+    let types: Vec<String> = match types_text.strip_prefix('[').and_then(|t| t.strip_suffix(']')) {
+        Some(list) => list.split(',').map(|t| t.trim().to_string()).collect(),
+        None => vec![types_text.to_string()],
+    };
+    for ty in &types {
+        if ty.is_empty() || ty.split('.').count() > 2 || !ty.split('.').all(is_bare_ident) {
+            return Err(format!("'{ty}' is not a type a match pattern can test; write a plain type such as int, array, or Circle \
+                                (element types, as in array[int], are not checked)"));
+        }
+    }
+    let name = match name {
+        "" | "_" => None,
+        name if is_bare_ident(name) => {
+            reserved(name, "match binding")?;
+            Some(name.to_string())
+        }
+        _ => return Err(format!("expected a type and one name in the match pattern '{text}', such as int n")),
+    };
+    Ok(Pattern::Type { types, name })
+}
+
+/// Arms that can never run: those after an arm without a guard that matches
+/// every value (`_` or `any`). A match must also have an arm.
+fn check_arms<B>(arms: &[MatchArm<B>]) -> PResult<()> {
+    if arms.is_empty() { return Err("this match has no arms; write at least one, such as _ => out(\"anything\");".into()); }
+    for (index, arm) in arms.iter().enumerate().take(arms.len() - 1) {
+        let catch_all = match &arm.pattern {
+            Pattern::Wildcard => Some("_"),
+            Pattern::Type { types, .. } if types.iter().any(|t| t == "any") => Some("any"),
+            _ => None,
+        };
+        if let (Some(what), None) = (catch_all, &arm.guard) {
+            let next = &arms[index + 1];
+            let message = format!("this match arm can never run: the {what} arm before it matches every value, so it must be the last arm");
+            return Err(if next.line > 0 { at_line(next.line, message) } else { message });
+        }
+    }
+    Ok(())
+}
+
+/// The statement form, from its header `match (x){` at `lines[start]` to its
+/// closing brace. Each arm's body is one statement or a `{ }` block.
+fn parse_match_stmt(header: &str, lines: &[Line], start: usize) -> PResult<(StmtKind, usize)> {
+    let subject = match_subject(header)?;
+    let mut arms = Vec::new();
+    let mut i = start + 1;
+    loop {
+        let Some(line) = lines.get(i) else { return Err("unterminated match: its closing '}' is missing".into()) };
+        let l = line.trim();
+        if l.is_empty() || l == ";" { i += 1; continue; }
+        if l == "}" || l == "};" { i += 1; break; }
+        let number = line.number;
+        // The last arm may end at the match's closing brace instead of a ';'.
+        let (text, closes) = match l.strip_suffix('}') { Some(arm) => (arm.trim(), true), None => (l, false) };
+        let (pattern, guard, body, next) = parse_stmt_arm(text, lines, i).map_err(|e| at_line(number, e))?;
+        arms.push(MatchArm { pattern, guard, body, line: number });
+        i = next;
+        if closes { break; }
+    }
+    check_arms(&arms)?;
+    Ok((StmtKind::Match { subject, arms }, i))
+}
+
+fn parse_stmt_arm(text: &str, lines: &[Line], i: usize) -> PResult<(Pattern, Option<Expr>, Vec<Stmt>, usize)> {
+    let (head, rest) = split_arm(text).ok_or(NO_ARROW)?;
+    let (pattern, guard) = parse_arm_head(head)?;
+    let rest = rest.trim();
+    if rest == "{" {
+        let mut next = i + 1;
+        let body = parse_block_stmts(lines, &mut next)?;
+        return Ok((pattern, guard, body, next));
+    }
+    if rest.is_empty() || rest == ";" {
+        return Err("a match arm needs a body after '=>' on the same line: one statement ending in ';', or a { } block".into());
+    }
+    let (kind, next) = parse_stmt_text(rest, lines, i)?;
+    Ok((pattern, guard, vec![Stmt { kind, line: lines[i].number }], next))
+}
+
+/// The expression form over several lines, from its header (`text[at..]`, as
+/// in `match (x){`) at `lines[idx]` to its closing brace and an optional `;`
+/// after it. Each arm's body is one expression.
+fn parse_match_expression_lines(header: &str, lines: &[Line], idx: usize) -> PResult<(Expr, usize)> {
+    let subject = match_subject(header)?;
+    let mut arms = Vec::new();
+    let mut i = idx + 1;
+    loop {
+        let Some(line) = lines.get(i) else { return Err("unterminated match: its closing '}' is missing".into()) };
+        let l = line.trim();
+        if l.is_empty() || l == ";" { i += 1; continue; }
+        if l == "}" || l == "};" { i += 1; break; }
+        let number = line.number;
+        let (text, closes) = match l.strip_suffix('}') { Some(arm) => (arm.trim(), true), None => (l, false) };
+        let arm = (|| {
+            let (head, rest) = split_arm(text).ok_or(NO_ARROW)?;
+            let (pattern, guard) = parse_arm_head(head)?;
+            let rest = rest.trim();
+            let rest = rest.strip_suffix(';').unwrap_or(rest).trim();
+            if rest.is_empty() {
+                return Err("a match arm needs a value after '=>' on the same line".to_string());
+            }
+            let (body, next) = match match_expression_start(rest).filter(|_| !closes) {
+                Some(at) => gather_match_expression(rest, at, lines, i)?,
+                None => (parse_expr(rest)?, i + 1),
+            };
+            Ok((MatchArm { pattern, guard, body, line: number }, next))
+        })().map_err(|e| at_line(number, e))?;
+        arms.push(arm.0);
+        i = arm.1;
+        if closes { break; }
+    }
+    check_arms(&arms)?;
+    Ok((Expr::Match { subject: Box::new(subject), arms }, i))
+}
+
+/// The expression `text` whose match, starting at `text[at..]`, continues on
+/// the lines after `lines[idx]`; what comes before the match, as in
+/// `count + match (x){`, is part of it. Also the index of the line after it.
+fn gather_match_expression(text: &str, at: usize, lines: &[Line], idx: usize) -> PResult<(Expr, usize)> {
+    let (found, mut next) = parse_match_expression_lines(&text[at..], lines, idx)?;
+    if lines.get(next).is_some_and(|line| line.trim() == ";") { next += 1; }
+    let prefix = text[..at].trim();
+    if prefix.is_empty() { return Ok((found, next)); }
+    let mut expr = parse_expr(&format!("{prefix} {MATCH_PLACEHOLDER}"))?;
+    let mut found = Some(found);
+    substitute(&mut expr, &mut found);
+    Ok((expr, next))
+}
+
+/// A statement such as `label = match (x){` whose match expression continues
+/// on the following lines.
+fn parse_match_expression_stmt(l: &str, at: usize, lines: &[Line], idx: usize) -> PResult<(StmtKind, usize)> {
+    let (found, mut next) = parse_match_expression_lines(&l[at..], lines, idx)?;
+    if lines.get(next).is_some_and(|line| line.trim() == ";") { next += 1; }
+    let mut kind = parse_stmt_line(&format!("{} {MATCH_PLACEHOLDER};", &l[..at]))?;
+    let mut found = Some(found);
+    match &mut kind {
+        StmtKind::Var(v) => substitute(&mut v.value, &mut found),
+        StmtKind::Assign { value, .. } => substitute(value, &mut found),
+        StmtKind::Ret(e) | StmtKind::Expr(e) => substitute(e, &mut found),
+        _ => {}
+    }
+    if found.is_some() { return Err("a match expression must be part of a value, as in label = match (x){ ... };".into()); }
+    Ok((kind, next))
+}
+
+/// Put `found` where the placeholder name stands in `expr`.
+fn substitute(expr: &mut Expr, found: &mut Option<Expr>) {
+    if found.is_none() { return; }
+    match expr {
+        Expr::Ident(name) if name == MATCH_PLACEHOLDER => *expr = found.take().unwrap(),
+        Expr::Typed { value, .. } | Expr::Freeze(value) | Expr::Unary { value, .. } => substitute(value, found),
+        Expr::Binary { left, right, .. } => { substitute(left, found); substitute(right, found); }
+        Expr::Call { callee, args } => { substitute(callee, found); for arg in args { substitute(arg, found); } }
+        Expr::Member { object, .. } => substitute(object, found),
+        Expr::Index { object, index } => { substitute(object, found); substitute(index, found); }
+        Expr::Template(parts) => for part in parts { substitute(part, found); },
+        // `f = func(int x) => match (x){`: the match is the lambda's body.
+        Expr::Lambda(decl) => {
+            if let FuncBody::Expr(body) = &mut std::sync::Arc::make_mut(decl).body { substitute(body, found); }
+        }
+        _ => {}
+    }
+}
+
+/// A match expression written within one line, as `match (subject){ body }`.
+pub(crate) fn match_expression(subject: &str, body: &str) -> PResult<Expr> {
+    let subject = subject.trim();
+    if subject.is_empty() { return Err("match needs the value to match between its parentheses".into()); }
+    let subject = parse_expr(subject)?;
+    let mut arms = Vec::new();
+    for part in split_top_level(body, ';') {
+        let part = part.trim();
+        if part.is_empty() { continue; }
+        let (head, rest) = split_arm(part).ok_or(NO_ARROW)?;
+        let (pattern, guard) = parse_arm_head(head)?;
+        if rest.trim().is_empty() { return Err("a match arm needs a value after '=>'".into()); }
+        arms.push(MatchArm { pattern, guard, body: parse_expr(rest.trim())?, line: 0 });
+    }
+    check_arms(&arms)?;
+    Ok(Expr::Match { subject: Box::new(subject), arms })
 }
 
 fn parse_for_sequence(text: &str, line: usize) -> PResult<Vec<Stmt>> {
@@ -790,8 +1153,7 @@ fn parse_for_sequence(text: &str, line: usize) -> PResult<Vec<Stmt>> {
     }).collect()
 }
 
-fn parse_if_stmt(lines: &[Line], start: usize) -> PResult<(StmtKind, usize)> {
-    let line = lines[start].trim();
+fn parse_if_stmt(line: &str, lines: &[Line], start: usize) -> PResult<(StmtKind, usize)> {
     if !line.ends_with('{') {
         return Err("if statement header must end with '{'".to_string());
     }
@@ -844,8 +1206,7 @@ fn parse_if_stmt(lines: &[Line], start: usize) -> PResult<(StmtKind, usize)> {
     ))
 }
 
-fn parse_repeat_stmt(lines: &[Line], start: usize) -> PResult<(StmtKind, usize)> {
-    let line = lines[start].trim();
+fn parse_repeat_stmt(line: &str, lines: &[Line], start: usize) -> PResult<(StmtKind, usize)> {
     if !line.ends_with('{') {
         return Err("repeat statement header must end with '{'".to_string());
     }
@@ -970,6 +1331,7 @@ fn parse_var_decl(line: &str) -> PResult<VarDecl> {
     if !is_bare_ident(&name) {
         return Err(format!("invalid variable declaration '{name}'; fixed must precede hot/cold"));
     }
+    reserved(&name, "variable")?;
 
     Ok(VarDecl {
         is_fixed,
