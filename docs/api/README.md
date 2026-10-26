@@ -14,6 +14,7 @@ notes elsewhere under `docs/` remain local.
 - [Strings and slicing](strings.md): Unicode characters, reversal, and strict bounds.
 - [Collections](collections.md): arrays, sets, pairs, maps, and copying.
 - [Dates and times](dates.md): `date`, `datetime`, and `duration`, with time zones.
+- [Async and await](async.md): tasks that wait without blocking each other, with `async func` and `await`.
 - [Built-ins and errors](builtins.md): input/output, conversions, and runtime errors.
 - [std.math](std-math.md): 51 math functions and six constants, written in Marslang on native float primitives.
 - [std.containers](std-containers.md): stack, queue, deque, and priority queue.
@@ -32,6 +33,7 @@ notes elsewhere under `docs/` remain local.
 - [std.terminal](std-terminal.md): colours and styles, the terminal's size, and progress bars.
 - [std.sqlite](std-sqlite.md): SQL databases in a file or in memory, with parameters and transactions.
 - [std.secrets](std-secrets.md): secure tokens, passwords, and choices, for anything an attacker must not guess.
+- [std.async](std-async.md): sleep, all, race, timeout, and cancelling tasks.
 - [std.uuid](std-uuid.md): random (v4) and time-ordered (v7) UUIDs.
 - [std.types](std-types.md): a value's kind, family checks.
 - [std.memory](std-memory.md): addresses, object identity, and the cycle collector.
