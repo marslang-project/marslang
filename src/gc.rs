@@ -5,7 +5,7 @@
 //! bound methods. This collector finds unreachable cycles the way CPython's does:
 //!
 //! 1. Every object that can hold values (arrays, sets, maps, pairs, instances,
-//!    bound methods, closures, packages) is registered when it is created, and
+//!    bound methods, closures, packages, tasks) is registered when it is created, and
 //!    a call frame once a closure captures it: a closure stored in the frame it
 //!    closes over is a cycle.
 //! 2. For each live object, start from its strong count and subtract one for
@@ -53,6 +53,7 @@ enum Tracked {
     Func(Weak<Callable>),
     Package(Weak<Package>),
     Frame(Weak<Frame>),
+    Task(Weak<crate::runtime::Task>),
 }
 
 enum Node {
@@ -64,6 +65,7 @@ enum Node {
     Func(Rc<Callable>),
     Package(Rc<Package>),
     Frame(Rc<Frame>),
+    Task(Rc<crate::runtime::Task>),
 }
 
 /// Register a newly created value that can hold other values.
@@ -76,6 +78,7 @@ pub(crate) fn track(value: &Value) {
         Value::Instance(o) => Tracked::Instance(Rc::downgrade(o)),
         Value::Func(f) if matches!(f.as_ref(), Callable::Method(..) | Callable::Closure(..)) => Tracked::Func(Rc::downgrade(f)),
         Value::Package(o) => Tracked::Package(Rc::downgrade(o)),
+        Value::Task(o) => Tracked::Task(Rc::downgrade(o)),
         _ => return,
     };
     register(tracked);
@@ -198,6 +201,7 @@ impl Tracked {
             Tracked::Func(w) => Node::Func(w.upgrade()?),
             Tracked::Package(w) => Node::Package(w.upgrade()?),
             Tracked::Frame(w) => Node::Frame(w.upgrade()?),
+            Tracked::Task(w) => Node::Task(w.upgrade()?),
         })
     }
 }
@@ -213,6 +217,7 @@ impl Node {
             Node::Func(o) => Rc::as_ptr(o) as *const () as usize,
             Node::Package(o) => Rc::as_ptr(o) as *const () as usize,
             Node::Frame(o) => Rc::as_ptr(o) as *const () as usize,
+            Node::Task(o) => Rc::as_ptr(o) as *const () as usize,
         }
     }
 
@@ -226,6 +231,7 @@ impl Node {
             Node::Func(o) => Rc::strong_count(o),
             Node::Package(o) => Rc::strong_count(o),
             Node::Frame(o) => Rc::strong_count(o),
+            Node::Task(o) => Rc::strong_count(o),
         }
     }
 
@@ -239,6 +245,7 @@ impl Node {
             Node::Func(o) => Tracked::Func(Rc::downgrade(o)),
             Node::Package(o) => Tracked::Package(Rc::downgrade(o)),
             Node::Frame(o) => Tracked::Frame(Rc::downgrade(o)),
+            Node::Task(o) => Tracked::Task(Rc::downgrade(o)),
         }
     }
 
@@ -276,6 +283,13 @@ impl Node {
                 }
                 _ => return false,
             },
+            // A finished task holds its result. What an unfinished one holds,
+            // on its stack or in the call waiting to start, counts as held
+            // from outside, as the interpreter's own stack does.
+            Node::Task(o) => match o.held() {
+                Some(values) => values.iter().for_each(|v| value(v, child)),
+                None => return false,
+            },
         }
         true
     }
@@ -299,6 +313,12 @@ impl Node {
                 released.extend(std::mem::take(&mut *o.values.borrow_mut()).into_values());
                 o.parent.borrow_mut().take();
             }
+            Node::Task(o) => if let Some(outcome) = o.release() {
+                match outcome {
+                    crate::runtime::Outcome::Value(v) | crate::runtime::Outcome::Error(_, Some(v)) => released.push(v),
+                    crate::runtime::Outcome::Error(_, None) => {}
+                }
+            },
             Node::Func(_) | Node::Package(_) => {}
         }
     }

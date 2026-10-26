@@ -24,3 +24,6 @@ fixed OutOfBoundsError = OutOfBoundsError;
 
 // Text that does not parse, such as longint("12x").
 fixed SyntaxError = SyntaxError;
+
+// Raised inside a task at the await where its cancellation arrives.
+fixed CancelledError = CancelledError;

@@ -115,6 +115,10 @@ impl Loader {
         }
         let alias = import.alias.clone().unwrap_or_else(|| module.rsplit('.').next().unwrap().to_string());
         if !is_ident(&alias) { return Err(format!("invalid import alias '{alias}' for package '{written}'")); }
+        // async is a keyword too, but std.async is imported under its name.
+        if matches!(alias.as_str(), "match" | "await") {
+            return Err(format!("'{alias}' is a keyword and cannot name an imported package"));
+        }
         if (module == "rs" || module.starts_with("rs.")) && !standard {
             return Err(format!("native package '{module}' is only available to standard packages"));
         }

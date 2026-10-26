@@ -263,11 +263,11 @@ impl Resolver {
                 if let Some(binding) = self.find(name) {
                     *e = binding.hot.unwrap_or(Expr::Ident(binding.name));
                 } else if !matches!(name.as_str(), "me" | "out" | "slout" | "in" | "inln" | "arr" | "set" | "pair" | "map" | "dict" | "a" | "s" | "p" | "int" | "longint" | "float" | "bigint" | "string"
-                    | "err" | "lasterr" | "ord" | "chr" | "date" | "datetime" | "duration" | "Error" | "TypeError" | "RangeError" | "OutOfBoundsError" | "SyntaxError") {
+                    | "err" | "lasterr" | "ord" | "chr" | "date" | "datetime" | "duration" | "Error" | "TypeError" | "RangeError" | "OutOfBoundsError" | "SyntaxError" | "CancelledError") {
                     return Err(format!("unknown name '{name}'"));
                 }
             }
-            Expr::Unary { value, .. } | Expr::Freeze(value) | Expr::Typed { value, .. } => self.expr(value)?,
+            Expr::Unary { value, .. } | Expr::Freeze(value) | Expr::Typed { value, .. } | Expr::Await(value) => self.expr(value)?,
             Expr::Binary { left, right, .. } => {
                 self.expr(left)?; self.expr(right)?;
             }
@@ -299,8 +299,8 @@ impl Resolver {
     }
 }
 /// The types a match pattern may name besides families.
-const PATTERN_TYPES: [&str; 15] = ["int", "longint", "bigint", "float", "string", "bool", "array", "set", "map", "dict",
-    "pair", "date", "datetime", "duration", "any"];
+const PATTERN_TYPES: [&str; 16] = ["int", "longint", "bigint", "float", "string", "bool", "array", "set", "map", "dict",
+    "pair", "date", "datetime", "duration", "task", "any"];
 
 /// `-5` in a pattern is the literal -5, so it compares without arithmetic.
 fn fold_negation(literal: &mut Expr) {

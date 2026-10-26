@@ -8,6 +8,7 @@ pub mod lexer;
 mod package;
 pub mod parser;
 mod resolve;
+pub mod runtime;
 mod symbols;
 pub mod value;
 #[cfg(windows)]
@@ -21,7 +22,7 @@ pub const VERSION: &str = concat!("rs-", env!("CARGO_PKG_VERSION"));
 
 /// Interpreter threads get a large stack so deep Marslang recursion reaches
 /// `interp::MAX_CALL_DEPTH` (a catchable RangeError) instead of overflowing.
-const INTERPRETER_STACK: usize = 512 * 1024 * 1024;
+pub(crate) const INTERPRETER_STACK: usize = 512 * 1024 * 1024;
 
 /// A parsed and resolved program with the packages it imports, ready to run.
 pub struct Compiled {

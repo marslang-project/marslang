@@ -56,6 +56,8 @@ pub struct FuncDecl {
     /// Source lines of the header and of the last line of the body.
     pub line: usize,
     pub end_line: usize,
+    /// `async func`: calling it starts a task and returns the task.
+    pub is_async: bool,
 }
 
 /// `@Alias.name` or `@Alias.name(argument)` above a func or family.
@@ -247,4 +249,6 @@ pub enum Expr {
         op: String,
         right: Box<Expr>,
     },
+    /// `await task`: the task's result, once it has finished.
+    Await(Box<Expr>),
 }

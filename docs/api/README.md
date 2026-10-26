@@ -95,8 +95,10 @@ and check their output. The example above is also an execution test.
 ## Current limits
 
 Programs run in a Rust tree-walking interpreter. The language is not self-hosted yet.
-Additional standard-library packages, the remaining decorators (`static`, `class`,
-`overload`), and async remain unimplemented. General named arguments
+Additional standard-library packages and the remaining decorators (`static`, `class`,
+`overload`) remain unimplemented. [Async](async.md) has its core: tasks, `async func`,
+`await`, and [std.async](std-async.md)'s timers; `std.http`, `time.sleep`, and other
+calls that wait still block every task. General named arguments
 are deferred; only slicing accepts `reverse=`. Proposed packages are not APIs.
 
 The `lex` command uses a separate lexer from the parser. The REPL reruns its

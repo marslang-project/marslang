@@ -26,6 +26,7 @@ fn references(value: &Value) -> Option<usize> {
         Value::Instance(o) => Rc::strong_count(o),
         Value::Func(o) => Rc::strong_count(o),
         Value::Package(o) => Rc::strong_count(o),
+        Value::Task(o) => Rc::strong_count(o),
         _ => return None,
     })
 }

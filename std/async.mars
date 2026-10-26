@@ -1,0 +1,246 @@
+// std.async: waiting together. Tasks, async func, and await are part of the
+// language; this package adds timers and ways to wait for several tasks.
+//
+// The waits underneath are native (std/rs/async.rs) on the interpreter's
+// event loop (src/runtime.rs): a timer, waiting for the first of several
+// tasks to finish, and a wait on a worker thread. all, race, timeout,
+// settled, and spawn are Marslang, below. Every function here that waits
+// returns a task to await, and checks its arguments when it is called.
+takepkg rs.async = native;
+takepkg rs.core;
+takepkg std.Decorator;
+
+@Decorator.docstring("""
+    Raised by timeout() when a task does not finish in time.
+
+        run { await async.timeout(async.sleep(5), 0.1); }
+        handle(async.TimeoutError e){ out(e.message); }
+        // task async.sleep did not finish within 0.1 seconds
+""")
+family TimeoutError(Error){}
+
+@Decorator.docstring("""
+    A task that finishes after seconds, holding up nothing else meanwhile.
+
+        await async.sleep(0.5);   // this waits half a second; other tasks run
+
+    seconds is a number of any numeric kind, or a duration such as
+    time.seconds(2). A negative one raises RangeError.
+""")
+func sleep([int, longint, float, duration] seconds) => _sleep(_seconds(seconds, "sleep"));
+
+@Decorator.docstring("""
+    A task that runs f, a function of no arguments, for code that is not an
+    async func. Its result is what f returns; when f is itself async, it is
+    the result of the task f starts.
+
+        t = async.spawn(func() => 6 * 7);
+        out(await t);   // 42
+""")
+func spawn(Function f) => _spawn(f);
+
+@Decorator.docstring("""
+    A task that finishes once every task already waiting to run has had a
+    turn: awaiting it lets the others run, as in a long loop.
+
+        for (i = 0, i < 1000, i++){ work(i); await async.yield_now(); }
+""")
+async func yield_now(){}
+
+@Decorator.docstring("""
+    A task that waits for every task in the array: its result is their
+    results, in the same order.
+
+        out(await async.all(arr(fetch("a"), fetch("b"))));   // ["A", "B"]
+
+    When one fails, the others are cancelled, and once they have finished the
+    first error raised is raised by the await, as the failed task's own
+    await would raise it. Cancelling this task cancels the tasks it waits for.
+""")
+func all(array tasks) => _all(_tasks(tasks, "all", false));
+
+@Decorator.docstring("""
+    A task whose result is that of the first task in the array to finish,
+    once the others are cancelled and have finished. When the first to finish
+    failed, its error is raised.
+
+        winner = await async.race(arr(fetch("mirror1"), fetch("mirror2")));
+
+    The array needs at least one task. Cancelling this task cancels them all.
+""")
+func race(array tasks) => _race(_tasks(tasks, "race", true));
+
+@Decorator.docstring("""
+    A task that waits at most seconds for the task: its result is the task's
+    result, or its error. When time runs out, the task is cancelled, and
+    once it has finished TimeoutError is raised.
+
+        run { page = await async.timeout(fetch("slow"), 2); }
+        handle(async.TimeoutError e){ out("gave up"); }
+
+    seconds is a number or a duration, as for sleep().
+""")
+func timeout(task t, [int, longint, float, duration] seconds) => _timeout(t, _seconds(seconds, "timeout"));
+
+@Decorator.docstring("""
+    A task that waits for every task in the array, failed or not: its result
+    has one pair of values for each, in order: arr(true, result) for one that
+    finished, and arr(false, error) for one that raised.
+
+        for (outcome, await async.settled(arr(fetch("a"), fetch("bad")))){
+            out(outcome[0], outcome[1]);
+        }
+        // true A
+        // false Error: no page bad
+
+    Nothing is raised for the tasks' errors. Cancelling this task cancels
+    the tasks it waits for.
+""")
+func settled(array tasks) => _settled(_tasks(tasks, "settled", false));
+
+@Decorator.docstring("""
+    A task that waits seconds on a worker thread: how native packages wait for
+    slow work, such as a download, without holding up other tasks. It is
+    here to show and test that; to wait for a while, use sleep().
+
+        await async.all(arr(async.work(0.2), async.work(0.2)));   // 0.2 seconds in all
+""")
+func work([int, longint, float] seconds) => _work(_seconds(seconds, "work"));
+
+// ----- helpers -----
+
+@Decorator.private
+func _seconds(any length, string caller){
+    seconds = match (length){
+        duration d => d.seconds();
+        _ => float(length);
+    };
+    if (seconds != seconds or seconds < 0){
+        err(RangeError, f"async.{caller} needs a nonnegative number of seconds, got {length}");
+    }
+    ret seconds;
+}
+
+@Decorator.private
+func _tasks(array tasks, string caller, bool nonempty){
+    if (nonempty and tasks.is_empty()){
+        err(RangeError, f"async.{caller} needs at least one task, got an empty array");
+    }
+    for (t, tasks){
+        if (core.kind(t) != "task"){
+            err(TypeError, f"async.{caller} needs an array of tasks, but it holds {core.kind(t)} {t}");
+        }
+    }
+    // A copy, so the caller can change the array while the tasks run.
+    ret tasks.slice(0, tasks.len());
+}
+
+// Wait until every task has finished, whatever its outcome.
+@Decorator.private
+func _wait_all(array tasks){
+    waiting = tasks.slice(0, tasks.len());
+    while (not waiting.is_empty()){ waiting.iremove(native.wait_any(waiting)); }
+}
+
+// Cancel the tasks and wait until they have finished, so their then blocks
+// have run when the function that started them returns. Their errors, if
+// any, are left out.
+@Decorator.private
+func _stop(array tasks){
+    for (t, tasks){
+        t.cancel();
+        native.observe(t);
+    }
+    _wait_all(tasks);
+}
+
+@Decorator.private
+async func _sleep(float seconds){ native.sleep(seconds); }
+
+@Decorator.private
+async func _work(float seconds){ native.work(seconds); }
+
+@Decorator.private
+async func _spawn(Function f){
+    result = f();
+    ret match (result){
+        task t => await t;
+        _ => result;
+    };
+}
+
+@Decorator.private
+async func _all(array tasks){
+    waiting = tasks.slice(0, tasks.len());
+    failed = null;
+    run {
+        while (failed == null and not waiting.is_empty()){
+            done = waiting.iremove(native.wait_any(waiting));
+            if (native.failed(done)){ failed = done; }
+        }
+    } handle(CancelledError e){
+        _stop(tasks);
+        err(e);
+    }
+    if (failed != null){
+        // The others' errors, if any, are part of this failure.
+        _stop(waiting);
+        for (t, tasks){ native.observe(t); }
+        await failed;
+    }
+    results = arr();
+    for (t, tasks){ results.add(t.result()); }
+    ret results;
+}
+
+@Decorator.private
+async func _race(array tasks){
+    first = 0;
+    run {
+        first = native.wait_any(tasks);
+    } handle(CancelledError e){
+        _stop(tasks);
+        err(e);
+    }
+    winner = tasks[first];
+    losers = arr();
+    for (t, tasks){
+        if (t != winner){ losers.add(t); }
+    }
+    _stop(losers);
+    ret await winner;
+}
+
+@Decorator.private
+async func _timeout(task t, float seconds){
+    timer = _sleep(seconds);
+    run {
+        native.wait_any(arr(t, timer));
+    } handle(CancelledError e){
+        _stop(arr(t, timer));
+        err(e);
+    }
+    _stop(arr(timer));
+    if (t.done()){ ret await t; }
+    _stop(arr(t));
+    err(TimeoutError, f"task {native.name(t)} did not finish within {seconds} seconds");
+}
+
+@Decorator.private
+async func _settled(array tasks){
+    run {
+        _wait_all(tasks);
+    } handle(CancelledError e){
+        _stop(tasks);
+        err(e);
+    }
+    results = arr();
+    for (t, tasks){
+        run {
+            results.add(arr(true, t.result()));
+        } handle(Error e){
+            results.add(arr(false, e));
+        }
+    }
+    ret results;
+}

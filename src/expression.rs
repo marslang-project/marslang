@@ -2,7 +2,9 @@ use crate::ast::Expr;
 
 #[derive(Clone, Debug)]
 enum Token {
-    Name(String), Number(String), String(String), Template(String), Op(String), Lambda(String),
+    Name(String), Number(String), String(String), Template(String), Op(String),
+    /// `func(params) => body`, and whether it is `async func`.
+    Lambda(String, bool),
     /// `match (subject){ arms }`: the text of the subject and of the arms.
     Match(String, String),
     End,
@@ -18,6 +20,31 @@ pub fn parse(text: &str) -> Result<Expr, String> {
             while let Some((_, c)) = chars.peek() {
                 if !c.is_ascii_alphanumeric() && *c != '_' { break; }
                 word.push(chars.next().unwrap().1);
+            }
+            let member = matches!(tokens.last(), Some(Token::Op(op)) if op == ".");
+            // `async func(...) => ...` is an async anonymous function. Before a
+            // dot, async is the name std.async is imported under.
+            let mut asynchronous = false;
+            if word == "async" && !member {
+                let mut ahead = chars.clone();
+                while matches!(ahead.peek(), Some((_, c)) if c.is_whitespace()) { ahead.next(); }
+                let mut next = String::new();
+                while let Some((_, c)) = ahead.peek() {
+                    if !c.is_ascii_alphanumeric() && *c != '_' { break; }
+                    next.push(ahead.next().unwrap().1);
+                }
+                if next == "func" {
+                    chars = ahead;
+                    word = next;
+                    asynchronous = true;
+                } else if !matches!(chars.peek(), Some((_, '.'))) {
+                    return Err("'async' is a keyword: it marks a function that runs as a task, as in \
+                                async func load(string url){ ... } or async func(int x) => x + 1".into());
+                }
+            }
+            if word == "await" && !member {
+                tokens.push(Token::Op(word));
+                continue;
             }
             if word == "func" {
                 // func(type name, ...) => body: an anonymous function. Its body is
@@ -47,8 +74,11 @@ pub fn parse(text: &str) -> Result<Expr, String> {
                                     for a longer body, declare a named func inside the block".into());
                     }
                     chars = ahead;
-                    tokens.push(Token::Lambda(text[open + 1..close].to_string()));
+                    tokens.push(Token::Lambda(text[open + 1..close].to_string(), asynchronous));
                     continue;
+                }
+                if asynchronous {
+                    return Err("an async anonymous function is written async func(type name) => expression".into());
                 }
             }
             // A member may be named match, as in obj.match, but nothing else.
@@ -180,15 +210,24 @@ impl Parser {
             },
             Token::Number(s) => Expr::Number(s), Token::String(s) => Expr::String(s),
             Token::Template(body) => template(&body)?,
-            Token::Lambda(params) => {
+            Token::Lambda(params, asynchronous) => {
                 let body = self.expr(0)?;
-                Expr::Lambda(std::sync::Arc::new(crate::parser::lambda(&params, body)?))
+                let mut decl = crate::parser::lambda(&params, body)?;
+                decl.is_async = asynchronous;
+                Expr::Lambda(std::sync::Arc::new(decl))
             }
             Token::Match(subject, body) => crate::parser::match_expression(&subject, &body)?,
             Token::Op(s) if s == "(" => { let v = self.expr(0)?; self.expect(")")?; v }
             Token::Op(op) if matches!(op.as_str(), "+" | "-" | "not") => {
                 let value = self.expr(if op == "not" { 3 } else { 6 })?;
                 Expr::Unary { op, value: Box::new(value) }
+            }
+            // Tighter than every binary operator: await a + await b adds two results.
+            Token::Op(op) if op == "await" => {
+                if matches!(self.tokens[self.pos], Token::End) {
+                    return Err("await needs a task to wait for, as in await load(url)".into());
+                }
+                Expr::Await(Box::new(self.expr(7)?))
             }
             t => return Err(format!("expected expression, got {t:?}")),
         };

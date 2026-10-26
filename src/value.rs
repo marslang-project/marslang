@@ -40,6 +40,8 @@ pub enum Value {
     DateTime(Rc<jiff::Zoned>),
     /// `duration`: an exact length of time.
     Duration(jiff::SignedDuration),
+    /// `task`: a call of an async function, running or finished (`crate::runtime`).
+    Task(Rc<crate::runtime::Task>),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -87,7 +89,7 @@ impl Value {
             Value::Array(_) => "array", Value::Set(_) => "set", Value::Map(_) => "map",
             Value::Pair(_) => "pair", Value::Instance(_) => "instance", Value::Func(_) => "function",
             Value::Package(_) => "package", Value::Date(_) => "date", Value::DateTime(_) => "datetime",
-            Value::Duration(_) => "duration",
+            Value::Duration(_) => "duration", Value::Task(_) => "task",
         }
     }
 
@@ -100,6 +102,7 @@ impl Value {
             Value::Pair(o) => Rc::as_ptr(o) as *const () as usize,
             Value::Instance(o) => Rc::as_ptr(o) as *const () as usize,
             Value::Package(o) => Rc::as_ptr(o) as *const () as usize,
+            Value::Task(o) => Rc::as_ptr(o) as *const () as usize,
             Value::Func(f) => return f.identity(),
             _ => return None,
         })
@@ -242,6 +245,10 @@ impl Value {
     }
     pub fn package(name: String, members: IndexMap<String, Value>) -> Value {
         Value::Package(Rc::new(Package { name, members })).tracked()
+    }
+    /// A task, which holds its result once it finishes.
+    pub fn task(task: Rc<crate::runtime::Task>) -> Value {
+        Value::Task(task).tracked()
     }
 }
 
@@ -388,15 +395,20 @@ impl Callable {
 pub struct Package { pub name: String, pub members: IndexMap<String, Value> }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ErrorKind { Error, TypeError, RangeError, OutOfBoundsError, SyntaxError }
+pub enum ErrorKind {
+    Error, TypeError, RangeError, OutOfBoundsError, SyntaxError,
+    /// Raised inside a task at the await where its cancellation arrives.
+    CancelledError,
+}
 
 impl ErrorKind {
-    pub const ALL: [ErrorKind; 5] = [ErrorKind::Error, ErrorKind::TypeError, ErrorKind::RangeError,
-        ErrorKind::OutOfBoundsError, ErrorKind::SyntaxError];
+    pub const ALL: [ErrorKind; 6] = [ErrorKind::Error, ErrorKind::TypeError, ErrorKind::RangeError,
+        ErrorKind::OutOfBoundsError, ErrorKind::SyntaxError, ErrorKind::CancelledError];
     pub fn name(self) -> &'static str {
         match self {
             ErrorKind::Error => "Error", ErrorKind::TypeError => "TypeError", ErrorKind::RangeError => "RangeError",
             ErrorKind::OutOfBoundsError => "OutOfBoundsError", ErrorKind::SyntaxError => "SyntaxError",
+            ErrorKind::CancelledError => "CancelledError",
         }
     }
 }
@@ -427,6 +439,13 @@ pub struct Trace {
     /// Frames left out between the first ones and `last`, in deep recursion.
     pub hidden: usize,
     pub last: Option<TraceFrame>,
+    /// Set where a task's error is raised again, by `await`: the note the
+    /// next frame takes, such as "awaiting fetch". The frames before it ran
+    /// in the task.
+    awaited: Option<String>,
+    /// A last line, for an error no frame explains: a task's error that
+    /// nothing awaited.
+    pub footer: Option<String>,
 }
 
 /// One call an error left: `at area (shapes.mars:12)`.
@@ -439,6 +458,8 @@ pub struct TraceFrame {
     pub line: usize,
     /// How many calls in a row this frame stands for, as in recursion.
     pub calls: usize,
+    /// "awaiting fetch": this call awaited the task whose frames come before.
+    pub note: Option<String>,
 }
 
 /// Frames kept from the innermost call outwards; beyond them only the
@@ -491,9 +512,10 @@ impl RuntimeError {
         let trace = self.trace.get_or_insert_with(Default::default);
         let line = trace.line.take().unwrap_or(fallback);
         if let Some((function, file)) = frame {
-            let frame = TraceFrame { function, file, line, calls: 1 };
+            let frame = TraceFrame { function, file, line, calls: 1, note: trace.awaited.take() };
             let latest = trace.last.as_mut().or(trace.frames.last_mut());
-            if let Some(latest) = latest.filter(|latest| latest.function == frame.function && latest.file == frame.file && latest.line == frame.line) {
+            if let Some(latest) = latest.filter(|latest| latest.function == frame.function && latest.file == frame.file
+                && latest.line == frame.line && latest.note.is_none() && frame.note.is_none()) {
                 latest.calls += 1;
             } else if trace.frames.len() < TRACE_FRAMES {
                 trace.frames.push(frame);
@@ -501,6 +523,16 @@ impl RuntimeError {
                 trace.hidden += 1;
             }
         }
+        self
+    }
+
+    /// A task's error, raised again where it is awaited (`how` is "awaiting
+    /// fetch"): the next frame is the call that awaited it.
+    pub(crate) fn awaited(mut self, how: String) -> Self {
+        if self.exit.is_some() { return self; }
+        let trace = self.trace.get_or_insert_with(Default::default);
+        trace.line = None;
+        trace.awaited = Some(how);
         self
     }
 
@@ -520,13 +552,15 @@ impl RuntimeError {
                 None => format!("line {}", frame.line),
             };
             let calls = if frame.calls > 1 { format!(", {} calls", frame.calls) } else { String::new() };
-            format!("\n    at {} ({place}){calls}", frame.function)
+            let note = frame.note.as_ref().map(|note| format!(", {note}")).unwrap_or_default();
+            format!("\n    at {} ({place}){calls}{note}", frame.function)
         };
         for frame in &trace.frames { report.push_str(&at(frame)); }
         if trace.hidden > 0 {
             report.push_str(&format!("\n    ... {} more call{}", trace.hidden, if trace.hidden == 1 { "" } else { "s" }));
         }
         if let Some(last) = &trace.last { report.push_str(&at(last)); }
+        if let Some(footer) = &trace.footer { report.push_str(&format!("\n    {footer}")); }
         report
     }
 }
@@ -681,6 +715,7 @@ fn write_value(value: &Value, out: &mut String, seen: &mut Vec<usize>, nested: b
             _ => { let _ = write!(out, "<func {}>", f.name()); }
         },
         Value::Package(p) => { let _ = write!(out, "<package {}>", p.name); }
+        Value::Task(t) => { let _ = write!(out, "<task {}>", t.name); }
     }
     if matches!(value, Value::Array(_) | Value::Set(_) | Value::Map(_) | Value::Pair(_) | Value::Instance(_)) {
         seen.pop();

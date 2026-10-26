@@ -1,6 +1,6 @@
 //! Tree-walking interpreter: executes resolved Marslang programs directly.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -58,6 +58,15 @@ struct Unit {
     families: HashMap<String, Rc<Family>>,
 }
 
+/// The part of the interpreter's state that belongs to the running task:
+/// each task keeps its own while others run (`crate::runtime`).
+#[derive(Default)]
+pub(crate) struct TaskLocal {
+    depth: usize,
+    caller: Option<Rc<Family>>,
+    last_error: Option<Value>,
+}
+
 struct Env {
     unit: usize,
     /// The family whose method is running, for private/subclass access checks.
@@ -84,70 +93,116 @@ impl Input {
     }
 }
 
+/// The interpreter's state. Its methods take `&self`: every task runs on its
+/// own stack (`crate::runtime`) and shares the interpreter with the others,
+/// so what changes as a program runs is kept in cells. Only one task runs at
+/// a time, on the interpreter's thread.
 pub struct Interp<'o> {
-    units: Vec<Unit>,
-    out: &'o mut dyn Write,
+    /// Units are only added while packages load, never while a borrow of
+    /// this list is held across evaluation.
+    units: RefCell<Vec<Unit>>,
+    out: RefCell<&'o mut dyn Write>,
     /// Flush after every `out`/`slout` (when output is a terminal).
     interactive: bool,
-    input: Input,
-    depth: usize,
+    input: RefCell<Input>,
+    /// Calls in progress in the running task (each task has its own count).
+    depth: Cell<usize>,
     /// Loaded packages by key.
-    packages: HashMap<String, Value>,
+    packages: RefCell<HashMap<String, Value>>,
     /// Built-in error families by name: `Error` and the kinds inheriting from it.
     error_families: HashMap<&'static str, Rc<Family>>,
     /// The error value raised by `err` that is currently propagating, with the
     /// serial number its `RuntimeError` carries.
-    raised: Option<(u64, Value)>,
-    next_serial: u64,
-    /// The most recently handled error, returned by `lasterr()`.
-    last_error: Option<Value>,
+    raised: RefCell<Option<(u64, Value)>>,
+    next_serial: Cell<u64>,
+    /// The most recently handled error in the running task, returned by `lasterr()`.
+    last_error: RefCell<Option<Value>>,
     /// The family whose method is running (`None` in free functions and top-level
     /// code), for checking private/subclass access when a bound method is called.
-    caller: Option<Rc<Family>>,
+    caller: Cell<Option<Rc<Family>>>,
 }
 
 type Exec = RResult<Flow>;
 
 impl<'o> Interp<'o> {
     pub fn new(out: &'o mut dyn Write, input: InputSource, interactive: bool) -> Self {
-        Interp { units: Vec::new(), out, interactive, input: Input { source: input, lines: None, line: 0 },
-            depth: 0, packages: HashMap::new(), error_families: error_families(), raised: None, next_serial: 0,
-            last_error: None, caller: None }
+        Interp { units: RefCell::new(Vec::new()), out: RefCell::new(out), interactive,
+            input: RefCell::new(Input { source: input, lines: None, line: 0 }),
+            depth: Cell::new(0), packages: RefCell::new(HashMap::new()), error_families: error_families(),
+            raised: RefCell::new(None), next_serial: Cell::new(0), last_error: RefCell::new(None), caller: Cell::new(None) }
+    }
+
+    /// Unit `index`, borrowed for as long as no evaluation happens.
+    fn unit(&self, index: usize) -> std::cell::Ref<'_, Unit> {
+        std::cell::Ref::map(self.units.borrow(), |units| &units[index])
     }
 
     /// Run a resolved program: load its packages (each after its own imports),
-    /// execute top-level statements in order, then call `m` when it is declared.
-    /// Afterwards every value the run created is released, including cycles.
-    pub(crate) fn run(&mut self, program: &Program, packages: &[LoadedPackage]) -> RResult<()> {
+    /// execute top-level statements in order, then call `m` when it is declared,
+    /// and finally let the tasks it started finish. Afterwards every value the
+    /// run created is released, including cycles.
+    pub(crate) fn run(&self, program: &Program, packages: &[LoadedPackage]) -> RResult<()> {
+        crate::runtime::enter(self);
         let result = self.run_program(program, packages);
+        let result = self.settle(result);
         self.finish();
         result
     }
 
-    /// Release everything a run created, cycles included.
-    fn finish(&mut self) {
-        self.units.clear();
-        self.packages.clear();
-        self.raised = None;
-        self.last_error = None;
+    /// Release everything a run created, cycles included, and its tasks.
+    fn finish(&self) {
+        crate::runtime::shutdown();
+        self.units.borrow_mut().clear();
+        self.packages.borrow_mut().clear();
+        self.raised.take();
+        self.last_error.take();
         crate::gc::collect();
     }
 
-    fn run_program(&mut self, program: &Program, packages: &[LoadedPackage]) -> RResult<()> {
+    fn run_program(&self, program: &Program, packages: &[LoadedPackage]) -> RResult<()> {
         let unit = self.load_program(program, packages)?;
-        let entry = self.units[unit].functions.get("m").cloned();
-        if let Some(entry) = entry { self.call_function(&entry, None, Vec::new(), None)?; }
+        let entry = self.unit(unit).functions.get("m").cloned();
+        if let Some(entry) = entry { self.call_entry(&entry)?; }
         Ok(())
     }
 
+    /// Call `m` or a test; an async one's task is awaited.
+    fn call_entry(&self, function: &Rc<Function>) -> RResult<()> {
+        let value = self.call_function(function, None, Vec::new(), None)?;
+        if function.decl.is_async { self.await_value(value)?; }
+        Ok(())
+    }
+
+    /// Once the program's own code is done: run the tasks it started to their
+    /// end, then fail with the error of a task that failed with nothing
+    /// awaiting it. When the code failed, its tasks are cancelled first, so
+    /// their `then` blocks run; an exit request stops them where they are.
+    fn settle(&self, result: RResult<()>) -> RResult<()> {
+        match result {
+            Ok(()) => {
+                crate::runtime::run_all()?;
+                crate::runtime::unobserved_failure().map_or(Ok(()), Err)
+            }
+            Err(error) if error.exit.is_some() => Err(error),
+            Err(error) => {
+                crate::runtime::cancel_all();
+                if let Err(exit) = crate::runtime::run_all() {
+                    if exit.exit.is_some() { return Err(exit); }
+                }
+                crate::runtime::unobserved_failure();
+                Err(error)
+            }
+        }
+    }
+
     /// Load the packages, then the program, and run its top-level statements.
-    fn load_program(&mut self, program: &Program, packages: &[LoadedPackage]) -> RResult<usize> {
+    fn load_program(&self, program: &Program, packages: &[LoadedPackage]) -> RResult<usize> {
         for package in packages {
             let value = match &package.source {
                 Source::Native(package) => package(),
                 Source::Program(source) => self.load_package(package, source)?,
             };
-            self.packages.insert(package.key.clone(), value);
+            self.packages.borrow_mut().insert(package.key.clone(), value);
         }
         let file = Some(crate::value::program_path()).filter(|path| !path.is_empty());
         let unit = self.load_unit(program, None, file, false)?;
@@ -160,48 +215,58 @@ impl<'o> Interp<'o> {
     /// function named `test_...` that takes no parameters. A test that fails
     /// does not stop the others. `loaded` runs once the top level has, and
     /// `tested` after each test, with its result and how long it took.
-    pub(crate) fn run_tests(&mut self, program: &Program, packages: &[LoadedPackage],
+    pub(crate) fn run_tests(&self, program: &Program, packages: &[LoadedPackage],
                             loaded: &mut dyn FnMut(), tested: &mut dyn FnMut(&str, RResult<()>, std::time::Duration)) -> RResult<()> {
+        crate::runtime::enter(self);
         let result = self.run_test_functions(program, packages, loaded, tested);
         self.finish();
         result
     }
 
-    fn run_test_functions(&mut self, program: &Program, packages: &[LoadedPackage],
+    fn run_test_functions(&self, program: &Program, packages: &[LoadedPackage],
                           loaded: &mut dyn FnMut(), tested: &mut dyn FnMut(&str, RResult<()>, std::time::Duration)) -> RResult<()> {
-        let unit = self.load_program(program, packages)?;
+        // Tasks the top level starts finish before the tests run.
+        let unit = match self.load_program(program, packages) {
+            Ok(unit) => unit,
+            Err(error) => return self.settle(Err(error)),
+        };
+        self.settle(Ok(()))?;
         loaded();
         let tests: Vec<Rc<Function>> = program.items.iter().filter_map(|item| match item {
-            Item::Func(f) if f.name.starts_with("test_") && f.params.is_empty() => self.units[unit].functions.get(&f.name).cloned(),
+            Item::Func(f) if f.name.starts_with("test_") && f.params.is_empty() => self.unit(unit).functions.get(&f.name).cloned(),
             _ => None,
         }).collect();
         for test in tests {
             let started = std::time::Instant::now();
-            let result = self.call_function(&test, None, Vec::new(), None).map(drop);
-            self.raised = None;
+            // Each test's tasks finish, or fail it, before the next test.
+            let result = self.call_entry(&test);
+            let result = self.settle(result);
+            crate::runtime::discard();
+            self.raised.take();
             tested(&test.decl.name, result, started.elapsed());
         }
         Ok(())
     }
 
-    fn load_package(&mut self, package: &LoadedPackage, program: &Program) -> RResult<Value> {
+    fn load_package(&self, package: &LoadedPackage, program: &Program) -> RResult<Value> {
         let file = package.file.as_ref().map(|path| path.display().to_string());
         let unit = self.load_unit(program, Some(package.name.clone()), file, package.file.is_none())?;
         self.run_top_level(program, unit)?;
         let mut members = IndexMap::new();
+        let unit = self.unit(unit);
         for (name, export) in &package.exports {
             let value = match export {
-                Export::Binding(binding) => self.units[unit].globals.borrow().get(binding).cloned().unwrap_or(Value::Null),
-                Export::Function(f) => Value::Func(Rc::new(Callable::Func(self.units[unit].functions[f].clone()))),
-                Export::Family(f) => Value::Func(Rc::new(Callable::Family(self.units[unit].families[f].clone()))),
+                Export::Binding(binding) => unit.globals.borrow().get(binding).cloned().unwrap_or(Value::Null),
+                Export::Function(f) => Value::Func(Rc::new(Callable::Func(unit.functions[f].clone()))),
+                Export::Family(f) => Value::Func(Rc::new(Callable::Family(unit.families[f].clone()))),
             };
             members.insert(name.clone(), value);
         }
         Ok(Value::package(package.name.clone(), members))
     }
 
-    fn load_unit(&mut self, program: &Program, name: Option<String>, file: Option<String>, internal: bool) -> RResult<usize> {
-        let index = self.units.len();
+    fn load_unit(&self, program: &Program, name: Option<String>, file: Option<String>, internal: bool) -> RResult<usize> {
+        let index = self.units.borrow().len();
         let mut functions = HashMap::new();
         let mut decls = HashMap::new();
         for item in &program.items {
@@ -215,8 +280,8 @@ impl<'o> Interp<'o> {
         // from a package this file imports (packages load before their importers).
         let imports: HashMap<String, Value> = program.items.iter().filter_map(|item| match item {
             Item::Import(import) => {
-                let package = import.key.as_ref().and_then(|key| self.packages.get(key))?;
-                Some((display_name(import.alias.as_deref()?).to_string(), package.clone()))
+                let package = import.key.as_ref().and_then(|key| self.packages.borrow().get(key).cloned())?;
+                Some((display_name(import.alias.as_deref()?).to_string(), package))
             }
             _ => None,
         }).collect();
@@ -235,15 +300,15 @@ impl<'o> Interp<'o> {
         };
         let mut families = HashMap::new();
         for name in decls.keys() { build_family(name, &decls, &mut families, &outside, index, &mut Vec::new())?; }
-        self.units.push(Unit { name, file, internal, globals: RefCell::new(HashMap::new()), imports: RefCell::new(HashMap::new()), functions, families });
+        self.units.borrow_mut().push(Unit { name, file, internal, globals: RefCell::new(HashMap::new()), imports: RefCell::new(HashMap::new()), functions, families });
         Ok(index)
     }
 
     /// A file's top-level statements, in order. An error from one leaves as a
     /// call named "top level", or for a package "top level of NAME".
-    fn run_top_level(&mut self, program: &Program, unit: usize) -> RResult<()> {
+    fn run_top_level(&self, program: &Program, unit: usize) -> RResult<()> {
         self.run_top_level_items(program, unit).map_err(|error| {
-            let unit = &self.units[unit];
+            let unit = self.unit(unit);
             let function = match &unit.name {
                 Some(name) => format!("top level of {name}"),
                 None => "top level".to_string(),
@@ -252,16 +317,17 @@ impl<'o> Interp<'o> {
         })
     }
 
-    fn run_top_level_items(&mut self, program: &Program, unit: usize) -> RResult<()> {
+    fn run_top_level_items(&self, program: &Program, unit: usize) -> RResult<()> {
         let mut env = Env { unit, owner: None, locals: None, me: None };
         for item in &program.items {
             match item {
                 Item::Import(import) => {
-                    let package = import.key.as_ref().and_then(|key| self.packages.get(key)).cloned()
+                    let package = import.key.as_ref().and_then(|key| self.packages.borrow().get(key).cloned())
                         .ok_or_else(|| RuntimeError::new(ErrorKind::Error, format!("package '{}' is not loaded", import.module)))?;
                     let alias = import.alias.clone().unwrap_or_default();
-                    self.units[unit].imports.borrow_mut().insert(display_name(&alias).to_string(), package.clone());
-                    self.units[unit].globals.borrow_mut().insert(alias, package);
+                    let unit = self.unit(unit);
+                    unit.imports.borrow_mut().insert(display_name(&alias).to_string(), package.clone());
+                    unit.globals.borrow_mut().insert(alias, package);
                 }
                 Item::Var(v) => {
                     let value = self.eval(&v.value, &mut env).map_err(|error| error.at_line(v.line))?;
@@ -284,7 +350,7 @@ impl<'o> Interp<'o> {
         if name == "me" {
             return env.me.clone().ok_or_else(|| RuntimeError::new(ErrorKind::Error, "'me' is only available inside family methods"));
         }
-        let unit = &self.units[env.unit];
+        let unit = self.unit(env.unit);
         if let Some(value) = unit.globals.borrow().get(name) { return Ok(value.clone()); }
         if let Some(function) = unit.functions.get(name) { return Ok(Value::Func(Rc::new(Callable::Func(function.clone())))); }
         if let Some(family) = unit.families.get(name).or_else(|| self.error_families.get(name)) {
@@ -297,7 +363,7 @@ impl<'o> Interp<'o> {
     fn declare(&self, env: &mut Env, name: &str, value: Value) {
         match &env.locals {
             Some(frame) => { frame.values.borrow_mut().insert(name.to_string(), value); }
-            None => { self.units[env.unit].globals.borrow_mut().insert(name.to_string(), value); }
+            None => { self.unit(env.unit).globals.borrow_mut().insert(name.to_string(), value); }
         }
     }
 
@@ -308,15 +374,17 @@ impl<'o> Interp<'o> {
             Some(frame) => match frame.assign(name, value) { Ok(()) => return, Err(value) => value },
             None => value,
         };
-        let mut globals = self.units[env.unit].globals.borrow_mut();
+        let unit = self.unit(env.unit);
+        let mut globals = unit.globals.borrow_mut();
         if let Some(slot) = globals.get_mut(name) { *slot = value; return; }
         drop(globals);
+        drop(unit);
         self.declare(env, name, value);
     }
 
     // ----- statements -----
 
-    fn exec_block(&mut self, body: &[Stmt], env: &mut Env) -> Exec {
+    fn exec_block(&self, body: &[Stmt], env: &mut Env) -> Exec {
         for stmt in body {
             match self.exec(stmt, env)? {
                 Flow::Next => {}
@@ -326,11 +394,11 @@ impl<'o> Interp<'o> {
         Ok(Flow::Next)
     }
 
-    fn exec(&mut self, stmt: &Stmt, env: &mut Env) -> Exec {
+    fn exec(&self, stmt: &Stmt, env: &mut Env) -> Exec {
         self.exec_kind(&stmt.kind, env).map_err(|error| error.at_line(stmt.line))
     }
 
-    fn exec_kind(&mut self, stmt: &StmtKind, env: &mut Env) -> Exec {
+    fn exec_kind(&self, stmt: &StmtKind, env: &mut Env) -> Exec {
         // Statement boundaries are safe points: no container is borrowed here.
         if crate::gc::due() { crate::gc::collect(); }
         match stmt {
@@ -417,7 +485,7 @@ impl<'o> Interp<'o> {
 
     /// The first arm whose pattern matches `value` and whose guard, if it has
     /// one, holds. A type pattern's name is bound before its guard runs.
-    fn select_arm<'a, B>(&mut self, value: &Value, arms: &'a [MatchArm<B>], env: &mut Env) -> RResult<Option<&'a MatchArm<B>>> {
+    fn select_arm<'a, B>(&self, value: &Value, arms: &'a [MatchArm<B>], env: &mut Env) -> RResult<Option<&'a MatchArm<B>>> {
         for arm in arms {
             let matched = match &arm.pattern {
                 Pattern::Literals(literals) => literals.iter().any(|literal| literal_equals(value, literal)),
@@ -458,6 +526,7 @@ impl<'o> Interp<'o> {
             "date" => matches!(value, Value::Date(_)),
             "datetime" => matches!(value, Value::DateTime(_)),
             "duration" => matches!(value, Value::Duration(_)),
+            "task" => matches!(value, Value::Task(_)),
             "any" => true,
             _ => match self.family_named(ty, unit) {
                 Some(family) => matches!(value, Value::Instance(instance) if descends(&instance.family, &family)),
@@ -470,7 +539,7 @@ impl<'o> Interp<'o> {
     /// matches runs; `then` always runs last, even while an error propagates or
     /// the block exits early. An error, `ret`, `break`, or `continue` inside
     /// `then` replaces the pending outcome.
-    fn exec_run(&mut self, body: &[Stmt], handlers: &[Handler], then_block: Option<&[Stmt]>, env: &mut Env) -> Exec {
+    fn exec_run(&self, body: &[Stmt], handlers: &[Handler], then_block: Option<&[Stmt]>, env: &mut Env) -> Exec {
         let mut outcome = self.exec_block(body, env);
         if let Err(error) = outcome {
             outcome = if error.exit.is_some() {
@@ -480,7 +549,7 @@ impl<'o> Interp<'o> {
                 let value = self.error_value(&error);
                 match self.find_handler(handlers, &value, env.unit) {
                     Ok(Some(handler)) => {
-                        self.last_error = Some(value.clone());
+                        *self.last_error.borrow_mut() = Some(value.clone());
                         if let Some(name) = &handler.name { self.declare(env, name, value); }
                         self.exec_block(&handler.body, env)
                     }
@@ -492,7 +561,7 @@ impl<'o> Interp<'o> {
         if let Some(block) = then_block {
             let in_flight = self.raised.take();
             match self.exec_block(block, env)? {
-                Flow::Next => self.raised = in_flight,
+                Flow::Next => *self.raised.borrow_mut() = in_flight,
                 flow => return Ok(flow),
             }
         }
@@ -501,20 +570,22 @@ impl<'o> Interp<'o> {
 
     /// The error value for a caught error: the one `err` raised, or a new
     /// instance of the built-in family for an interpreter error.
-    fn error_value(&mut self, error: &RuntimeError) -> Value {
-        if let Some((serial, _)) = &self.raised {
-            if error.serial != 0 && *serial == error.serial { return self.raised.take().unwrap().1; }
+    fn error_value(&self, error: &RuntimeError) -> Value {
+        let mut raised = self.raised.borrow_mut();
+        if let Some((serial, _)) = &*raised {
+            if error.serial != 0 && *serial == error.serial { return raised.take().unwrap().1; }
         }
+        drop(raised);
         let value = Value::new_instance(self.error_families[error.kind.name()].clone(), Meta::default());
         if let Value::Instance(o) = &value { o.fields.borrow_mut().insert(Rc::from("message"), Value::str(&error.message)); }
         value
     }
 
     /// Keep an unhandled error's value attached while it continues outward.
-    fn propagate(&mut self, mut error: RuntimeError, value: Value) -> RuntimeError {
-        self.next_serial += 1;
-        error.serial = self.next_serial;
-        self.raised = Some((error.serial, value));
+    fn propagate(&self, mut error: RuntimeError, value: Value) -> RuntimeError {
+        self.next_serial.set(self.next_serial.get() + 1);
+        error.serial = self.next_serial.get();
+        *self.raised.borrow_mut() = Some((error.serial, value));
         error
     }
 
@@ -534,7 +605,7 @@ impl<'o> Interp<'o> {
     }
 
     /// `err(Family, message)` raises a new error; `err(error)` raises a caught one again.
-    fn raise(&mut self, args: Vec<Value>) -> RResult<Value> {
+    fn raise(&self, args: Vec<Value>) -> RResult<Value> {
         let usage = "err expects an error family and a message, such as err(Error, \"message\"), or a caught error";
         let value = match args.as_slice() {
             [Value::Func(f)] | [Value::Func(f), _] => match f.as_ref() {
@@ -560,7 +631,7 @@ impl<'o> Interp<'o> {
 
     // ----- expressions -----
 
-    fn eval(&mut self, e: &Expr, env: &mut Env) -> RResult<Value> {
+    fn eval(&self, e: &Expr, env: &mut Env) -> RResult<Value> {
         Ok(match e {
             Expr::Int(i) => Value::Int(*i),
             Expr::Long(l) => Value::Long(*l),
@@ -633,7 +704,103 @@ impl<'o> Interp<'o> {
                 }
             }
             Expr::Call { callee, args } => return self.eval_call(callee, args, env),
+            Expr::Await(value) => {
+                let value = self.eval(value, env)?;
+                return self.await_value(value);
+            }
         })
+    }
+
+    /// `await value`: wait until the task finishes, then give its result, or
+    /// raise its error here. Inside a task only that task waits; elsewhere
+    /// the other tasks run until it is done.
+    fn await_value(&self, value: Value) -> RResult<Value> {
+        let Value::Task(task) = value else {
+            let kind = value.type_name();
+            return type_err(format!("await needs a task, got {} {kind}: only tasks can be awaited, and calling an async func gives one",
+                article(kind)));
+        };
+        crate::runtime::wait_for(&task)?;
+        self.task_result(&task, "awaiting")
+    }
+
+    /// A finished task's result, or its error raised again; `how` says how
+    /// it was asked for, for the error's trace.
+    fn task_result(&self, task: &crate::runtime::Task, how: &str) -> RResult<Value> {
+        task.observed.set(true);
+        match task.outcome() {
+            Some(crate::runtime::Outcome::Value(value)) => Ok(value),
+            Some(crate::runtime::Outcome::Error(error, value)) => {
+                let value = value.unwrap_or_else(|| self.error_value(&error));
+                Err(self.propagate(error.awaited(format!("{how} {}", task.name)), value))
+            }
+            None => err(ErrorKind::Error, format!("task {} has not finished", task.name)),
+        }
+    }
+
+    /// `task.done()`, `task.result()`, and `task.cancel()`.
+    fn task_method(&self, task: &Rc<crate::runtime::Task>, name: &str, args: Vec<Value>) -> RResult<Value> {
+        let arity = |n: usize| method_arity("task", name, &args, n);
+        match name {
+            "done" => { arity(0)?; Ok(Value::Bool(task.is_done())) }
+            "result" => {
+                arity(0)?;
+                if !task.is_done() {
+                    return err(ErrorKind::Error, format!("task {} has not finished: await it, or check done() first", task.name));
+                }
+                self.task_result(task, "reading the result of")
+            }
+            "cancel" => { arity(0)?; Ok(Value::Bool(crate::runtime::cancel(task))) }
+            _ => type_err(format!("task has no method '{name}'; a task has done(), result(), and cancel()")),
+        }
+    }
+
+    /// Start a task running a call of an async function whose arguments are
+    /// already bound. It runs once the event loop reaches it.
+    fn start_task(&self, function: Rc<Function>, me: Option<Value>, locals: HashMap<String, Value>, parent: Option<Rc<Frame>>) -> Value {
+        let name = match self.frame_name(&function) {
+            Some((name, _)) if function.decl.name == "anonymous" => name.replace("an anonymous function", "anonymous"),
+            Some((name, _)) => name,
+            // A standard package's task is named for the public function that
+            // starts it: std.async's _sleep, behind sleep, is async.sleep.
+            None => {
+                let unit = self.unit(function.package);
+                let package = unit.name.as_deref().and_then(|name| name.rsplit('.').next()).unwrap_or("std");
+                format!("{package}.{}", function.decl.name.trim_start_matches('_'))
+            }
+        };
+        let interp = self as *const Interp<'o> as *const Interp<'static>;
+        let body = Box::new(move || {
+            // SAFETY: a task runs only while the run that started it does, on
+            // its thread: `finish` discards every task before the interpreter
+            // is dropped.
+            let interp = unsafe { &*interp };
+            let result = interp.run_call(&function, me, locals, parent);
+            interp.outcome(result)
+        });
+        Value::task(crate::runtime::spawn(name, body))
+    }
+
+    /// How a task's body ended, keeping an error's value for whoever awaits it.
+    fn outcome(&self, result: RResult<Value>) -> crate::runtime::Outcome {
+        match result {
+            Ok(value) => crate::runtime::Outcome::Value(value),
+            Err(error) if error.exit.is_some() => crate::runtime::Outcome::Error(error, None),
+            Err(error) => {
+                let value = self.error_value(&error);
+                crate::runtime::Outcome::Error(error, Some(value))
+            }
+        }
+    }
+
+    /// Put `local` in place of the running task's own state, returning that:
+    /// the event loop does this as it switches between tasks.
+    pub(crate) fn swap_local(&self, local: TaskLocal) -> TaskLocal {
+        TaskLocal {
+            depth: self.depth.replace(local.depth),
+            caller: self.caller.replace(local.caller),
+            last_error: self.last_error.replace(local.last_error),
+        }
     }
 
     /// A function made where it stands: it keeps the current frame, `me`, and
@@ -644,11 +811,11 @@ impl<'o> Interp<'o> {
         Value::closure(function, env.locals.clone(), env.me.clone())
     }
 
-    fn eval_args(&mut self, args: &[Expr], env: &mut Env) -> RResult<Vec<Value>> {
+    fn eval_args(&self, args: &[Expr], env: &mut Env) -> RResult<Vec<Value>> {
         args.iter().map(|arg| self.eval(arg, env)).collect()
     }
 
-    fn eval_call(&mut self, callee: &Expr, args: &[Expr], env: &mut Env) -> RResult<Value> {
+    fn eval_call(&self, callee: &Expr, args: &[Expr], env: &mut Env) -> RResult<Value> {
         match callee {
             Expr::Member { object, field } => {
                 let object = self.eval(object, env)?;
@@ -669,6 +836,7 @@ impl<'o> Interp<'o> {
                         Value::Date(date) => crate::date::date_method(date, field, &args),
                         Value::DateTime(moment) => crate::date::datetime_method(moment, field, &args),
                         Value::Duration(length) => crate::date::duration_method(length, field, &args),
+                        Value::Task(task) => self.task_method(task, field, args),
                         _ => unreachable!("method_target resolves every other receiver"),
                     },
                 }
@@ -686,7 +854,7 @@ impl<'o> Interp<'o> {
         }
     }
 
-    fn call_value(&mut self, function: &Value, args: Vec<Value>) -> RResult<Value> {
+    fn call_value(&self, function: &Value, args: Vec<Value>) -> RResult<Value> {
         let Value::Func(callable) = function else {
             if let Value::Package(package) = function {
                 // Importing std.bigint takes the name of the built-in bigint().
@@ -702,7 +870,10 @@ impl<'o> Interp<'o> {
             Callable::Method(receiver, f) => {
                 // A bound method taken out of its family keeps its restriction:
                 // check against whoever calls it now, not where it was taken.
-                check_access(f, self.caller.as_ref())?;
+                let caller = self.caller.take();
+                let access = check_access(f, caller.as_ref());
+                self.caller.set(caller);
+                access?;
                 self.call_function(f, Some(receiver.clone()), args, None)
             }
             Callable::Closure(f, frame, me) => self.call_function(f, me.clone(), args, frame.clone()),
@@ -716,6 +887,8 @@ impl<'o> Interp<'o> {
                 // a panic becomes an ordinary, catchable error.
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (function.imp)(&args)))
                     .unwrap_or_else(|panic| {
+                        // Not a bug: a run that ends unwinds tasks waiting in natives.
+                        if crate::runtime::unwinding() { std::panic::resume_unwind(panic); }
                         let detail = panic.downcast_ref::<&str>().map(|s| s.to_string())
                             .or_else(|| panic.downcast_ref::<String>().cloned())
                             .unwrap_or_else(|| "unknown panic".into());
@@ -726,24 +899,33 @@ impl<'o> Interp<'o> {
     }
 
     /// `parent` is the frame a closure closes over; its variables stay visible.
-    fn call_function(&mut self, function: &Rc<Function>, me: Option<Value>, args: Vec<Value>, parent: Option<Rc<Frame>>) -> RResult<Value> {
+    fn call_function(&self, function: &Rc<Function>, me: Option<Value>, args: Vec<Value>, parent: Option<Rc<Frame>>) -> RResult<Value> {
         let decl = &function.decl;
         if args.len() != decl.params.len() {
-            let name = match &self.units[function.package].name {
+            let name = match &self.unit(function.package).name {
                 Some(package) => format!("{package}.{}", decl.name),
                 None => decl.name.clone(),
             };
             return type_err(format!("{name} expects {} argument(s), got {}", decl.params.len(), args.len()));
         }
-        if self.depth >= MAX_CALL_DEPTH { return range_err("maximum call depth exceeded"); }
+        if self.depth.get() >= MAX_CALL_DEPTH { return range_err("maximum call depth exceeded"); }
         let mut locals = HashMap::with_capacity(decl.params.len());
         for (param, arg) in decl.params.iter().zip(args) {
             locals.insert(param.name.clone(), self.typed(arg, &param.ty, function.package)?);
         }
+        // Arguments are checked at the call; the body runs later, in a task.
+        if decl.is_async { return Ok(self.start_task(function.clone(), me, locals, parent)); }
+        self.run_call(function, me, locals, parent)
+    }
+
+    /// The body of a call whose arguments are bound to its parameters.
+    #[inline]
+    fn run_call(&self, function: &Rc<Function>, me: Option<Value>, locals: HashMap<String, Value>, parent: Option<Rc<Frame>>) -> RResult<Value> {
+        let decl = &function.decl;
         let owner = function.owner.as_ref().and_then(|owner| owner.upgrade());
-        let previous_caller = std::mem::replace(&mut self.caller, owner.clone());
+        let previous_caller = self.caller.replace(owner.clone());
         let mut env = Env { unit: function.package, owner, locals: Some(Frame::new(locals, parent)), me };
-        self.depth += 1;
+        self.depth.set(self.depth.get() + 1);
         let result = match &decl.body {
             FuncBody::Expr(e) => self.eval(e, &mut env),
             FuncBody::Block(body) => self.exec_block(body, &mut env).map(|flow| match flow {
@@ -751,15 +933,15 @@ impl<'o> Interp<'o> {
                 _ => Value::Null,
             }),
         };
-        self.depth -= 1;
-        self.caller = previous_caller;
+        self.depth.set(self.depth.get() - 1);
+        self.caller.set(previous_caller);
         result.map_err(|error| error.left_call(self.frame_name(function), decl.line))
     }
 
     /// How a runtime error names a call of `function`, with its file; `None`
     /// inside the standard library.
     fn frame_name(&self, function: &Function) -> Option<(String, Option<String>)> {
-        let unit = &self.units[function.package];
+        let unit = self.unit(function.package);
         if unit.internal { return None; }
         let decl = &function.decl;
         let family = function.owner.as_ref().and_then(|owner| owner.upgrade());
@@ -774,7 +956,7 @@ impl<'o> Interp<'o> {
         Some((name, unit.file.clone()))
     }
 
-    fn construct(&mut self, family: &Rc<Family>, args: Vec<Value>) -> RResult<Value> {
+    fn construct(&self, family: &Rc<Family>, args: Vec<Value>) -> RResult<Value> {
         let instance = Value::new_instance(family.clone(), Meta::default());
         match family.method("init") {
             Some(init) => { self.call_function(&init, Some(instance.clone()), args, None)?; }
@@ -802,7 +984,7 @@ impl<'o> Interp<'o> {
             }
             Value::Package(_) | Value::Pair(_) => MethodTarget::Value(self.get_member(object, name, caller)?),
             Value::Str(_) | Value::Array(_) | Value::Set(_) | Value::Map(_) => return Ok(None),
-            Value::Date(_) | Value::DateTime(_) | Value::Duration(_) => return Ok(None),
+            Value::Date(_) | Value::DateTime(_) | Value::Duration(_) | Value::Task(_) => return Ok(None),
             other => return type_err(format!("{} has no method '{name}'", other.type_name())),
         }))
     }
@@ -827,7 +1009,7 @@ impl<'o> Interp<'o> {
         }
     }
 
-    fn set_member(&mut self, object: &Value, field: &str, value: Value) -> RResult<()> {
+    fn set_member(&self, object: &Value, field: &str, value: Value) -> RResult<()> {
         match object {
             Value::Instance(instance) => {
                 mutable(&instance.meta)?;
@@ -852,17 +1034,17 @@ impl<'o> Interp<'o> {
 
     // ----- builtins -----
 
-    fn write(&mut self, text: &str) -> RResult<()> {
-        self.out.write_all(text.as_bytes()).or_else(|e| err(ErrorKind::Error, format!("failed to write output: {e}")))?;
+    fn write(&self, text: &str) -> RResult<()> {
+        self.out.borrow_mut().write_all(text.as_bytes()).or_else(|e| err(ErrorKind::Error, format!("failed to write output: {e}")))?;
         if self.interactive { self.flush()?; }
         Ok(())
     }
 
-    fn flush(&mut self) -> RResult<()> {
-        self.out.flush().or_else(|e| err(ErrorKind::Error, format!("failed to write output: {e}")))
+    fn flush(&self) -> RResult<()> {
+        self.out.borrow_mut().flush().or_else(|e| err(ErrorKind::Error, format!("failed to write output: {e}")))
     }
 
-    fn call_builtin(&mut self, builtin: Builtin, args: Vec<Value>) -> RResult<Value> {
+    fn call_builtin(&self, builtin: Builtin, args: Vec<Value>) -> RResult<Value> {
         let arity = |n: usize| -> RResult<()> {
             if args.len() == n { Ok(()) }
             else { type_err(format!("{}() expects {n} argument(s), got {}", format!("{builtin:?}").to_lowercase(), args.len())) }
@@ -883,17 +1065,18 @@ impl<'o> Interp<'o> {
                 arity(0)?;
                 // Show any prompt before blocking on input.
                 self.flush()?;
-                Ok(Value::str(&self.input.read_all()))
+                Ok(Value::str(&self.input.borrow_mut().read_all()))
             }
             Builtin::Inln => {
                 arity(0)?;
                 self.flush()?;
-                if self.input.lines.is_none() {
-                    let text = self.input.read_all();
-                    self.input.lines = Some(text.split('\n').map(|l| l.strip_suffix('\r').unwrap_or(l).to_string()).collect());
+                let mut input = self.input.borrow_mut();
+                if input.lines.is_none() {
+                    let text = input.read_all();
+                    input.lines = Some(text.split('\n').map(|l| l.strip_suffix('\r').unwrap_or(l).to_string()).collect());
                 }
-                let line = self.input.lines.as_ref().unwrap().get(self.input.line).cloned().unwrap_or_default();
-                self.input.line += 1;
+                let line = input.lines.as_ref().unwrap().get(input.line).cloned().unwrap_or_default();
+                input.line += 1;
                 Ok(Value::str(&line))
             }
             Builtin::Arr => Ok(Value::array(args)),
@@ -938,7 +1121,7 @@ impl<'o> Interp<'o> {
                 if args.is_empty() || args.len() > 2 { return type_err(format!("err() expects 1 or 2 argument(s), got {}", args.len())); }
                 self.raise(args)
             }
-            Builtin::LastErr => { arity(0)?; Ok(self.last_error.clone().unwrap_or(Value::Null)) }
+            Builtin::LastErr => { arity(0)?; Ok(self.last_error.borrow().clone().unwrap_or(Value::Null)) }
             Builtin::Ord => { arity(1)?; ord(&args[0]) }
             Builtin::Date => crate::date::make_date(&args),
             Builtin::DateTime => crate::date::make_datetime(&args),
@@ -949,7 +1132,7 @@ impl<'o> Interp<'o> {
 
     // ----- collections -----
 
-    fn array_method(&mut self, object: &Value, array: &Rc<Array>, name: &str, args: Vec<Value>) -> RResult<Value> {
+    fn array_method(&self, object: &Value, array: &Rc<Array>, name: &str, args: Vec<Value>) -> RResult<Value> {
         let arity = |n: usize| method_arity("array", name, &args, n);
         match name {
             "slice" | "lenslice" => {
@@ -1032,7 +1215,7 @@ impl<'o> Interp<'o> {
         }
     }
 
-    fn set_method(&mut self, object: &Value, set: &Rc<Set>, name: &str, args: Vec<Value>) -> RResult<Value> {
+    fn set_method(&self, object: &Value, set: &Rc<Set>, name: &str, args: Vec<Value>) -> RResult<Value> {
         let arity = |n: usize| method_arity("set", name, &args, n);
         match name {
             "len" => { arity(0)?; Ok(Value::Int(set.items.borrow().len() as i64)) }
@@ -1054,7 +1237,7 @@ impl<'o> Interp<'o> {
         }
     }
 
-    fn map_method(&mut self, object: &Value, map: &Rc<Map>, name: &str, args: Vec<Value>) -> RResult<Value> {
+    fn map_method(&self, object: &Value, map: &Rc<Map>, name: &str, args: Vec<Value>) -> RResult<Value> {
         let arity = |n: usize| method_arity("map", name, &args, n);
         match name {
             "len" => { arity(0)?; Ok(Value::Int(map.items.borrow().len() as i64)) }
@@ -1091,13 +1274,13 @@ impl<'o> Interp<'o> {
     // ----- type annotations -----
 
     /// Apply every element restriction recorded on a container to a new value.
-    fn check(&mut self, meta: &Meta, value: Value, part: usize) -> RResult<Value> {
+    fn check(&self, meta: &Meta, value: Value, part: usize) -> RResult<Value> {
         Ok(self.check_parts(meta, vec![(value, part)])?.remove(0))
     }
 
     /// Check several parts of one insertion (a map key and value) as a single
     /// operation: if any part fails, nothing is converted or restricted.
-    fn check_parts(&mut self, meta: &Meta, parts: Vec<(Value, usize)>) -> RResult<Vec<Value>> {
+    fn check_parts(&self, meta: &Meta, parts: Vec<(Value, usize)>) -> RResult<Vec<Value>> {
         let restrictions = meta.restrictions.borrow().clone();
         let jobs = parts.into_iter()
             .map(|(value, part)| (value, restrictions.iter().map(|(args, unit)| (args[part].clone(), *unit)).collect()))
@@ -1109,7 +1292,7 @@ impl<'o> Interp<'o> {
     /// written in `unit`. A collection annotation changes its container (it adds
     /// a restriction and converts the elements); those changes are applied only
     /// once the whole annotation, including every nested part, has matched.
-    pub fn typed(&mut self, value: Value, ty: &str, unit: usize) -> RResult<Value> {
+    pub fn typed(&self, value: Value, ty: &str, unit: usize) -> RResult<Value> {
         Ok(self.conform(vec![(value, vec![(ty.to_string(), unit)])])?.remove(0))
     }
 
@@ -1117,7 +1300,7 @@ impl<'o> Interp<'o> {
     /// are planned together; if the combined plan cannot be applied, union choices
     /// are retried depth-first. Container changes are committed only when every
     /// check succeeds, so a failure leaves all values unchanged.
-    fn conform(&mut self, jobs: Vec<(Value, Vec<(String, usize)>)>) -> RResult<Vec<Value>> {
+    fn conform(&self, jobs: Vec<(Value, Vec<(String, usize)>)>) -> RResult<Vec<Value>> {
         let mut forced = Vec::new();
         let mut first_error = None;
         for _ in 0..MAX_TYPE_ATTEMPTS {
@@ -1142,7 +1325,7 @@ impl<'o> Interp<'o> {
         Err(first_error.expect("at least one attempt ran"))
     }
 
-    fn plan_jobs(&mut self, jobs: &[(Value, Vec<(String, usize)>)], pending: &mut Vec<Restriction>,
+    fn plan_jobs(&self, jobs: &[(Value, Vec<(String, usize)>)], pending: &mut Vec<Restriction>,
                  choices: &mut Choices) -> RResult<Vec<Value>> {
         let mut values = Vec::with_capacity(jobs.len());
         for (value, types) in jobs {
@@ -1155,7 +1338,7 @@ impl<'o> Interp<'o> {
 
     /// Check `value` against `ty` without changing any container: scalars are
     /// returned converted, and container restrictions to apply go to `pending`.
-    fn plan_type(&mut self, value: Value, ty: &str, unit: usize, pending: &mut Vec<Restriction>,
+    fn plan_type(&self, value: Value, ty: &str, unit: usize, pending: &mut Vec<Restriction>,
                  choices: &mut Choices) -> RResult<Value> {
         if let Some(inner) = ty.strip_prefix('[').and_then(|t| t.strip_suffix(']')) {
             let options = split_types(inner);
@@ -1237,6 +1420,7 @@ impl<'o> Interp<'o> {
             "date" => match value { Value::Date(_) => Ok(value), _ => type_err(format!("expected date, got {}", value.type_name())) },
             "datetime" => match value { Value::DateTime(_) => Ok(value), _ => type_err(format!("expected datetime, got {}", value.type_name())) },
             "duration" => match value { Value::Duration(_) => Ok(value), _ => type_err(format!("expected duration, got {}", value.type_name())) },
+            "task" => match value { Value::Task(_) => Ok(value), _ => type_err(format!("expected task, got {}", value.type_name())) },
             "any" => Ok(value),
             // Parameter types for passing code around: func apply(Function f).
             "Function" => match &value {
@@ -1254,7 +1438,7 @@ impl<'o> Interp<'o> {
         }
     }
 
-    fn plan_collection(&mut self, value: Value, ty: &str, kind: &str, args: Option<&str>, unit: usize,
+    fn plan_collection(&self, value: Value, ty: &str, kind: &str, args: Option<&str>, unit: usize,
                        pending: &mut Vec<Restriction>, choices: &mut Choices) -> RResult<Value> {
         let matches = matches!((&value, kind), (Value::Array(_), "array") | (Value::Set(_), "set")
             | (Value::Pair(_), "pair") | (Value::Map(_), "map"));
@@ -1287,7 +1471,7 @@ impl<'o> Interp<'o> {
     /// the full restriction list and the converted contents. Fails if any
     /// element cannot satisfy every restriction on its container, or if a fixed
     /// container's numeric kinds would change.
-    fn stage(&mut self, pending: &[Restriction]) -> RResult<Vec<Staged>> {
+    fn stage(&self, pending: &[Restriction]) -> RResult<Vec<Staged>> {
         let mut order: Vec<usize> = Vec::new();
         let mut groups: HashMap<usize, (Value, Vec<(Rc<[String]>, usize)>)> = HashMap::new();
         for restriction in pending {
@@ -1303,7 +1487,7 @@ impl<'o> Interp<'o> {
         for id in order {
             let (target, restrictions) = groups.remove(&id).unwrap();
             let frozen = target.meta().unwrap().frozen.get();
-            let convert = |this: &mut Self, value: Value, part: usize| -> RResult<Value> {
+            let convert = |this: &Self, value: Value, part: usize| -> RResult<Value> {
                 let mut converted = value.clone();
                 for (args, unit) in &restrictions {
                     converted = this.plan_type(converted, &args[part], *unit, &mut Vec::new(), &mut Choices::default())?;
@@ -1381,14 +1565,14 @@ impl<'o> Interp<'o> {
     /// error family, or `alias.Family` from an imported package.
     fn family_named(&self, ty: &str, unit: usize) -> Option<Rc<Family>> {
         match ty.split_once('.') {
-            Some((alias, name)) => match self.units[unit].imports.borrow().get(alias) {
+            Some((alias, name)) => match self.unit(unit).imports.borrow().get(alias) {
                 Some(Value::Package(package)) => match package.members.get(name) {
                     Some(Value::Func(f)) => match f.as_ref() { Callable::Family(family) => Some(family.clone()), _ => None },
                     _ => None,
                 },
                 _ => None,
             },
-            None => self.units[unit].families.get(ty).or_else(|| self.error_families.get(ty)).cloned(),
+            None => self.unit(unit).families.get(ty).or_else(|| self.error_families.get(ty)).cloned(),
         }
     }
 

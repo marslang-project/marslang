@@ -31,6 +31,7 @@ func m{
 | `Error.RangeError` | A number out of range: integer overflow, division by zero, a math domain error |
 | `Error.OutOfBoundsError` | A position or length outside a string or collection |
 | `Error.SyntaxError` | Text that does not parse, such as `longint("12x")` |
+| `Error.CancelledError` | A cancelled task, at the `await` where its cancellation arrives ([async](async.md#cancelling)) |
 
 These are the families the interpreter itself raises, not copies, so
 `handle(Error.RangeError e)` catches a division by zero and `Error.TypeError` and

@@ -379,7 +379,7 @@ impl Writer {
             Value::Instance(instance) => {
                 return type_err(format!("a {} instance cannot be written as JSON; build a map of the fields to write", instance.family.name));
             }
-            Value::Func(_) | Value::Package(_) => {
+            Value::Func(_) | Value::Package(_) | Value::Task(_) => {
                 return type_err(format!("a {} cannot be written as JSON", value.type_name()));
             }
         }

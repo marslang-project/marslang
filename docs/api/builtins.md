@@ -91,6 +91,7 @@ as `Error.TypeError`, `Error.RangeError`, and so on.
 | `TypeError` | Slice argument type/arity errors; mismatched typed values |
 | `RangeError` | Integer overflow, division by zero, invalid array element indices |
 | `Error` | Mutation through a fixed alias and other runtime contract violations |
+| `CancelledError` | A cancelled task, at the `await` where its cancellation arrives ([async](async.md#cancelling)) |
 
 `SyntaxError` is raised for invalid `longint(...)` and `bigint(...)` strings. An error that no
 `handle` block catches ends the program with exit status 1, printing

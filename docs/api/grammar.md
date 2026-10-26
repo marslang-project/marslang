@@ -23,7 +23,7 @@ decorated    = decorator { decorator } ( function | family ) ;
 decorator    = "@" NAME "." NAME [ "(" expression ")" ] ;
 family       = "family" NAME [ "(" parent ")" ] "{" { [ { decorator } ] function } "}" ;
 parent       = NAME | NAME "." NAME ;
-function     = "func" NAME [ "(" [ params ] ")" ] ( block | "=>" expression ";" ) ;
+function     = [ "async" ] "func" NAME [ "(" [ params ] ")" ] ( block | "=>" expression ";" ) ;
 params       = param { "," param } ;
 param        = type NAME ;
 ```
@@ -31,6 +31,8 @@ param        = type NAME ;
 A program runs from `func m`. Top-level declarations and statements run first,
 in order, after the packages they import. Several decorators may share a line.
 `takepkg .name;` and `takepkg ..name;` are relative imports; `= *` is reserved.
+An `async` function, method, or nested function runs as a task when called
+([async](async.md)); a family's `init` cannot be `async`.
 
 ## Statements
 
@@ -89,12 +91,13 @@ comparison   = sum { ( "==" | "!=" | "<" | "<=" | ">" | ">=" ) sum } ;
 sum          = product { ( "+" | "-" ) product } ;
 product      = sign { ( "*" | "/" | "%" ) sign } ;
 sign         = ( "+" | "-" ) sign | power ;
-power        = postfix [ "**" sign ] ;
+power        = awaited [ "**" sign ] ;
+awaited      = "await" awaited | postfix ;
 postfix      = primary { "." NAME | "(" [ arguments ] ")" | "[" expression "]" } ;
 arguments    = expression { "," expression } [ "," "reverse" "=" expression ] ;
 primary      = NUMBER | STRING | "true" | "false" | "fasle" | "null" | NAME
              | "(" expression ")" | lambda | matchvalue ;
-lambda       = "func" "(" [ params ] ")" "=>" expression ;
+lambda       = [ "async" ] "func" "(" [ params ] ")" "=>" expression ;
 matchvalue   = "match" "(" expression ")" "{" valuearm { ";" valuearm } [ ";" ] "}" ;
 valuearm     = pattern [ guard ] "=>" expression ;
 ```
@@ -114,7 +117,8 @@ left to right, except `**`.
 | 6 | `*` `/` `%` | |
 | 7 | unary `+` `-` | `-2 ** 2` is `-(2 ** 2)`, which is `-4` |
 | 8 | `**` | Groups right to left: `2 ** 3 ** 2` is `2 ** 9` |
-| 9 | `.name` `(...)` `[...]` | Member, call, and index, left to right |
+| 9 | `await` | `await a() + await b()` adds two results; `await t ** 2` is `(await t) ** 2` |
+| 10 | `.name` `(...)` `[...]` | Member, call, and index, left to right: `await load(url)` awaits the call's task |
 
 A lambda's body is a whole expression, so it extends as far as it can:
 `func(int x) => x + 1` inside a call ends at the next `,` or `)`.
@@ -128,7 +132,7 @@ on one line.
 ```text
 type         = simple | "[" type { "," type } "]" | collection ;
 simple       = "int" | "longint" | "float" | "bigint" | "string" | "bool" | "any"
-             | "date" | "datetime" | "duration"
+             | "date" | "datetime" | "duration" | "task"
              | "Function" | "Family" | NAME | NAME "." NAME ;
 collection   = ( "array" | "set" ) [ "[" type "]" ]
              | "pair" [ "[" type "," type "]" ]
@@ -150,10 +154,12 @@ families inheriting from it. `Function` and `Family` are for parameters only.
   family marked `@Decorator.private`. A method name starting with `_` is only a
   convention; privacy for methods is `@Decorator.private` as well.
 - **Keywords**: `func` `family` `takepkg` `ret` `if` `elif` `else` `while`
-  `repeat` `for` `break` `continue` `run` `handle` `then` `match` `fixed` `hot`
-  `cold` `and` `or` `not` `also` `true` `false` `fasle` `null` `me`. `match`
-  became a keyword with the `match` statement: it can no longer name a
-  variable, parameter, function, or family, though `x.match` is still a member.
+  `repeat` `for` `break` `continue` `run` `handle` `then` `match` `async`
+  `await` `fixed` `hot` `cold` `and` `or` `not` `also` `true` `false` `fasle`
+  `null` `me`. `match`, `async`, and `await` can name no variable, parameter,
+  function, family, loop variable, or handled error, though `x.match` and
+  `x.await` are still members. `async` is still the name `takepkg std.async;`
+  gives the package, so `async.sleep(1)` works; `await` cannot name a package.
 - **Numbers**: `42`, `3.5`, `1e9`, `2.5E-3`. A whole number is an `int` when it
   fits in 32 bits (-2,147,483,648 to 2,147,483,647), a `longint` when it fits
   in 64 bits, and a [`bigint`](std-bigint.md) otherwise, so `3000000000 + 1` is
@@ -196,4 +202,5 @@ These are recognised only to report a clear error, or not at all:
 | `func f(int a, int b = 2)` | Compile error; parameters have no defaults |
 | `func f(int a) -> int` | Compile error; there are no return type annotations |
 | `func(int x){ ... }` | Compile error; an anonymous function's body is one expression |
+| `await` on a value that is not a task | `TypeError` when it runs; only tasks can be awaited |
 | `:=`, bitwise operators | Excluded from the language |

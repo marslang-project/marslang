@@ -133,8 +133,9 @@ fn exported_function(function: &FuncDecl, family: Option<&str>) -> String {
         let ty = (!param.ty.is_empty()).then_some(param.ty.as_str());
         format!("{{\"name\":{},\"type\":{}}}", string(written(&param.name)), optional(ty))
     }).collect();
+    let asynchronous = if function.is_async { ",\"async\":true" } else { "" };
     format!(
-        "{{\"name\":{},\"family\":{},\"line\":{},\"end\":{},\"params\":[{}],\"doc\":{},\"access\":{}}}",
+        "{{\"name\":{},\"family\":{},\"line\":{},\"end\":{},\"params\":[{}],\"doc\":{},\"access\":{}{asynchronous}}}",
         string(&function.name), optional(family), function.line, function.end_line,
         params.join(","), optional(function.doc.as_deref()), string(access_name(function.access)))
 }
@@ -180,8 +181,10 @@ impl Walker<'_> {
         }).collect();
         if let FuncBody::Block(body) = &function.body { self.block(body, &scope, &mut known); }
         let access = access_name(function.access);
+        // Only async functions say so, so other functions read as before.
+        let asynchronous = if function.is_async { ",\"async\":true" } else { "" };
         format!(
-            "{{\"name\":{},\"family\":{},\"line\":{},\"end\":{},\"params\":[{}],\"doc\":{},\"access\":{}}}",
+            "{{\"name\":{},\"family\":{},\"line\":{},\"end\":{},\"params\":[{}],\"doc\":{},\"access\":{}{asynchronous}}}",
             string(&function.name), optional(family), function.line, function.end_line,
             params.join(","), optional(function.doc.as_deref()), string(access))
     }

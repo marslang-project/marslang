@@ -35,8 +35,9 @@ fixed status. `.copy()` creates a mutable deep copy of a container.
 
 Supported runtime types include `int` (signed 32-bit), `longint` (signed 64-bit),
 `float`, `bigint` (a whole number of any size, [std.bigint](std-bigint.md)),
-`string`, `array`, `set`, `pair`, `map`/`dict`, and the calendar kinds
-`date`, `datetime`, and `duration` ([dates and times](dates.md)). `any` accepts every
+`string`, `array`, `set`, `pair`, `map`/`dict`, the calendar kinds
+`date`, `datetime`, and `duration` ([dates and times](dates.md)), and `task`
+([async](async.md)). `any` accepts every
 value, for parameters that work with anything, such as `func push(any item)`. Collection restrictions
 use forms such as `array[int]`, `pair[string,int]`, and `map[string,int]`.
 This is runtime checking, not a complete static type system.
@@ -162,6 +163,35 @@ parameter, which is a new variable on every call.
 `Function` and `Family` are parameter types only; `f (Function) = ...` is a
 compile error. A nested function cannot be reassigned, and closures that
 refer to each other or to themselves are reclaimed like any other cycle.
+
+## Tasks and await
+
+An `async func` runs as a task: calling it checks the arguments and returns
+a `task` at once, and the body runs once the code running now waits.
+`await task` waits for it to finish and gives its result, or raises its error.
+
+```mars
+takepkg std.async;
+
+async func later(string text, float seconds){
+    await async.sleep(seconds);
+    ret text;
+}
+
+func m{
+    first = later("first", 0.02);
+    second = later("second", 0.01);
+    out(await first + " " + await second);     // first second
+}
+```
+
+Both tasks wait at the same time, so `m` waits 0.02 seconds, not 0.03.
+`await` works in any function, async or not, and in `m`; it binds tighter than
+any operator, so `await a + await b` adds two results, and it raises
+`TypeError` for a value that is not a task. A task has `done()`, `result()`,
+and `cancel()`; tasks still running when `m` returns finish before the
+program ends. The whole story is in [async](async.md), and timers and
+waiting for several tasks in [std.async](std-async.md).
 
 ## Control flow
 
@@ -419,7 +449,8 @@ func m{
 ```
 
 Errors are families. `Error` is the base family, and `TypeError`, `RangeError`,
-`OutOfBoundsError`, and `SyntaxError` inherit from it. Declare your own with
+`OutOfBoundsError`, `SyntaxError`, and `CancelledError` (raised in a cancelled
+[task](async.md#cancelling)) inherit from it. Declare your own with
 `family Name(Error){}` or inherit from a built-in kind. Every error has a `message`
 field and prints as `Name: message`.
 
@@ -453,6 +484,7 @@ or as a parent: `family Timeout(net.NetworkError){}`.
 Arithmetic: `+`, `-`, `*`, `/`, `%`, `**`; unary `+` and `-`.
 Comparisons: `==`, `!=`, `<`, `<=`, `>`, `>=`.
 Boolean operators: `not`, `and`, `or`. `and`/`or` short-circuit and return booleans.
+`await` waits for a [task](async.md) and binds tighter than any of these.
 Updates include `=`, `+=`, `-=`, `++`, and `--`.
 
 Equality does not coerce strings into numbers. Containers compare by identity.
@@ -512,6 +544,6 @@ cannot express (platform float functions, raising a named error, reading a value
 kind) come from native packages written in Rust under `std/rs/`, imported as
 `takepkg rs.NAME;`. Only standard packages may import `rs.*` packages.
 
-`@Decorator.static`, `@Decorator.class`, `@Decorator.overload`, async, and `match`
+`@Decorator.static`, `@Decorator.class`, and `@Decorator.overload`
 are pending. `:=` and native bitwise
 operators are excluded. Proposed syntax is not an implemented API.

@@ -45,9 +45,10 @@ pub fn parse_program(input: &str) -> PResult<Program> {
         if line.starts_with('@') {
             let (decorators, target, at) = collect_decorators(&lines, idx, line)?;
             let target_line = lines[at].number;
-            if target.starts_with("func ") {
-                let (mut func, next) = parse_func_from(&target, &lines, at).map_err(|e| at_line(target_line, e))?;
+            if let Some((is_async, header)) = func_header(&target) {
+                let (mut func, next) = parse_func_from(header, &lines, at).map_err(|e| at_line(target_line, e))?;
                 func.decorators = decorators;
+                func.is_async = is_async;
                 items.push(Item::Func(func));
                 idx = next;
             } else if target.starts_with("family ") {
@@ -60,8 +61,9 @@ pub fn parse_program(input: &str) -> PResult<Program> {
             }
             continue;
         }
-        if line.starts_with("func ") {
-            let (func, next) = parse_func(&lines, idx).map_err(|e| at_line(number, e))?;
+        if let Some((is_async, header)) = func_header(line) {
+            let (mut func, next) = parse_func_from(header, &lines, idx).map_err(|e| at_line(number, e))?;
+            func.is_async = is_async;
             items.push(Item::Func(func));
             idx = next;
             continue;
@@ -392,12 +394,13 @@ fn parse_family_from(header: &str, lines: &[Line], start: usize) -> PResult<(Fam
         let line = lines[i].trim();
         if line.starts_with('@') {
             let (decorators, target, at) = collect_decorators(lines, i, line)?;
-            if !target.starts_with("func ") {
+            let Some((is_async, header)) = func_header(&target) else {
                 return Err(at_line(lines[at].number, "decorators in a family must be followed by a func".into()));
-            }
-            let (mut func, next) = parse_func_from(&target, lines, at).map_err(|e| at_line(lines[at].number, e))?;
+            };
+            let (mut func, next) = parse_func_from(header, lines, at).map_err(|e| at_line(lines[at].number, e))?;
             func.decorators = decorators;
-            methods.push(func);
+            func.is_async = is_async;
+            methods.push(method(func, lines[at].number)?);
             i = next;
             continue;
         }
@@ -420,9 +423,10 @@ fn parse_family_from(header: &str, lines: &[Line], start: usize) -> PResult<(Fam
             i += 1;
             continue;
         }
-        if line.starts_with("func ") {
-            let (func, next) = parse_func(lines, i).map_err(|e| at_line(lines[i].number, e))?;
-            methods.push(func);
+        if let Some((is_async, header)) = func_header(line) {
+            let (mut func, next) = parse_func_from(header, lines, i).map_err(|e| at_line(lines[i].number, e))?;
+            func.is_async = is_async;
+            methods.push(method(func, lines[i].number)?);
             i = next;
             continue;
         }
@@ -493,11 +497,26 @@ pub(crate) fn lambda(params: &str, body: Expr) -> PResult<FuncDecl> {
         doc: None,
         line: 0,
         end_line: 0,
+        is_async: false,
     })
 }
 
-fn parse_func(lines: &[Line], start: usize) -> PResult<(FuncDecl, usize)> {
-    parse_func_from(lines[start].trim(), lines, start)
+/// The function a line declares, if it declares one: whether it is `async
+/// func`, and its header from `func` on.
+fn func_header(line: &str) -> Option<(bool, &str)> {
+    if line.starts_with("func ") { return Some((false, line)); }
+    let rest = line.strip_prefix("async")?;
+    if !rest.starts_with(char::is_whitespace) { return None; }
+    let rest = rest.trim_start();
+    rest.starts_with("func ").then_some((true, rest))
+}
+
+/// A family method, which may be async unless it is `init`.
+fn method(func: FuncDecl, line: usize) -> PResult<FuncDecl> {
+    if func.is_async && func.name == "init" {
+        return Err(at_line(line, "init cannot be async: a family's init must finish before its instance is used".into()));
+    }
+    Ok(func)
 }
 
 /// Parse a function whose header is `header` (normally `lines[start]`); a block
@@ -524,6 +543,7 @@ fn parse_func_from(header: &str, lines: &[Line], start: usize) -> PResult<(FuncD
                 doc: None,
                 line: lines[start].number,
                 end_line: lines[next - 1].number,
+                is_async: false,
             },
             next,
         ));
@@ -548,6 +568,7 @@ fn parse_func_from(header: &str, lines: &[Line], start: usize) -> PResult<(FuncD
             doc: None,
             line: lines[start].number,
             end_line: lines[i.saturating_sub(1).max(start)].number,
+            is_async: false,
         },
         i,
     ))
@@ -728,8 +749,9 @@ fn parse_stmt_text(l: &str, lines: &[Line], idx: usize) -> PResult<(StmtKind, us
     }
 
     // A func inside a block: a closure over the variables around it.
-    if l.starts_with("func ") {
-        let (decl, next) = parse_func_from(l, lines, idx)?;
+    if let Some((is_async, header)) = func_header(l) {
+        let (mut decl, next) = parse_func_from(header, lines, idx)?;
+        decl.is_async = is_async;
         validate_function_loops(&decl)?;
         return Ok((StmtKind::Func { name: decl.name.clone(), decl: std::sync::Arc::new(decl) }, next));
     }
@@ -797,9 +819,10 @@ fn starts_with_word(text: &str, word: &str) -> bool {
     text.strip_prefix(word).is_some_and(|rest| !rest.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_'))
 }
 
-/// `match` cannot name anything a program declares.
+/// `match`, `async`, and `await` cannot name anything a program declares.
+/// (`takepkg std.async;` still names the package async.)
 fn reserved(name: &str, what: &str) -> PResult<()> {
-    if name == "match" { return Err(format!("'match' is a keyword and cannot name a {what}")); }
+    if matches!(name, "match" | "async" | "await") { return Err(format!("'{name}' is a keyword and cannot name a {what}")); }
     Ok(())
 }
 
@@ -1089,7 +1112,7 @@ fn substitute(expr: &mut Expr, found: &mut Option<Expr>) {
     if found.is_none() { return; }
     match expr {
         Expr::Ident(name) if name == MATCH_PLACEHOLDER => *expr = found.take().unwrap(),
-        Expr::Typed { value, .. } | Expr::Freeze(value) | Expr::Unary { value, .. } => substitute(value, found),
+        Expr::Typed { value, .. } | Expr::Freeze(value) | Expr::Unary { value, .. } | Expr::Await(value) => substitute(value, found),
         Expr::Binary { left, right, .. } => { substitute(left, found); substitute(right, found); }
         Expr::Call { callee, args } => { substitute(callee, found); for arg in args { substitute(arg, found); } }
         Expr::Member { object, .. } => substitute(object, found),
