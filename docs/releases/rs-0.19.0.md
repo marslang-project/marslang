@@ -1,5 +1,8 @@
 # rs-0.19.0 — async and await, programs, and broadcast channels
 
+**Not published:** its Windows build crashed when a program ended with tasks
+still waiting. Everything below shipped in [rs-0.19.1](rs-0.19.1.md), with the fix.
+
 Programs can now do several things at once: [async and await](../api/async.md)
 run tasks that wait without blocking each other, HTTP requests, sleeps, and
 the new [std.process](../api/std-process.md) wait inside a task while the rest
