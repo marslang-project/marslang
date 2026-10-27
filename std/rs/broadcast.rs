@@ -312,6 +312,7 @@ fn network_send(name: &str, json: &str) -> RResult<Value> {
     let local = if address.is_loopback() { address } else { Ipv4Addr::UNSPECIFIED };
     let socket = UdpSocket::bind((local, 0)).map_err(failed)?;
     socket.set_broadcast(true).map_err(failed)?;
+    room_for_whole_datagrams(&socket);
     socket.send_to(&bytes, (address, port(name))).map_err(failed)?;
     Ok(Value::Null)
 }
@@ -714,3 +715,19 @@ mod sys {
         }
     }
 }
+
+/// macOS sends no UDP datagram larger than its default send buffer, 9216
+/// bytes, so a network message near the 65,507-byte limit would fail there.
+/// A larger send buffer lifts that; elsewhere the default is already enough.
+#[cfg(unix)]
+fn room_for_whole_datagrams(socket: &UdpSocket) {
+    use std::os::unix::io::AsRawFd;
+    let size: libc::c_int = 65_536;
+    unsafe {
+        libc::setsockopt(socket.as_raw_fd(), libc::SOL_SOCKET, libc::SO_SNDBUF,
+            &size as *const libc::c_int as *const libc::c_void, std::mem::size_of::<libc::c_int>() as libc::socklen_t);
+    }
+}
+
+#[cfg(not(unix))]
+fn room_for_whole_datagrams(_socket: &UdpSocket) {}

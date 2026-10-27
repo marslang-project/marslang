@@ -513,7 +513,8 @@ fn network_channels_on_loopback_drop_what_is_not_a_message_and_name_the_sender()
     send(b"not a marslang message");
     send(format!("marslang-broadcast 1 {name}-other\n\"another channel\"").as_bytes());
     send(format!("marslang-broadcast 1 {name}\n{{not json").as_bytes());
-    send(format!("marslang-broadcast 1 {name}\n{}", "[".repeat(5000) + &"]".repeat(5000)).as_bytes());
+    // Deeper than JSON's limit of 512, and under macOS's 9216-byte datagram default.
+    send(format!("marslang-broadcast 1 {name}\n{}", "[".repeat(2000) + &"]".repeat(2000)).as_bytes());
     send(&[0xff, 0xfe, 0x00]);
     send(format!("marslang-broadcast 1 {name}\n{{\"a\": 1}}").as_bytes());
     send(format!("marslang-broadcast 1 {name}\n\"second\"").as_bytes());
