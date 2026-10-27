@@ -34,6 +34,7 @@ notes elsewhere under `docs/` remain local.
 - [std.sqlite](std-sqlite.md): SQL databases in a file or in memory, with parameters and transactions.
 - [std.secrets](std-secrets.md): secure tokens, passwords, and choices, for anything an attacker must not guess.
 - [std.async](std-async.md): sleep, all, race, timeout, and cancelling tasks.
+- [std.broadcast](std-broadcast.md): channels that send messages within a program, to this computer's programs, or across the network.
 - [std.process](std-process.md): running other programs with no shell, their output and exit codes.
 - [std.uuid](std-uuid.md): random (v4) and time-ordered (v7) UUIDs.
 - [std.types](std-types.md): a value's kind, family checks.
