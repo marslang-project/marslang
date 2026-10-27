@@ -370,6 +370,7 @@ dependencies = [
  "hmac",
  "indexmap",
  "jiff",
+ "libc",
  "md-5",
  "mimalloc",
  "num-bigint",
@@ -385,6 +386,7 @@ dependencies = [
  "unicode-segmentation",
  "unicode-width",
  "ureq",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

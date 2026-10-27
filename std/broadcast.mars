@@ -1,0 +1,358 @@
+// std.broadcast: named channels that programs send messages on and listen to.
+//
+// Channels, the "local" scope (within one program), the queue of each local
+// channel object, copying by JSON, receive_for, and on() are Marslang, below.
+// Native (std/rs/broadcast.rs) are only what Marslang cannot do: waking a
+// waiting task, and the transports of the other scopes: Unix domain sockets
+// in a per-user directory for "machine", and UDP broadcast for "network",
+// each read by a background thread whose messages a waiting task is woken
+// for. Every function that waits returns a task to await.
+takepkg rs.broadcast = native;
+takepkg std.async;
+takepkg std.Decorator;
+takepkg std.json;
+takepkg std.regex;
+
+// The local channel objects of each channel name, in the order they opened.
+_locals = map();
+
+// The most messages a channel object keeps for receive(); beyond this the
+// oldest is dropped. std/rs/broadcast.rs keeps the same limit for the others.
+_QUEUE_LIMIT = 1000;
+
+@Decorator.docstring("""
+    Raised when a closed channel is used: by send, receive, receive_for, and
+    on, and by a receive that was waiting when the channel was closed.
+
+        ch.close();
+        run { ch.send(1); } handle(broadcast.ClosedError e){ out(e.message); }
+        // channel "scores" is closed, so it cannot send
+""")
+family ClosedError(Error){}
+
+@Decorator.docstring("""
+    What on() returns: the subscription of one function to a channel. stop()
+    ends it.
+
+        sub = ch.on(func(any message) => out(message));
+        sub.stop();
+""")
+family Subscription{
+    @Decorator.docstring("Made by Channel.on; not called directly.")
+    func init(any channel, Function f){
+        me.channel = channel;
+        me.active = true;
+        me._f = f;
+    }
+
+    @Decorator.docstring("""
+        Stop calling the function for new messages: true, or false when it
+        was already stopped. Handlers already started run to their end.
+    """)
+    func stop(){
+        if (not me.active){ ret false; }
+        me.active = false;
+        _unsubscribe(me.channel, me);
+        ret true;
+    }
+}
+
+@Decorator.docstring("""
+    One program's end of a named channel, made by broadcast.channel. It sends,
+    and it receives every message sent on its channel name and scope, its
+    own included, from the moment it is made until it is closed.
+
+        news = broadcast.channel("scores", "local");
+        news.send(map().set("points", 10));
+        out(await news.receive());   // {"points": 10}
+
+    name and scope are what it was made with. registration is the socket
+    file that registers a machine channel object, and null for the others.
+""")
+family Channel{
+    @Decorator.docstring("Made by broadcast.channel, which checks the name and scope; not called directly.")
+    func init(string name, string scope){
+        me.name = name;
+        me.scope = scope;
+        me.closed = false;
+        me.registration = null;
+        me._queue = arr();
+        me._subs = arr();
+        me._pump = null;
+        if (scope == "local"){
+            me._id = native.local_open();
+            if (not _locals.has(name)){ _locals.set(name, arr()); }
+            _locals.get(name).add(me);
+        } elif (scope == "machine"){
+            opened = native.machine_open(name);
+            me._id = opened[0];
+            me.registration = opened[1];
+        } else {
+            me._id = native.network_open(name);
+        }
+    }
+
+    @Decorator.docstring("""
+        Send value, which JSON must be able to hold, to every receiver of the
+        channel: a copy each, so no receiver shares it. Returns how many
+        channel objects it reached, this one included, for "local" and
+        "machine"; null for "network", which cannot know.
+
+        A value JSON cannot hold, such as a set or a function, raises
+        TypeError. A "machine" message over 1 MB of JSON, or a "network" one
+        over 65,507 bytes, raises RangeError.
+    """)
+    func send(any value){
+        _check_open(me, "send");
+        text = _encode(value);
+        if (me.scope == "local"){
+            reached = _locals.get(me.name);
+            for (ch, reached){ _deliver(ch, text); }
+            ret reached.len();
+        }
+        if (me.scope == "machine"){ ret native.machine_send(me.name, text); }
+        native.network_send(me.name, text);
+        ret null;
+    }
+
+    @Decorator.docstring("""
+        A task giving the next message: the oldest one queued, or else the
+        next to arrive. Only the task that awaits it waits.
+
+            message = await ch.receive();
+
+        A "network" message is a map, {"message": value, "from": "192.168.1.5"},
+        naming the sender's address; the others are the value itself. Up to
+        1000 messages are queued while nobody receives; beyond that the
+        oldest is dropped.
+    """)
+    func receive() => _receive(me);
+
+    @Decorator.docstring("""
+        As receive(), but giving null when no message comes within seconds,
+        a number or a duration.
+
+            message = await ch.receive_for(0.5);
+            if (message == null){ out("nothing yet"); }
+
+        A message that is null itself looks the same as no message.
+    """)
+    func receive_for([int, longint, float, duration] seconds) => _receive_for(me, _seconds(seconds));
+
+    @Decorator.docstring("""
+        Call f(message) for every message from now on, each call a task of its
+        own, until the Subscription it returns is stopped or the channel is
+        closed. While a channel object has a subscription, its messages go to
+        its subscriptions rather than to receive().
+
+            sub = ch.on(func(any message) => out("got", message));
+
+        A "machine" or "network" subscription keeps the program running, as
+        messages may still come, until it is stopped or the channel closed. A
+        "local" one does not: only the program itself could send, so the
+        program ends once its code and tasks are done.
+    """)
+    func on(Function f){
+        _check_open(me, "subscribe");
+        sub = Subscription(me, f);
+        me._subs.add(sub);
+        if (me.scope != "local" and me._pump == null){ me._pump = _pump(me); }
+        ret sub;
+    }
+
+    @Decorator.docstring("""
+        Stop listening: queued messages are dropped, subscriptions stop, a
+        receive that is waiting raises ClosedError, and a "machine"
+        registration is removed. True, or false when it was already closed.
+        Channel objects close by themselves when the program ends.
+    """)
+    func close(){
+        if (me.closed){ ret false; }
+        me.closed = true;
+        me._queue = arr();
+        for (sub, me._subs){ sub.active = false; }
+        me._subs = arr();
+        if (me._pump != null){ me._pump.cancel(); }
+        me._pump = null;
+        if (me.scope == "local"){
+            kept = arr();
+            for (ch, _locals.get(me.name)){
+                if (ch != me){ kept.add(ch); }
+            }
+            _locals.set(me.name, kept);
+            native.notify(me._id);
+        }
+        native.close(me._id);
+        ret true;
+    }
+}
+
+@Decorator.docstring("""
+    A channel object for the channel name in scope: "local", "machine", or
+    "network". It receives from the moment it is made, so messages sent
+    before anything awaits receive() are queued.
+
+        scores = broadcast.channel("scores", "local");      // this program
+        jobs = broadcast.channel("build.jobs", "machine");  // this user's programs here
+        hello = broadcast.channel("hello", "network");      // anyone on the network
+
+    name is 1 to 100 letters, digits, "-", "_", or "."; another raises
+    RangeError, as does an unknown scope. "network" is never chosen for you:
+    anyone on the network can read and send its messages.
+""")
+func channel(string name, string scope){
+    if (not regex.matches(r"[A-Za-z0-9_.\-]{1,100}", name)){
+        err(RangeError, f"broadcast.channel needs a name of 1 to 100 letters, digits, '-', '_', or '.', got \"{name}\"");
+    }
+    if (scope != "local" and scope != "machine" and scope != "network"){
+        err(RangeError, f"broadcast.channel needs the scope \"local\", \"machine\", or \"network\", got \"{scope}\"");
+    }
+    ret Channel(name, scope);
+}
+
+@Decorator.docstring("""
+    The UDP port of the "network" channel name: from 41000 to 48999, the same
+    on every computer, so a firewall can be opened for it.
+
+        out(broadcast.network_port("hello"));
+""")
+func network_port(string name) => native.network_port(name);
+
+@Decorator.docstring(r"""
+    The directory where "machine" channel objects register, made if need be:
+    only the current user can open it.
+
+        out(broadcast.machine_directory());   // /run/user/1000/marslang-broadcast-1000
+
+    On Windows it is %TEMP%\marslang-broadcast.
+""")
+func machine_directory() => native.directory();
+
+// ----- helpers -----
+
+@Decorator.private
+func _check_open(Channel ch, string what){
+    if (ch.closed){ err(ClosedError, f"channel \"{ch.name}\" is closed, so it cannot {what}"); }
+}
+
+@Decorator.private
+func _seconds(any length){
+    seconds = match (length){
+        duration d => d.seconds();
+        _ => float(length);
+    };
+    if (seconds != seconds or seconds < 0){
+        err(RangeError, f"receive_for needs a nonnegative number of seconds, got {length}");
+    }
+    ret seconds;
+}
+
+// The message as JSON text, which every receiver parses into its own copy.
+@Decorator.private
+func _encode(any value){
+    run {
+        ret json.stringify(value);
+    } handle(TypeError e){
+        err(TypeError, f"send needs a value JSON can hold: {e.message}");
+    } handle(RangeError e){
+        err(RangeError, f"send needs a value JSON can hold: {e.message}");
+    }
+}
+
+// A message that reached the local channel object ch: to its subscriptions,
+// or else to its queue, waking whoever waits in receive().
+@Decorator.private
+func _deliver(Channel ch, string text){
+    if (not ch._subs.is_empty()){
+        for (sub, ch._subs){ _handle(sub._f, json.parse(text)); }
+        ret null;
+    }
+    if (ch._queue.len() >= _QUEUE_LIMIT){ ch._queue.iremove(0); }
+    ch._queue.add(text);
+    native.notify(ch._id);
+}
+
+// What a machine or network channel object took from its socket, as
+// arr(message) for receive() to give, or null for one to drop: text that is
+// not JSON, or too deep, from the network.
+@Decorator.private
+func _decode(Channel ch, array item){
+    value = null;
+    run {
+        value = json.parse(item[0]);
+    } handle(Error e){
+        ret null;
+    }
+    if (ch.scope == "network"){ value = map().set("message", value).set("from", item[1]); }
+    ret arr(value);
+}
+
+@Decorator.private
+async func _handle(Function f, any message){
+    result = f(message);
+    ret match (result){
+        task t => await t;
+        _ => result;
+    };
+}
+
+@Decorator.private
+async func _receive(Channel ch){
+    while (true){
+        _check_open(ch, "receive");
+        if (ch.scope == "local"){
+            if (not ch._queue.is_empty()){ ret json.parse(ch._queue.iremove(0)); }
+            native.next(ch._id);
+        } else {
+            item = native.next(ch._id);
+            if (item != null){
+                decoded = _decode(ch, item);
+                if (decoded != null){
+                    if (ch._subs.is_empty()){ ret decoded[0]; }
+                    for (sub, ch._subs){ _handle(sub._f, decoded[0]); }
+                }
+            }
+        }
+    }
+}
+
+// A message within seconds, or null. When the message and the timer come
+// together, the message wins: a receive that has finished is never dropped.
+@Decorator.private
+async func _receive_for(Channel ch, float seconds){
+    r = _receive(ch);
+    await async.race(arr(r, async.sleep(seconds)));
+    run {
+        ret r.result();
+    } handle(CancelledError e){
+        ret null;
+    }
+}
+
+// Hands a machine or network channel object's messages to its subscriptions,
+// from the first on() until the last is stopped or the channel is closed.
+@Decorator.private
+async func _pump(Channel ch){
+    while (not ch.closed and not ch._subs.is_empty()){
+        item = native.next(ch._id);
+        if (item != null){
+            decoded = _decode(ch, item);
+            if (decoded != null){
+                for (sub, ch._subs){ _handle(sub._f, decoded[0]); }
+            }
+        }
+    }
+}
+
+@Decorator.private
+func _unsubscribe(Channel ch, Subscription sub){
+    kept = arr();
+    for (s, ch._subs){
+        if (s != sub){ kept.add(s); }
+    }
+    ch._subs = kept;
+    if (kept.is_empty() and ch._pump != null){
+        ch._pump.cancel();
+        ch._pump = null;
+    }
+}

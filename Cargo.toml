@@ -62,6 +62,16 @@ jiff = { version = "0.2.37", default-features = false, features = ["tz-system"] 
 # std/rs/terminal.rs asks the console itself, as src/date.rs asks for the
 # time zone, to stay clear of windows-sys, which links through raw-dylib.
 terminal_size = "0.4.3"
+# std.broadcast: the user id that names the per-user socket directory, process
+# liveness for cleaning up dead registrations, and SO_REUSEADDR/SO_REUSEPORT on
+# network channels' UDP sockets. Already in Cargo.lock through several crates.
+libc = "0.2.190"
+
+[target.'cfg(windows)'.dependencies]
+# std.broadcast: AF_UNIX sockets (which Rust's std lacks on Windows), the
+# current user's SID for the socket directory's access list, and process
+# liveness. 0.59 links through import libraries; 0.60+ needs raw-dylib.
+windows-sys = { version = "0.59.0", features = ["Win32_Foundation", "Win32_Networking_WinSock", "Win32_Security", "Win32_Security_Authorization", "Win32_System_Threading"] }
 
 [target.'cfg(target_env = "musl")'.dependencies]
 # The Linux releases are static musl binaries, which run on every distribution.
