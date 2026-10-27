@@ -1,0 +1,174 @@
+// std.process: running other programs and collecting what they print.
+//
+// There is no shell: process.run takes the program and its arguments as an
+// array, and each argument reaches the program exactly as written, so text in
+// an argument can never run another command.
+//
+// Starting the program, feeding its input, collecting its output, the time
+// limit, and PATH lookups are native (std/rs/process.rs); a program runs on a
+// worker thread, so inside a task only that task waits. The rest is Marslang,
+// below: Result, the error families, and check. A native call returns
+// [true, [code, output, errors]] or [false, kind, message]; _result turns a
+// failure into the family that kind names, because a native package can raise
+// only built-in errors.
+takepkg rs.process = native;
+takepkg std.Decorator;
+takepkg std.file;
+
+@Decorator.docstring("""
+    A program that could not be run, or that failed when check was used.
+    Every message names the program. handle(process.ProcessError e) also
+    catches NotFoundError and TimeoutError.
+
+    After a failed check, e.code, e.output, and e.errors hold what the
+    program ended with (code is null if it was killed by a signal).
+""")
+family ProcessError(Error){}
+
+@Decorator.docstring("""
+    The program is not installed: nothing with that name is in a PATH folder,
+    or nothing is at the path given. The message names the program.
+""")
+family NotFoundError(ProcessError){}
+
+@Decorator.docstring("""
+    The program ran longer than the limit set by process.set_timeout, and
+    was killed.
+""")
+family TimeoutError(ProcessError){}
+
+@Decorator.docstring("""
+    What a program did, from run, run_in, run_with, or check.
+
+        r = process.run(arr("git", "--version"));
+        out(r.ok, r.code, r.output);   // true 0 git version 2.45.0
+
+    code is the exit code as an int, or null when a signal killed the
+    program; ok is whether code is 0; output is what the program wrote to its
+    standard output and errors what it wrote to its standard error, as text
+    (bytes that are not UTF-8 become U+FFFD).
+""")
+family Result{
+    @Decorator.docstring("Made by the functions of std.process from the program's end; not called directly.")
+    func init(array raw){
+        me.code = raw[0];
+        me.ok = raw[0] == 0;
+        me.output = raw[1];
+        me.errors = raw[2];
+    }
+}
+
+@Decorator.private
+func _fail(array result){
+    kind = result[1];
+    message = result[2];
+    if (kind == "NotFound"){ err(NotFoundError, message); }
+    if (kind == "Timeout"){ err(TimeoutError, message); }
+    if (kind == "FolderMissing"){ err(file.NotFoundError, message); }
+    if (kind == "FolderNotDirectory"){ err(file.NotDirectoryError, message); }
+    err(ProcessError, message);
+}
+
+@Decorator.private
+func _result(array result){
+    if (result[0]){ ret Result(result[1]); }
+    _fail(result);
+}
+
+@Decorator.private
+func _shorten(string text){
+    text = text.strip();
+    if (text.len() > 1000){ ret text.lenslice(0, 1000) + "..."; }
+    ret text;
+}
+
+// ----- running -----
+
+@Decorator.docstring("""
+    Run a program and wait for it. args is an array of strings, the program
+    first and then its arguments; there is no shell, so each argument
+    reaches the program as one piece, whatever it contains.
+
+        r = process.run(arr("echo", "a; rm x"));   // echo gets one argument
+        out(r.code, r.ok, r.output);
+
+    The program gets no input (it reads an empty stdin) and inherits this
+    program's environment. A program that fails is still a Result: check ok
+    or code. A program that is not installed raises process.NotFoundError;
+    an empty args array raises RangeError. Inside a task only the task waits.
+""")
+func run(array args) => _result(native.run(args, null, null));
+
+@Decorator.docstring("""
+    Like run, in another working folder.
+
+        r = process.run_in(arr("git", "status", "--short"), "/home/ada/project");
+
+    A folder that does not exist raises file.NotFoundError. A program given
+    as a relative path is taken from this program's folder, not the new one.
+""")
+func run_in(array args, string folder) => _result(native.run(args, folder, null));
+
+@Decorator.docstring("""
+    Like run, feeding the string input to the program's standard input.
+
+        r = process.run_with(arr("sort"), "pear\\napple\\n");
+        out(r.output);   // apple, then pear
+""")
+func run_with(array args, string input) => _result(native.run(args, null, input));
+
+@Decorator.docstring("""
+    Like run, but a program that does not end with code 0, or is killed by a
+    signal, raises process.ProcessError, whose message gives the code and
+    what the program wrote. Returns the Result when it succeeds.
+
+        out(process.check(arr("git", "rev-parse", "HEAD")).output);
+
+    e.code, e.output, and e.errors hold the whole outcome of a failed program.
+""")
+func check(array args){
+    r = _result(native.run(args, null, null));
+    if (r.ok){ ret r; }
+    how = "ended with code " + string(r.code);
+    if (r.code == null){ how = "was killed by a signal"; }
+    message = "the program \"" + args[0] + "\" " + how;
+    if (_shorten(r.output) != ""){ message = message + "\noutput:\n" + _shorten(r.output); }
+    if (_shorten(r.errors) != ""){ message = message + "\nerrors:\n" + _shorten(r.errors); }
+    run{
+        err(ProcessError, message);
+    } handle(ProcessError e){
+        e.code = r.code;
+        e.output = r.output;
+        e.errors = r.errors;
+        err(e);
+    }
+}
+
+@Decorator.docstring("""
+    The full path of the program that name runs, or null when there is none.
+
+        out(process.which("git"));   // /usr/bin/git
+        out(process.which("no-such-program"));   // null
+
+    A name without a folder part is looked up in the PATH folders in order;
+    on Windows it is tried with each extension in PATHEXT, so "npm" finds
+    npm.cmd. A name with a folder part, such as "./tool", is that path.
+""")
+func which(string name) => native.which(name);
+
+// ----- settings -----
+
+@Decorator.docstring("""
+    Limit every program started after this to seconds, an int or a float. A
+    program that runs longer is killed and raises process.TimeoutError. The
+    default is no limit; null removes the limit again.
+
+        process.set_timeout(10);
+
+    A number that is not positive raises RangeError. The setting lasts until
+    the program ends. Only the program is killed, not any programs it started.
+""")
+func set_timeout(any seconds){ native.set_timeout(seconds); }
+
+@Decorator.docstring("The time limit in seconds as a float, or null when there is none.")
+func timeout() => native.timeout();

@@ -101,6 +101,39 @@ error page saved under the name of the file you wanted is a surprise found
 later. A directory in `path` that does not exist raises `file.NotFoundError`,
 and other problems with the file the other `std.file` errors.
 
+## Many requests at once
+
+Every request runs on a worker thread, so in [tasks](async.md) only the task
+that sent it waits, and the others run. Ten requests to a server that takes a
+second each, sent from ten tasks, take about a second, not ten:
+
+```mars
+takepkg std.http;
+takepkg std.async;
+
+async func size(string url) => http.get(url).text.len();
+
+func m{
+    tasks = arr();
+    for (url, arr("https://example.com/", "https://example.org/")){ tasks.add(size(url)); }
+    out(await async.all(tasks));            // two page sizes, fetched together
+}
+```
+
+Outside a task a request simply waits for the answer, as it always did. The
+time limit, the proxies, and the limits below apply to each request as before.
+
+**Cancelling.** When a task is cancelled (`t.cancel()`, `async.timeout`, `async.race`),
+the request it is waiting for stops mattering at once: the task raises
+`CancelledError` without waiting for the server, and the answer, if one
+arrives, is thrown away. The request itself may go on in the background until
+it finishes or reaches the time limit, since the network call cannot be
+interrupted, so a cancelled `POST` may still reach the server. A cancelled
+`download` stops writing at the next piece of data it receives and removes
+its temporary file, so a half-written file is never left; the file at `path`
+is either what it was before or, if the last piece had already arrived when
+the task was cancelled, the whole new body, never part of it.
+
 ## Errors
 
 | Error | When |
@@ -188,3 +221,6 @@ only there (as some company networks add) is not trusted by `std.http`.
 
 `Response`, the error families, JSON, and which statuses are errors are
 Marslang, in [std/http.mars](../../std/http.mars).
+
+Each request is sent from a worker thread, with one connection pool shared by
+the whole program, so requests from different tasks reuse connections too.

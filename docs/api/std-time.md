@@ -23,6 +23,31 @@ func m{
 | `now_datetime()` | This moment, as a [datetime](dates.md) in this machine's time zone |
 | `sleep(length)` | Pauses the program for a duration or a number of seconds; negative or non-finite values raise `RangeError` |
 
+## Sleeping in tasks
+
+Outside [tasks](async.md), `sleep` stops the whole program until it returns.
+Inside a task it pauses only that task, as `async.sleep` does, and the other
+tasks run meanwhile; it can be cancelled like any wait. Five tasks that each
+call `time.sleep(0.3)` finish together after 0.3 seconds:
+
+```mars
+takepkg std.time;
+takepkg std.async;
+
+async func nap(int n){
+    time.sleep(0.3);
+    ret n;
+}
+
+func m{
+    out(await async.all(arr(nap(1), nap(2), nap(3))));   // [1, 2, 3], after 0.3 seconds
+}
+```
+
+`sleep` written like this needs no `await`, so existing code that sleeps keeps
+working when it is moved into a task. A task that computes without waiting
+still holds the others up.
+
 ## Lengths of time
 
 | Function | Result |

@@ -14,7 +14,8 @@ func monotonic() => native.monotonic();
 @Decorator.docstring("""
     Pause the program: for a duration, such as time.seconds(2), or for a number
     of seconds of any numeric kind. Negative or non-finite values raise
-    RangeError.
+    RangeError. Inside a task only that task pauses and the others keep
+    running; outside tasks it stops the program, as always.
 """)
 func sleep([int,longint,float,duration] length){
     if (core.kind(length) == "duration"){ native.sleep(length.seconds()); } else { native.sleep(float(length)); }

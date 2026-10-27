@@ -1,4 +1,5 @@
-//! `takepkg rs.time;` - clocks and sleeping for `std.time`.
+//! `takepkg rs.time;` - clocks and sleeping for `std.time`. Sleeping goes
+//! through the task runtime, so a task that sleeps lets the others run.
 
 use std::sync::OnceLock;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -27,7 +28,8 @@ pub fn package() -> Value {
             let Ok(duration) = Duration::try_from_secs_f64(seconds) else {
                 return range_err("sleep duration is too long");
             };
-            std::thread::sleep(duration);
+            // Inside a task only the task waits; elsewhere this blocks.
+            crate::runtime::sleep(duration)?;
             Ok(Value::Null)
         })
         // The calendar kinds: today's date and this moment, in the local zone.

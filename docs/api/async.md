@@ -230,9 +230,17 @@ finish, since each is waiting for another task: first, second`.
 
 - Tasks take turns on one thread, so they never run in parallel; work that
   only computes is no faster in tasks.
-- Calls that wait for the outside world, such as `std.http`, `time.sleep`,
-  and `in()`, still block every task until they return. In a task, use
-  `async.sleep` to wait.
+- The waits of `std.http` (every request and download), `std.process`
+  (every program), `time.sleep`, and `async.work` suspend only the task that
+  makes them. Other calls that wait for the outside world still block every
+  task until they return: `in()` and `inln()`, `std.sqlite` queries,
+  `std.file` reads and writes, and `std.secrets`. A task that cannot be
+  interrupted this way, a long computation, holds the others up (see
+  `async.yield_now`).
+- A wait on a worker thread cannot interrupt the work itself. A cancelled
+  task stops waiting at once, but an HTTP request it sent may finish in the
+  background and its answer is thrown away; a program started with
+  `std.process` is killed, and a download stops at its next piece of data.
 - Each task that has started has a stack of its own (see below). The pages it
   touches stay in memory until it finishes: from about 10 KB on Windows to
   25 KB on Linux for a task waiting in a short call, so a hundred thousand

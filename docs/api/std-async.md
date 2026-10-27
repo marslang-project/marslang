@@ -83,7 +83,8 @@ it finishes once they have.
 `sleep` waits on a timer: only the task that awaits it waits, and the others
 run meanwhile. It takes a number of seconds of any numeric kind, or a
 `duration` such as `time.milliseconds(250)`. `time.sleep`, from
-[std.time](std-time.md), instead stops every task until it returns.
+[std.time](std-time.md), does the same without an `await`: inside a task it
+pauses only that task, and outside tasks it stops the program.
 
 ```mars
 takepkg std.async;

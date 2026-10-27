@@ -13,6 +13,15 @@
 //! `Permission`, `IsDirectory`, and `File` are the `std.file` families, for a
 //! download's file), because a native package can raise only built-in errors.
 //!
+//! Waiting: a request runs on a worker thread (`runtime::block_on_worker`), so
+//! inside a task only that task waits and the others run; outside a task it
+//! simply blocks, as before. Only data that is `Send` crosses to the worker
+//! (strings, numbers, the checked request), never a `Value`. A task cancelled
+//! while its request is in flight stops waiting at once; the worker finishes
+//! or gives up on its own and its answer is dropped. A download watches a
+//! flag the cancelled task sets, and stops at the next block of data,
+//! removing its temporary file, so it never leaves a partial file.
+//!
 //! TLS certificates are checked against Mozilla's roots, built in by the
 //! webpki-roots crate, so a static binary needs no system CA files; the
 //! crypto is ring's, which builds without cmake or nasm.
@@ -22,23 +31,28 @@ use std::fs;
 use std::io::{self, Read, Write};
 use std::net::IpAddr;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use indexmap::IndexMap;
 use ureq::http::{self, HeaderName, HeaderValue, Method, Uri};
 use ureq::{Agent, AsSendBody, Proxy, ResponseExt};
 
+use crate::runtime;
 use crate::value::*;
 
 /// Bodies larger than this are refused by everything but download.
 const MAX_BODY: u64 = 100 * 1024 * 1024;
 const MAX_REDIRECTS: u32 = 10;
 
-thread_local! {
-    /// One agent per program (each runs on its own thread), so connections
-    /// to the same server are reused between requests.
-    static AGENT: Agent = Agent::new_with_config(
+/// One agent for the process, shared by every worker thread (an `Agent` is
+/// `Send + Sync`), so connections to the same server are reused between
+/// requests, whichever task sends them.
+static AGENT: OnceLock<Agent> = OnceLock::new();
+
+fn agent() -> &'static Agent {
+    AGENT.get_or_init(|| Agent::new_with_config(
         Agent::config_builder()
             // A 404 or 500 is an answer, not a failure: std.http decides.
             .http_status_as_error(false)
@@ -51,7 +65,12 @@ thread_local! {
             .proxy(None)
             .allow_non_standard_methods(true)
             .build(),
-    );
+    ))
+}
+
+thread_local! {
+    /// The program's time limit; read on the interpreter's thread and sent
+    /// along with each request.
     static TIMEOUT: Cell<Duration> = const { Cell::new(Duration::from_secs(30)) };
 }
 
@@ -224,22 +243,36 @@ fn body_too_large() -> String {
     format!("the response body is larger than {} MB; http.download saves a body of any size to a file", MAX_BODY >> 20)
 }
 
-/// The message for a failed request: the method and URL, why, and the proxy
-/// when one was used, since a proxy that is down looks like any other failure.
-fn net_fail(method: &Method, url: &str, why: String, proxy: &Option<(Proxy, String)>) -> RResult<Value> {
-    let through = proxy.as_ref().map(|(_, shown)| format!(", through {shown}")).unwrap_or_default();
-    fail("Http", format!("{method} {url}: {why}{through}"))
-}
-
 // ----- requests -----
 
-/// Send a request; with `save_to`, stream a 2xx body to that file instead of
-/// reading it. headers is a map of strings and body a string or null.
-fn request(method: &str, url: &str, headers: &Value, body: &Value, save_to: Option<&str>) -> RResult<Value> {
+/// A request, checked on the interpreter's thread and ready to send from a
+/// worker: everything in it is `Send`.
+struct Prepared {
+    method: Method,
+    url: String,
+    uri: Uri,
+    headers: Vec<(HeaderName, HeaderValue)>,
+    body: Option<String>,
+    proxy: Option<(Proxy, String)>,
+    timeout: Duration,
+    save_to: Option<String>,
+}
+
+/// The answer, as plain data for the worker to hand back.
+struct Answer { status: u16, body: String, headers: Vec<(String, String)>, url: String }
+
+/// Why a request failed: a kind `std/http.mars` turns into an error family,
+/// or a request the http crate refused.
+enum Failure { Fail(&'static str, String), Syntax(String) }
+
+fn failed(kind: &'static str, message: impl Into<String>) -> Failure { Failure::Fail(kind, message.into()) }
+
+/// Check a request's parts; headers is a map of strings and body a string or null.
+fn prepare(method: &str, url: &str, headers: &Value, body: &Value, save_to: Option<&str>) -> RResult<Result<Prepared, Failure>> {
     let method = Method::from_bytes(method.to_ascii_uppercase().as_bytes())
         .or_else(|_| err(ErrorKind::SyntaxError, format!("\"{method}\" is not an HTTP method")))?;
-    let uri = match parse_url(url) { Ok(uri) => uri, Err(message) => return fail("Url", message) };
-    let mut builder = http::Request::builder().method(method.clone()).uri(uri.clone());
+    let uri = match parse_url(url) { Ok(uri) => uri, Err(message) => return Ok(Err(failed("Url", message))) };
+    let mut checked = Vec::new();
     match headers {
         Value::Map(map) => for (name, value) in map.items.borrow().values() {
             let (Value::Str(name), Value::Str(value)) = (name, value) else {
@@ -251,72 +284,130 @@ fn request(method: &str, url: &str, headers: &Value, body: &Value, save_to: Opti
                 .or_else(|_| err(ErrorKind::SyntaxError, format!("\"{name}\" is not a valid header name")))?;
             let value = HeaderValue::from_str(value)
                 .or_else(|_| err(ErrorKind::SyntaxError, format!("the {name} header's value has a line break or other character headers cannot hold")))?;
-            builder = builder.header(name, value);
+            checked.push((name, value));
         },
         Value::Null => {}
         other => return type_err(format!("http.request expects headers as a map, got {}", other.type_name())),
     }
-    let proxy = match proxy_for(&uri) { Ok(p) => p, Err(message) => return fail("Http", format!("{method} {url}: {message}")) };
-    let timeout = TIMEOUT.with(Cell::get);
-    let sent = match body {
-        Value::Null => send(built(builder.body(()))?, &proxy, timeout, save_to.is_some()),
-        Value::Str(text) => send(built(builder.body(text.as_bytes()))?, &proxy, timeout, save_to.is_some()),
+    let body = match body {
+        Value::Null => None,
+        Value::Str(text) => Some(text.to_string()),
         other => return type_err(format!("http.request expects the body as a string or null, got {}", other.type_name())),
+    };
+    let proxy = match proxy_for(&uri) {
+        Ok(p) => p,
+        Err(message) => return Ok(Err(failed("Http", format!("{method} {url}: {message}")))),
+    };
+    Ok(Ok(Prepared {
+        method, url: url.to_string(), uri, headers: checked, body, proxy,
+        timeout: TIMEOUT.with(Cell::get), save_to: save_to.map(str::to_string),
+    }))
+}
+
+/// Send a prepared request and read the answer; with `save_to`, stream a 2xx
+/// body to that file instead. Runs on a worker thread. `stop` is set when the
+/// task that wanted the answer has gone.
+fn perform(p: Prepared, stop: &AtomicBool) -> Result<Answer, Failure> {
+    let Prepared { method, url, uri, headers, body, proxy, timeout, save_to } = p;
+    let url = url.as_str();
+    let mut builder = http::Request::builder().method(method.clone()).uri(uri);
+    for (name, value) in headers { builder = builder.header(name, value); }
+    let download = save_to.is_some();
+    let sent = match body {
+        None => send(built(builder.body(()))?, &proxy, timeout, download),
+        Some(text) => send(built(builder.body(text.into_bytes()))?, &proxy, timeout, download),
+    };
+    let net_fail = |why: String| {
+        let through = proxy.as_ref().map(|(_, shown)| format!(", through {shown}")).unwrap_or_default();
+        failed("Http", format!("{method} {url}: {why}{through}"))
     };
     let mut response = match sent {
         Ok(response) => response,
-        Err(error) => return net_fail(&method, url, reason(&error, timeout), &proxy),
+        Err(error) => return Err(net_fail(reason(&error, timeout))),
     };
     let status = response.status().as_u16();
     let final_url = response.get_uri().to_string();
     let headers = response_headers(response.headers());
-    let body = match save_to {
-        Some(path) if (200..300).contains(&status) => match save(&mut response, path) {
+    let body = match save_to.as_deref() {
+        Some(path) if (200..300).contains(&status) => match save(&mut response, path, stop) {
             Ok(()) => String::new(),
-            Err(Saving::File(kind, message)) => return fail(kind, message),
-            Err(Saving::Net(error)) => return net_fail(&method, url, reason(&error, timeout), &proxy),
+            Err(Saving::File(kind, message)) => return Err(failed(kind, message)),
+            Err(Saving::Net(error)) => return Err(net_fail(reason(&error, timeout))),
+            Err(Saving::Stopped) => return Err(failed("Http", format!("{method} {url}: the download was cancelled"))),
         },
         Some(_) => String::new(),
         None => {
             if response.body().content_length().is_some_and(|n| n > MAX_BODY) {
-                return net_fail(&method, url, body_too_large(), &proxy);
+                return Err(net_fail(body_too_large()));
             }
             match response.body_mut().with_config().limit(MAX_BODY).read_to_vec() {
                 Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
-                Err(error) => return net_fail(&method, url, reason(&error, timeout), &proxy),
+                Err(error) => return Err(net_fail(reason(&error, timeout))),
             }
         }
     };
-    ok(Value::array(vec![Value::Int(status as i64), Value::str(&body), headers, Value::str(&final_url)]))
+    Ok(Answer { status, body, headers, url: final_url })
 }
 
-/// The request, or SyntaxError for a part the http crate refused, though
+/// Sets a flag when dropped: a task waiting for a request that is cancelled,
+/// or unwound at the end of the run, tells the worker to stop what it can.
+struct StopOnDrop(Arc<AtomicBool>);
+
+impl Drop for StopOnDrop {
+    fn drop(&mut self) { self.0.store(true, Ordering::Relaxed); }
+}
+
+/// Send a request on a worker, so inside a task only that task waits.
+fn request(method: &str, url: &str, headers: &Value, body: &Value, save_to: Option<&str>) -> RResult<Value> {
+    let prepared = match prepare(method, url, headers, body, save_to)? {
+        Ok(prepared) => prepared,
+        Err(failure) => return finished(Err(failure)),
+    };
+    let stop = Arc::new(AtomicBool::new(false));
+    let guard = StopOnDrop(stop.clone());
+    let result = runtime::block_on_worker(move || perform(prepared, &stop))?;
+    drop(guard);
+    finished(result)
+}
+
+/// The answer as the Marslang side expects it.
+fn finished(result: Result<Answer, Failure>) -> RResult<Value> {
+    match result {
+        Ok(answer) => {
+            let headers = headers_map(answer.headers);
+            ok(Value::array(vec![Value::Int(answer.status as i64), Value::str(&answer.body), headers, Value::str(&answer.url)]))
+        }
+        Err(Failure::Fail(kind, message)) => fail(kind, message),
+        Err(Failure::Syntax(message)) => err(ErrorKind::SyntaxError, message),
+    }
+}
+
+/// The request, or a syntax failure for a part the http crate refused, though
 /// every part was checked above.
-fn built<S>(request: Result<http::Request<S>, http::Error>) -> RResult<http::Request<S>> {
-    request.or_else(|e| err(ErrorKind::SyntaxError, format!("the request is not valid: {e}")))
+fn built<S>(request: Result<http::Request<S>, http::Error>) -> Result<http::Request<S>, Failure> {
+    request.map_err(|e| Failure::Syntax(format!("the request is not valid: {e}")))
 }
 
 fn send<S: AsSendBody>(
     request: http::Request<S>, proxy: &Option<(Proxy, String)>, timeout: Duration, download: bool,
 ) -> Result<http::Response<ureq::Body>, ureq::Error> {
-    AGENT.with(|agent| {
-        let config = agent.configure_request(request).proxy(proxy.as_ref().map(|(p, _)| p.clone()));
-        let request = if download {
-            // A large file can take long, so a download's time limit covers
-            // each step up to the start of the answer, not the body.
-            config.timeout_global(None).timeout_resolve(Some(timeout)).timeout_connect(Some(timeout))
-                .timeout_send_request(Some(timeout)).timeout_send_body(Some(timeout)).timeout_recv_response(Some(timeout))
-                .build()
-        } else {
-            config.timeout_global(Some(timeout)).build()
-        };
-        agent.run(request)
-    })
+    let agent = agent();
+    let config = agent.configure_request(request).proxy(proxy.as_ref().map(|(p, _)| p.clone()));
+    let request = if download {
+        // A large file can take long, so a download's time limit covers
+        // each step up to the start of the answer, not the body.
+        config.timeout_global(None).timeout_resolve(Some(timeout)).timeout_connect(Some(timeout))
+            .timeout_send_request(Some(timeout)).timeout_send_body(Some(timeout)).timeout_recv_response(Some(timeout))
+            .build()
+    } else {
+        config.timeout_global(Some(timeout)).build()
+    };
+    agent.run(request)
 }
 
 /// Header names in lower case; a header sent more than once has its values
 /// joined by ", ", as HTTP allows.
-fn response_headers(headers: &http::HeaderMap) -> Value {
+fn response_headers(headers: &http::HeaderMap) -> Vec<(String, String)> {
     let mut joined: IndexMap<String, String> = IndexMap::new();
     for (name, value) in headers {
         let value = String::from_utf8_lossy(value.as_bytes());
@@ -324,7 +415,12 @@ fn response_headers(headers: &http::HeaderMap) -> Value {
             .and_modify(|v| { v.push_str(", "); v.push_str(&value); })
             .or_insert_with(|| value.into_owned());
     }
-    let items = joined.into_iter().map(|(name, value)| {
+    joined.into_iter().collect()
+}
+
+/// The headers as a map of strings.
+fn headers_map(headers: Vec<(String, String)>) -> Value {
+    let items = headers.into_iter().map(|(name, value)| {
         let key = Value::str(&name);
         (Key::of(&key), (key, Value::str(&value)))
     }).collect();
@@ -333,7 +429,7 @@ fn response_headers(headers: &http::HeaderMap) -> Value {
 
 // ----- downloads -----
 
-enum Saving { File(&'static str, String), Net(ureq::Error) }
+enum Saving { File(&'static str, String), Net(ureq::Error), Stopped }
 
 static TEMPORARY: AtomicU64 = AtomicU64::new(0);
 
@@ -363,7 +459,7 @@ fn file_fail(path: &str, error: io::Error) -> Saving {
 /// the temporary file, so it leaves no partial file and the old one intact.
 /// An existing file keeps its permissions; writing through a link updates the
 /// file it points to.
-fn save(response: &mut http::Response<ureq::Body>, path: &str) -> Result<(), Saving> {
+fn save(response: &mut http::Response<ureq::Body>, path: &str, stop: &AtomicBool) -> Result<(), Saving> {
     let mut target = PathBuf::from(path);
     if target.is_dir() { return Err(Saving::File("IsDirectory", format!("{path}: is a directory"))); }
     if let Some(parent) = target.parent().filter(|p| !p.as_os_str().is_empty()) {
@@ -397,6 +493,8 @@ fn save(response: &mut http::Response<ureq::Body>, path: &str) -> Result<(), Sav
         let mut reader = response.body_mut().as_reader();
         let mut buffer = vec![0; 64 * 1024];
         loop {
+            // The task that wanted the file was cancelled: stop here.
+            if stop.load(Ordering::Relaxed) { return Err(Saving::Stopped); }
             let read = match reader.read(&mut buffer) {
                 Ok(0) => break,
                 Ok(n) => n,
@@ -407,6 +505,7 @@ fn save(response: &mut http::Response<ureq::Body>, path: &str) -> Result<(), Sav
         }
         file.sync_all().map_err(|e| file_fail(path, e))?;
         drop(file);
+        if stop.load(Ordering::Relaxed) { return Err(Saving::Stopped); }
         if let Some(old) = &existing {
             fs::set_permissions(&temporary, old.permissions()).map_err(|e| file_fail(path, e))?;
             #[cfg(unix)]
