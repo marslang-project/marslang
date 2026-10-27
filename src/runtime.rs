@@ -687,7 +687,15 @@ pub(crate) fn discard() {
     UNWINDING.with(|unwinding| unwinding.set(true));
     for task in &tasks {
         task.start.take();
-        drop(task.coroutine.take());
+        let coroutine = task.coroutine.take();
+        // Forcing a suspended coroutine to unwind crashes with an access
+        // violation in MSVC release builds. The run is over, so on Windows
+        // its stack is left unfreed instead: what it holds is never dropped,
+        // which leaks only until the process ends.
+        #[cfg(windows)]
+        std::mem::forget(coroutine);
+        #[cfg(not(windows))]
+        drop(coroutine);
         // Tasks awaiting each other would otherwise keep each other alive.
         task.awaiting.take();
     }
