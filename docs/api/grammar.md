@@ -178,6 +178,10 @@ families inheriting from it. `Function` and `Family` are for parameters only.
   An `f` makes an f-string, `f"total {a + b}"`: each `{expression}` becomes its
   value as text, `{{` and `}}` are braces, and a string inside the braces uses
   the other quote, or `\"`.
+- **Braces**: a block may open on the header's line, `func m {`, with or
+  without a space, or on the next line by itself, as in
+  `func m` followed by a line holding `{`. Both work for every block: `func`,
+  `family`, `if`/`elif`/`else`, loops, `run`/`handle`/`then`, and `match`.
 - **Lines**: a statement ends at `;`, `{`, or `}`, and also at the end of a
   line, except inside `( )` or `[ ]`, where it goes on, so a long call, array,
   or parameter list can be laid out over several lines. A bracket left open

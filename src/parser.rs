@@ -339,7 +339,33 @@ fn preprocess(input: &str) -> PResult<Vec<Line>> {
         }
     }
     if !text.is_empty() { lines.push(Line { text, number }); }
-    Ok(lines)
+    Ok(join_lone_braces(lines))
+}
+
+/// A `{` on a line of its own belongs to the header above it, so blocks may
+/// open on the next line as well as the same one:
+///
+/// ```text
+/// func m
+/// {
+/// ```
+///
+/// A header is a line that does not already end a statement or a block.
+fn join_lone_braces(lines: Vec<Line>) -> Vec<Line> {
+    let mut joined: Vec<Line> = Vec::with_capacity(lines.len());
+    for line in lines {
+        if line.trim() == "{" {
+            if let Some(header) = joined.iter_mut().rev().find(|l| !l.trim().is_empty()) {
+                let end = header.trim().chars().last();
+                if !matches!(end, Some(';' | '{' | '}')) {
+                    header.text.push_str(" {");
+                    continue;
+                }
+            }
+        }
+        joined.push(line);
+    }
+    joined
 }
 
 fn parse_import(line: &str, number: usize) -> PResult<ImportDecl> {

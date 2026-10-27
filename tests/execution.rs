@@ -2789,3 +2789,12 @@ fn std_testing_assertions_explain_failures() {
             "unreachable\n",
         ));
 }
+
+#[test]
+fn blocks_may_open_on_the_next_line() {
+    executes("family Box\n{\n    func init()\n    {\n        me.x = 4;\n    }\n}\nfunc m\n{\n    if (true)\n    {\n        out(Box().x);\n    }\n    else\n    {\n        out(0);\n    }\n    for (i = 0, i < 1, i++)\n    {\n        out(\"for\");\n    }\n    run\n    {\n        out(1 / 0);\n    }\n    handle (RangeError e)\n    {\n        out(\"caught\");\n    }\n    match (2)\n    {\n        2 => out(\"two\");\n        _ => out(\"other\");\n    }\n}",
+        "4\nfor\ncaught\ntwo\n");
+    executes("func m {\n    if (true) {\n        out(1);\n    }\n    else {\n        out(0);\n    }\n}", "1\n");
+    let error = marslang::compile("func m\n{\n    out(nope);\n}").unwrap_err();
+    assert!(error.contains("line 3: unknown name 'nope'"), "{error}");
+}
