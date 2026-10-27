@@ -57,6 +57,8 @@ fn handle(stream: TcpStream) {
     match target.as_str() {
         // Answers after 300 ms.
         "/delay" => { thread::sleep(Duration::from_millis(300)); reply(&mut stream, "200 OK", b"late"); }
+        // Far longer than the ticks that run meanwhile, even where short sleeps run long (macOS CI).
+        "/long" => { thread::sleep(Duration::from_millis(1500)); reply(&mut stream, "200 OK", b"late"); }
         "/echo" => {
             thread::sleep(Duration::from_millis(300));
             reply(&mut stream, "200 OK", format!("{method} {}", String::from_utf8_lossy(&body)).as_bytes());
@@ -177,7 +179,7 @@ fn other_tasks_run_while_a_request_waits() {
     executes(&with_port(r#"
         takepkg std.http;
         takepkg std.async;
-        async func slow() => http.get("http://127.0.0.1:PORT/delay").text;
+        async func slow() => http.get("http://127.0.0.1:PORT/long").text;
         async func ticks(){
             n = 0;
             for (i = 0, i < 5, i++){ await async.sleep(0.02); n += 1; }
