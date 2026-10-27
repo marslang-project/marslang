@@ -34,6 +34,7 @@ notes elsewhere under `docs/` remain local.
 - [std.sqlite](std-sqlite.md): SQL databases in a file or in memory, with parameters and transactions.
 - [std.secrets](std-secrets.md): secure tokens, passwords, and choices, for anything an attacker must not guess.
 - [std.async](std-async.md): sleep, all, race, timeout, and cancelling tasks.
+- [std.process](std-process.md): running other programs with no shell, their output and exit codes.
 - [std.uuid](std-uuid.md): random (v4) and time-ordered (v7) UUIDs.
 - [std.types](std-types.md): a value's kind, family checks.
 - [std.memory](std-memory.md): addresses, object identity, and the cycle collector.
@@ -99,8 +100,9 @@ and check their output. The example above is also an execution test.
 Programs run in a Rust tree-walking interpreter. The language is not self-hosted yet.
 Additional standard-library packages and the remaining decorators (`static`, `class`,
 `overload`) remain unimplemented. [Async](async.md) has its core: tasks, `async func`,
-`await`, and [std.async](std-async.md)'s timers; `std.http`, `time.sleep`, and other
-calls that wait still block every task. General named arguments
+`await`, [std.async](std-async.md)'s timers, and `std.http`, `time.sleep`, and
+[std.process](std-process.md), which wait without blocking other tasks; reading
+input with `in` still blocks them. General named arguments
 are deferred; only slicing accepts `reverse=`. Proposed packages are not APIs.
 
 The `lex` command uses a separate lexer from the parser. The REPL reruns its
